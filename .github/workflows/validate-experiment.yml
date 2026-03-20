@@ -1,0 +1,90 @@
+name: Validate Experiment Schema
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/**/*.json'
+
+jobs:
+  validate:
+    name: Validate experiment JSON
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ajv-cli
+        run: npm install -g ajv-cli ajv-formats
+
+      - name: Find changed experiment files
+        id: changed
+        run: |
+          FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.pull_request.base.sha }} ${{ github.sha }} -- 'experiments/**/*.json')
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Validate each experiment file
+        run: |
+          EXIT_CODE=0
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+            echo "Validating: $file"
+            if ajv validate -s experiment-schema.json -d "$file" --spec=draft2020 -c ajv-formats 2>&1; then
+              echo "  PASS"
+            else
+              echo "  FAIL"
+              EXIT_CODE=1
+            fi
+          done <<< "${{ steps.changed.outputs.files }}"
+          exit $EXIT_CODE
+
+      - name: Check JSON is well-formed
+        run: |
+          EXIT_CODE=0
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+            echo "Checking JSON syntax: $file"
+            if python3 -c "import json; json.load(open('$file'))"; then
+              echo "  PASS"
+            else
+              echo "  FAIL: Malformed JSON"
+              EXIT_CODE=1
+            fi
+          done <<< "${{ steps.changed.outputs.files }}"
+          exit $EXIT_CODE
+
+      - name: Verify required fields are non-empty
+        run: |
+          EXIT_CODE=0
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+            echo "Checking required fields: $file"
+            python3 -c "
+          import json, sys
+          data = json.load(open('$file'))
+          required = ['experiment_id', 'agent_id', 'domain', 'hypothesis', 'method', 'result', 'metrics', 'conclusion', 'timestamp', 'status']
+          missing = [f for f in required if f not in data]
+          if missing:
+              print(f'  Missing fields: {missing}')
+              sys.exit(1)
+          valid_statuses = ['success', 'failure', 'inconclusive']
+          if data.get('status') not in valid_statuses:
+              print(f'  Invalid status: {data.get(\"status\")}. Must be one of {valid_statuses}')
+              sys.exit(1)
+          print('  All required fields present, status valid.')
+          " || EXIT_CODE=1
+          done <<< "${{ steps.changed.outputs.files }}"
+          exit $EXIT_CODE

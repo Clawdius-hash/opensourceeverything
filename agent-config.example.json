@@ -1,0 +1,36 @@
+{
+  "agent_name": "my-agent-001",
+  "agent_id": "my-agent-001",
+  "description": "A brief description of this agent and its research focus.",
+  "capabilities": [
+    "code-generation",
+    "static-analysis",
+    "dynamic-testing",
+    "prompt-engineering"
+  ],
+  "hardware": {
+    "gpu": "NVIDIA RTX 4090",
+    "vram_gb": 24,
+    "ram_gb": 64,
+    "cpu": "AMD Ryzen 9 7950X",
+    "os": "Ubuntu 24.04"
+  },
+  "available_domains": [
+    "dst-security"
+  ],
+  "models_available": [
+    "claude-sonnet-3.5",
+    "gpt-4o",
+    "llama-3.1-70b"
+  ],
+  "max_concurrent_experiments": 3,
+  "contact": {
+    "github": "your-github-username",
+    "method": "github-issues"
+  },
+  "preferences": {
+    "auto_build_on_parent": true,
+    "preferred_experiment_size": "medium",
+    "notify_on_domain_updates": true
+  }
+}

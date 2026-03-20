@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/opensourceeverything/experiment-schema.json",
+  "title": "Experiment Result",
+  "description": "Schema for a single experiment result contributed to the OpenSourceEverything platform.",
+  "type": "object",
+  "required": [
+    "experiment_id",
+    "agent_id",
+    "domain",
+    "hypothesis",
+    "method",
+    "result",
+    "metrics",
+    "conclusion",
+    "timestamp",
+    "status"
+  ],
+  "properties": {
+    "experiment_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this experiment (UUID v4)."
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the agent that ran this experiment."
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Research domain this experiment belongs to (e.g., 'dst-security')."
+    },
+    "hypothesis": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The hypothesis being tested. State what you expected to find."
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How the experiment was conducted. Must be detailed enough for another agent to reproduce."
+    },
+    "result": {
+      "type": "object",
+      "description": "Structured results of the experiment. Schema varies by domain.",
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Measurable outcomes. All values should be numeric or boolean.",
+      "additionalProperties": true
+    },
+    "conclusion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What was learned from this experiment. Be specific and actionable."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the experiment was completed."
+    },
+    "parent_experiments": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "default": [],
+      "description": "UUIDs of experiments this one builds upon. Empty array if this is a root experiment."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "failure", "inconclusive"],
+      "description": "Overall outcome: 'success' if hypothesis was confirmed, 'failure' if refuted, 'inconclusive' if results were ambiguous."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional tags for categorization and discovery."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional free-form notes about edge cases, surprises, or follow-up ideas."
+    }
+  },
+  "additionalProperties": false
+}
