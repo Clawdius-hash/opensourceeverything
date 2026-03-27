@@ -1,0 +1,358 @@
+/**
+ * DST Generated Verifiers — Batch 005
+ * Pattern shape: INGRESS→EGRESS without TRANSFORM
+ * 22 CWEs: XSS variants, output injection, HTTP response issues,
+ * cleartext cookies/GUI, response smuggling.
+ *
+ * User input flows directly to output (HTML, HTTP headers, cookies)
+ * without encoding/escaping transformation.
+ *
+ * Sub-groups:
+ *   A. XSS variants          (8 CWEs) — factory-driven
+ *   B. Output injection       (6 CWEs) — per-CWE sink filters
+ *   C. HTTP/cookie/GUI issues (8 CWEs) — per-CWE
+ */
+
+import type { NeuralMap, NeuralMapNode } from '../types';
+import {
+  nodeRef, nodesOfType, hasPathWithoutTransform,
+  type VerificationResult, type Finding, type Severity,
+} from './_helpers';
+
+// ---------------------------------------------------------------------------
+// Sink filters — EGRESS nodes
+// ---------------------------------------------------------------------------
+
+function htmlEgressNodes(map: NeuralMap): NeuralMapNode[] {
+  return map.nodes.filter(n =>
+    n.node_type === 'EGRESS' &&
+    (n.node_subtype.includes('html') || n.node_subtype.includes('render') ||
+     n.node_subtype.includes('template') || n.attack_surface.includes('html_output') ||
+     n.code_snapshot.match(
+       /\b(innerHTML|render|res\.send|res\.write|document\.write|\.html\(|template|\.ejs|\.pug|\.hbs)\b/i
+     ) !== null) &&
+    !n.code_snapshot.match(/\bres\.json\s*\(/i)
+  );
+}
+
+function headerEgressNodes(map: NeuralMap): NeuralMapNode[] {
+  return map.nodes.filter(n =>
+    n.node_type === 'EGRESS' &&
+    (n.node_subtype.includes('header') || n.node_subtype.includes('http') ||
+     n.attack_surface.includes('http_header') ||
+     n.code_snapshot.match(
+       /\b(setHeader|writeHead|res\.header|res\.set|addHeader|response\.header)\b/i
+     ) !== null)
+  );
+}
+
+function allEgressNodes(map: NeuralMap): NeuralMapNode[] {
+  return nodesOfType(map, 'EGRESS');
+}
+
+function cookieEgressNodes(map: NeuralMap): NeuralMapNode[] {
+  return map.nodes.filter(n =>
+    n.node_type === 'EGRESS' &&
+    (n.node_subtype.includes('cookie') || n.attack_surface.includes('cookie') ||
+     n.code_snapshot.match(
+       /\b(Set-Cookie|res\.cookie|document\.cookie|setCookie)\b/i
+     ) !== null)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Safe pattern constants
+// ---------------------------------------------------------------------------
+
+const HTML_ENCODE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bDOMPurify\b|\btextContent\b|\bhtmlEntities\b|\bhtmlspecialchars\b|\bencodeHtml\b/i;
+const CRLF_SAFE = /\bstrip.*crlf\b|\breplace.*\\r\\n\b|\bstrip.*newline\b|\bcrlf.*reject\b|\bsanitize.*header\b|\bencodeURI\b/i;
+const NEUTRALIZE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bneutralize\b|\bparameterize\b|\bstrip\b|\bfilter\b/i;
+const ENCRYPT_SAFE = /\bencrypt\b|\bcrypto\b|\bAES\b|\bhttps\b|\bSecure\b|\bhash\b|\bcipher\b/i;
+const NORMALIZE_SAFE = /\bnormalize\b|\bcanonicalize\b|\bstrip\b|\bencode\b|\bsanitize\b/i;
+
+// ---------------------------------------------------------------------------
+// Factory: INGRESS→EGRESS without TRANSFORM
+// ---------------------------------------------------------------------------
+
+function createOutputVerifier(
+  cweId: string, cweName: string, severity: Severity,
+  sinkFilter: (map: NeuralMap) => NeuralMapNode[],
+  safePattern: RegExp,
+  missingDesc: string,
+  fixDesc: string,
+  extraSafe?: RegExp,
+): (map: NeuralMap) => VerificationResult {
+  return (map: NeuralMap): VerificationResult => {
+    const findings: Finding[] = [];
+    const ingress = nodesOfType(map, 'INGRESS');
+    const sinks = sinkFilter(map);
+
+    for (const src of ingress) {
+      for (const sink of sinks) {
+        if (hasPathWithoutTransform(map, src.id, sink.id)) {
+          const isSafe = safePattern.test(sink.code_snapshot) ||
+            (extraSafe ? extraSafe.test(sink.code_snapshot) : false);
+
+          if (!isSafe) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: missingDesc,
+              severity,
+              description: `User input from ${src.label} reaches output at ${sink.label} without transformation. ` +
+                `Vulnerable to ${cweName}.`,
+              fix: fixDesc,
+            });
+          }
+        }
+      }
+    }
+
+    return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
+  };
+}
+
+// ===========================================================================
+// A. XSS VARIANTS (8 CWEs)
+// ===========================================================================
+// All share: INGRESS → EGRESS[html] without TRANSFORM[encoding]
+
+export const verifyCWE80 = createOutputVerifier(
+  'CWE-80', 'Basic XSS', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (HTML entity encoding — escape <, >, &, quotes)',
+  'Encode HTML special characters (<, >, &, ", \') before inserting user input into HTML. ' +
+    'Use textContent instead of innerHTML. Use DOMPurify for rich text.',
+);
+
+export const verifyCWE81 = createOutputVerifier(
+  'CWE-81', 'Improper Neutralization of Script in an Error Message Web Page', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (HTML encoding in error messages)',
+  'Encode user-controlled values in error pages. Error messages often reflect input ' +
+    '(search terms, usernames) — these must be HTML-encoded to prevent reflected XSS.',
+);
+
+export const verifyCWE82 = createOutputVerifier(
+  'CWE-82', 'Improper Neutralization of Script in Attributes of IMG Tags', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (attribute encoding for IMG tags)',
+  'Encode user input placed in IMG tag attributes (src, onerror, onload). ' +
+    'Validate URLs against an allowlist for image sources.',
+  /\ballowlist\b|\bsrc.*valid\b/i,
+);
+
+export const verifyCWE83 = createOutputVerifier(
+  'CWE-83', 'Improper Neutralization of Script in Attributes in a Web Page', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (attribute encoding)',
+  'Encode user input placed in HTML attributes. Use attribute-context encoding, not just HTML encoding. ' +
+    'Wrap attribute values in quotes and encode quotes within.',
+);
+
+export const verifyCWE84 = createOutputVerifier(
+  'CWE-84', 'Improper Neutralization of Encoded URI Schemes in a Web Page', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (URI scheme validation / encoding)',
+  'Validate URI schemes (javascript:, data:, vbscript:) before inserting in href/src attributes. ' +
+    'Use URL allowlisting (http:, https: only) for user-controlled URLs.',
+  /\ballowlist\b|\bhttp[s]?:\/\/\b.*\bonly\b|\burl.*valid\b/i,
+);
+
+export const verifyCWE85 = createOutputVerifier(
+  'CWE-85', 'Doubled Character XSS Manipulations', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (complete encoding — handle doubled characters)',
+  'Apply encoding recursively or use canonical encoding to prevent doubled character bypasses. ' +
+    'Encode AFTER all other transformations to prevent double-encoding attacks.',
+);
+
+export const verifyCWE86 = createOutputVerifier(
+  'CWE-86', 'Improper Neutralization of Invalid Characters in Identifiers in Web Pages', 'medium',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (identifier character validation / encoding)',
+  'Validate and encode characters used in HTML/CSS/JS identifiers. ' +
+    'Reject or strip invalid characters that could alter identifier meaning.',
+);
+
+export const verifyCWE87 = createOutputVerifier(
+  'CWE-87', 'Improper Neutralization of Alternate XSS Syntax', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (comprehensive XSS encoding — handle alternate syntax)',
+  'Use context-aware encoding libraries that handle alternate XSS vectors ' +
+    '(backtick execution, expression() in CSS, etc.). Do not rely on simple regex blocklists.',
+);
+
+// ===========================================================================
+// B. OUTPUT INJECTION (6 CWEs)
+// ===========================================================================
+
+/** CWE-74: Injection (generic output injection to downstream component) */
+export const verifyCWE74 = createOutputVerifier(
+  'CWE-74', 'Injection', 'critical',
+  allEgressNodes, NEUTRALIZE_SAFE,
+  'TRANSFORM (context-appropriate neutralization before output)',
+  'Neutralize special elements for the target context: HTML-encode for HTML, ' +
+    'URL-encode for URLs, parameterize for SQL, shell-escape for commands.',
+);
+
+/** CWE-75: Failure to Sanitize Special Elements into a Different Plane */
+export const verifyCWE75 = createOutputVerifier(
+  'CWE-75', 'Failure to Sanitize Special Elements into a Different Plane', 'high',
+  allEgressNodes, NEUTRALIZE_SAFE,
+  'TRANSFORM (plane-crossing neutralization)',
+  'When data crosses planes (data→code, user→structure), neutralize special elements ' +
+    'for the target plane. Never mix user data with structural elements without encoding.',
+);
+
+/** CWE-93: CRLF Injection */
+export const verifyCWE93 = createOutputVerifier(
+  'CWE-93', 'CRLF Injection', 'high',
+  allEgressNodes, CRLF_SAFE,
+  'TRANSFORM (CRLF stripping / encoding)',
+  'Strip or reject CR (\\r) and LF (\\n) from user input before placing in headers or logs. ' +
+    'CRLF injection enables HTTP response splitting and log forging.',
+);
+
+/** CWE-113: HTTP Response Splitting */
+export const verifyCWE113 = createOutputVerifier(
+  'CWE-113', 'HTTP Response Splitting', 'high',
+  headerEgressNodes, CRLF_SAFE,
+  'TRANSFORM (CRLF neutralization in HTTP headers)',
+  'Strip CR/LF from values placed in HTTP headers. Response splitting enables cache poisoning, ' +
+    'XSS, and session fixation. Use framework header APIs that reject CRLF.',
+);
+
+/** CWE-138: Improper Neutralization of Special Elements */
+export const verifyCWE138 = createOutputVerifier(
+  'CWE-138', 'Improper Neutralization of Special Elements', 'high',
+  allEgressNodes, NEUTRALIZE_SAFE,
+  'TRANSFORM (special element neutralization for output context)',
+  'Identify and neutralize all special elements relevant to the output context. ' +
+    'Use proven encoding libraries rather than custom regex-based sanitization.',
+);
+
+/** CWE-150: Improper Neutralization of Escape, Meta, or Control Sequences */
+export const verifyCWE150 = createOutputVerifier(
+  'CWE-150', 'Improper Neutralization of Escape, Meta, or Control Sequences', 'medium',
+  allEgressNodes, NEUTRALIZE_SAFE,
+  'TRANSFORM (escape/meta/control sequence neutralization)',
+  'Strip or encode escape sequences, meta characters, and control characters ' +
+    'before output. These can alter terminal behavior, log output, or downstream parsing.',
+);
+
+// ===========================================================================
+// C. HTTP/COOKIE/GUI ISSUES (8 CWEs)
+// ===========================================================================
+
+/** CWE-315: Cleartext Storage of Sensitive Information in a Cookie */
+export const verifyCWE315 = createOutputVerifier(
+  'CWE-315', 'Cleartext Storage of Sensitive Information in a Cookie', 'medium',
+  cookieEgressNodes, ENCRYPT_SAFE,
+  'TRANSFORM (encryption before cookie storage)',
+  'Encrypt sensitive data before storing in cookies. Use signed/encrypted cookie sessions. ' +
+    'Set Secure and HttpOnly flags. Never store passwords or tokens in cleartext cookies.',
+);
+
+/** CWE-317: Cleartext Storage of Sensitive Information in GUI */
+export const verifyCWE317 = createOutputVerifier(
+  'CWE-317', 'Cleartext Storage of Sensitive Information in GUI', 'medium',
+  (map) => map.nodes.filter(n =>
+    n.node_type === 'EGRESS' &&
+    (n.node_subtype.includes('gui') || n.node_subtype.includes('ui') ||
+     n.node_subtype.includes('display') ||
+     n.code_snapshot.match(/\b(alert|prompt|textField|label|display|show|modal|toast)\b/i) !== null)
+  ),
+  /\bmask\b|\bredact\b|\bhide\b|\b\*\*\*\b|\btype.*password\b/i,
+  'TRANSFORM (masking / redaction before GUI display)',
+  'Mask sensitive information in GUI elements. Use type="password" for input fields. ' +
+    'Redact credit card numbers (show last 4 digits only). Never display secrets in alerts.',
+);
+
+/** CWE-325: Missing Cryptographic Step */
+export const verifyCWE325 = createOutputVerifier(
+  'CWE-325', 'Missing Required Cryptographic Step', 'high',
+  allEgressNodes, ENCRYPT_SAFE,
+  'TRANSFORM (required cryptographic operation — encryption, signing, MAC)',
+  'Apply all required cryptographic steps before transmission. ' +
+    'Missing steps (encryption, signing, MAC verification) break the security of the protocol.',
+);
+
+/** CWE-433: Unparsed Raw Web Content Delivery */
+export const verifyCWE433 = createOutputVerifier(
+  'CWE-433', 'Unparsed Raw Web Content Delivery', 'medium',
+  htmlEgressNodes, NORMALIZE_SAFE,
+  'TRANSFORM (content parsing / encoding before delivery)',
+  'Parse and encode web content before delivery. Do not serve raw user-uploaded content ' +
+    'directly — process it to neutralize embedded scripts and active content.',
+);
+
+/** CWE-444: HTTP Request/Response Smuggling */
+export const verifyCWE444 = createOutputVerifier(
+  'CWE-444', 'HTTP Request/Response Smuggling', 'high',
+  headerEgressNodes, NORMALIZE_SAFE,
+  'TRANSFORM (HTTP header normalization / ambiguity resolution)',
+  'Normalize HTTP headers before forwarding. Reject requests with ambiguous Content-Length ' +
+    'and Transfer-Encoding. Use HTTP/2 where possible to prevent smuggling.',
+  /\bContent-Length\b.*\breject\b|\bTransfer-Encoding\b.*\bnormalize\b|\bHTTP\/2\b/i,
+);
+
+/** CWE-549: Missing Password Field Masking */
+export const verifyCWE549 = createOutputVerifier(
+  'CWE-549', 'Missing Password Field Masking', 'medium',
+  htmlEgressNodes,
+  /\btype\s*=\s*['"]password['"]\b|\btype.*password\b|\bmask\b|\b\*\*\*\b/i,
+  'TRANSFORM (password field masking — type="password")',
+  'Use type="password" for all password input fields. This prevents shoulder surfing ' +
+    'and ensures the password is not visible in the UI.',
+);
+
+/** CWE-644: Improper Neutralization of HTTP Headers for Scripting Syntax */
+export const verifyCWE644 = createOutputVerifier(
+  'CWE-644', 'Improper Neutralization of HTTP Headers for Scripting Syntax', 'high',
+  headerEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (neutralization of scripting syntax in HTTP headers)',
+  'Encode scripting syntax in HTTP header values. Headers reflected in HTML contexts ' +
+    '(error pages, debug output) can enable XSS if not encoded.',
+);
+
+/** CWE-692: Incomplete Denylist to Cross-Site Scripting */
+export const verifyCWE692 = createOutputVerifier(
+  'CWE-692', 'Incomplete Denylist to Cross-Site Scripting', 'high',
+  htmlEgressNodes, HTML_ENCODE_SAFE,
+  'TRANSFORM (comprehensive encoding — not denylist-based)',
+  'Use allowlist-based encoding, not denylists. Denylists always miss edge cases. ' +
+    'Use context-aware encoding libraries (DOMPurify, encode.js) instead of regex blocklists.',
+);
+
+// ===========================================================================
+// REGISTRY
+// ===========================================================================
+
+export const BATCH_005_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
+  // XSS Variants (8)
+  'CWE-80': verifyCWE80,
+  'CWE-81': verifyCWE81,
+  'CWE-82': verifyCWE82,
+  'CWE-83': verifyCWE83,
+  'CWE-84': verifyCWE84,
+  'CWE-85': verifyCWE85,
+  'CWE-86': verifyCWE86,
+  'CWE-87': verifyCWE87,
+  // Output Injection (6)
+  'CWE-74': verifyCWE74,
+  'CWE-75': verifyCWE75,
+  'CWE-93': verifyCWE93,
+  'CWE-113': verifyCWE113,
+  'CWE-138': verifyCWE138,
+  'CWE-150': verifyCWE150,
+  // HTTP/Cookie/GUI (8)
+  'CWE-315': verifyCWE315,
+  'CWE-317': verifyCWE317,
+  'CWE-325': verifyCWE325,
+  'CWE-433': verifyCWE433,
+  'CWE-444': verifyCWE444,
+  'CWE-549': verifyCWE549,
+  'CWE-644': verifyCWE644,
+  'CWE-692': verifyCWE692,
+};

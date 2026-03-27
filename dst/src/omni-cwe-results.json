@@ -1,0 +1,4441 @@
+{
+  "timestamp": "2026-03-27T21:21:42.729Z",
+  "summary": {
+    "totalRegistered": 649,
+    "scenariosTested": 176,
+    "cweFired": 629,
+    "pass": 629,
+    "falsePos": 0,
+    "neverFired": 20,
+    "coverage": "96.9%",
+    "passRate": "100.0%"
+  },
+  "results": {
+    "CWE-5": {
+      "name": "J2EE Misconfiguration: Data Transmission Without Encryption",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-6": {
+      "name": "J2EE Misconfiguration: Insufficient Session-ID Length",
+      "scenario": "meta_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-7": {
+      "name": "J2EE Misconfiguration: Missing Custom Error Handling",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-8": {
+      "name": "J2EE Misconfiguration: Entity Bean Declared Remote",
+      "scenario": "meta_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-9": {
+      "name": "J2EE Misconfiguration: Weak Access Permissions for EJB Methods",
+      "scenario": "meta_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-11": {
+      "name": "ASP.NET Misconfiguration: Creating Debug Binary",
+      "scenario": "meta_egress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-12": {
+      "name": "ASP.NET Misconfiguration: Missing Custom Error Page",
+      "scenario": "meta_egress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-14": {
+      "name": "Compiler Removal of Code to Clear Buffers",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-15": {
+      "name": "External Control of System or Configuration Setting",
+      "scenario": "ingress_meta_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-22": {
+      "name": "Path Traversal",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-23": {
+      "name": "Relative Path Traversal",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-24": {
+      "name": "Path Traversal: '../filedir'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-25": {
+      "name": "Path Traversal: '/../filedir'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-26": {
+      "name": "Path Traversal: '/dir/../filename'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-27": {
+      "name": "Path Traversal: 'dir/../../filename'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-28": {
+      "name": "Path Traversal: '..\\filedir'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-29": {
+      "name": "Path Traversal: '\\..\\filename'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-30": {
+      "name": "Path Traversal: '\\dir\\..\\filename'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-31": {
+      "name": "Path Traversal: 'dir\\..\\..\\filename'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-32": {
+      "name": "Path Traversal: '...' (Triple Dot)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-33": {
+      "name": "Path Traversal: '....' (Multiple Dots)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-34": {
+      "name": "Path Traversal: '....//'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-35": {
+      "name": "Path Traversal: '.../...//'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-36": {
+      "name": "Absolute Path Traversal",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-37": {
+      "name": "Path Traversal: '/absolute/pathname/here'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-38": {
+      "name": "Path Traversal: '\\absolute\\pathname\\here'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-39": {
+      "name": "Path Traversal: 'C:dirname'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-40": {
+      "name": "Path Traversal: '\\\\UNC\\share\\name\\' (Windows UNC)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-41": {
+      "name": "Improper Resolution of Path Equivalence",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-42": {
+      "name": "Path Equivalence: 'filename.' (Trailing Dot)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-43": {
+      "name": "Path Equivalence: 'filename....' (Multiple Trailing Dot)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-44": {
+      "name": "Path Equivalence: 'file.name' (Internal Dot)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-45": {
+      "name": "Path Equivalence: 'file...name' (Multiple Internal Dot)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-46": {
+      "name": "Path Equivalence: 'filename ' (Trailing Space)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-47": {
+      "name": "Path Equivalence: ' filename' (Leading Space)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-48": {
+      "name": "Path Equivalence: 'file name' (Internal Whitespace)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-49": {
+      "name": "Path Equivalence: 'filename/' (Trailing Slash)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-50": {
+      "name": "Path Equivalence: '//multiple/leading/slash'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-51": {
+      "name": "Path Equivalence: '/multiple//internal/slash'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-52": {
+      "name": "Path Equivalence: '/multiple/trailing/slash//'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-53": {
+      "name": "Path Equivalence: '\\multiple\\\\internal\\\\backslash'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-54": {
+      "name": "Path Equivalence: 'filedir\\' (Trailing Backslash)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-55": {
+      "name": "Path Equivalence: '/./' (Single Dot Directory)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-56": {
+      "name": "Path Equivalence: 'filedir*' (Wildcard)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-57": {
+      "name": "Path Equivalence: 'fakedir/../realdir/filename'",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-58": {
+      "name": "Path Equivalence: Windows 8.3 Filename",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-59": {
+      "name": "Improper Link Resolution Before File Access ('Link Following')",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-61": {
+      "name": "UNIX Symbolic Link (Symlink) Following",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-62": {
+      "name": "UNIX Hard Link",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-64": {
+      "name": "Windows Shortcut Following (.LNK)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-65": {
+      "name": "Windows Hard Link",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-66": {
+      "name": "Improper Handling of File Names that Identify Virtual Resources",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-67": {
+      "name": "Improper Handling of Windows Device Names",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-69": {
+      "name": "Improper Handling of Windows ::DATA Alternate Data Stream",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-72": {
+      "name": "Improper Handling of Apple HFS+ Alternate Data Stream Path",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-73": {
+      "name": "External Control of File Name or Path",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-74": {
+      "name": "Injection",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-75": {
+      "name": "Failure to Sanitize Special Elements into a Different Plane",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-76": {
+      "name": "Improper Neutralization of Equivalent Special Elements",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-77": {
+      "name": "Command Injection",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-78": {
+      "name": "OS Command Injection",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-79": {
+      "name": "Cross-Site Scripting (XSS)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-80": {
+      "name": "Basic XSS",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-81": {
+      "name": "Improper Neutralization of Script in an Error Message Web Page",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-82": {
+      "name": "Improper Neutralization of Script in Attributes of IMG Tags",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-83": {
+      "name": "Improper Neutralization of Script in Attributes in a Web Page",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-84": {
+      "name": "Improper Neutralization of Encoded URI Schemes in a Web Page",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-85": {
+      "name": "Doubled Character XSS Manipulations",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-86": {
+      "name": "Improper Neutralization of Invalid Characters in Identifiers in Web Pages",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-87": {
+      "name": "Improper Neutralization of Alternate XSS Syntax",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-88": {
+      "name": "Improper Neutralization of Argument Delimiters in a Command",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-89": {
+      "name": "SQL Injection",
+      "scenario": "sql_injection",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-90": {
+      "name": "LDAP Injection",
+      "scenario": "ldap_injection",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-91": {
+      "name": "XML Injection",
+      "scenario": "xml_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-93": {
+      "name": "CRLF Injection",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-94": {
+      "name": "Code Injection",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-95": {
+      "name": "Eval Injection",
+      "scenario": "eval_exec",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-96": {
+      "name": "Static Code Injection",
+      "scenario": "global_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-97": {
+      "name": "Server-Side Includes (SSI) Injection",
+      "scenario": "global_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-98": {
+      "name": "PHP Remote File Inclusion",
+      "scenario": "include_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-99": {
+      "name": "Improper Control of Resource Identifiers (Resource Injection)",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-102": {
+      "name": "Struts: Duplicate Validation Forms",
+      "scenario": "meta_ingress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-103": {
+      "name": "Struts: Incomplete validate() Method Definition",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-104": {
+      "name": "Struts: Form Bean Does Not Extend Validation Class",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-105": {
+      "name": "Struts: Form Field Without Validator",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-106": {
+      "name": "Struts: Plug-in Framework Not In Use",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-108": {
+      "name": "Struts: Unverified Action Form",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-109": {
+      "name": "Struts: Validator Turned Off",
+      "scenario": "meta_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-111": {
+      "name": "Direct Use of Unsafe JNI",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-112": {
+      "name": "Missing XML Validation",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-113": {
+      "name": "HTTP Response Splitting",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-114": {
+      "name": "Process Control",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-115": {
+      "name": "Misinterpretation of Input",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-117": {
+      "name": "Improper Output Neutralization for Logs",
+      "scenario": "log_write",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-118": {
+      "name": "Improper Access of Indexable Resource (Range Error)",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-120": {
+      "name": "Buffer Copy without Checking Size of Input (Classic Buffer Overflow)",
+      "scenario": "storage_storage_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-121": {
+      "name": "Stack-based Buffer Overflow",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-122": {
+      "name": "Heap-based Buffer Overflow",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-123": {
+      "name": "Write-what-where Condition",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-124": {
+      "name": "Buffer Underwrite (Buffer Underflow)",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-125": {
+      "name": "Out-of-bounds Read",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-126": {
+      "name": "Buffer Over-read",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-127": {
+      "name": "Buffer Under-read",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-129": {
+      "name": "Improper Validation of Array Index",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-130": {
+      "name": "Improper Handling of Length Parameter Inconsistency",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-131": {
+      "name": "Incorrect Calculation of Buffer Size",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-134": {
+      "name": "Use of Externally-Controlled Format String",
+      "scenario": "format_string",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-135": {
+      "name": "Incorrect Calculation of Multi-Byte String Length",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-138": {
+      "name": "Improper Neutralization of Special Elements",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-140": {
+      "name": "Improper Neutralization of Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-141": {
+      "name": "Improper Neutralization of Parameter/Argument Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-142": {
+      "name": "Improper Neutralization of Value Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-143": {
+      "name": "Improper Neutralization of Record Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-144": {
+      "name": "Improper Neutralization of Line Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-145": {
+      "name": "Improper Neutralization of Section Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-146": {
+      "name": "Improper Neutralization of Expression/Command Delimiters",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-147": {
+      "name": "Improper Neutralization of Input Terminators",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-148": {
+      "name": "Improper Neutralization of Input Leaders",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-149": {
+      "name": "Improper Neutralization of Quoting Syntax",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-150": {
+      "name": "Improper Neutralization of Escape, Meta, or Control Sequences",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-151": {
+      "name": "Improper Neutralization of Comment Delimiters",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-152": {
+      "name": "Improper Neutralization of Macro Symbols",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-153": {
+      "name": "Improper Neutralization of Substitution Characters",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-154": {
+      "name": "Improper Neutralization of Variable Name Delimiters",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-155": {
+      "name": "Improper Neutralization of Wildcards or Matching Symbols",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-156": {
+      "name": "Improper Neutralization of Whitespace",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-157": {
+      "name": "Failure to Sanitize Paired Delimiters",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-158": {
+      "name": "Improper Neutralization of Null Byte or NUL Character",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-159": {
+      "name": "Improper Handling of Invalid Use of Special Elements",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-160": {
+      "name": "Improper Neutralization of Leading Special Elements",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-161": {
+      "name": "Improper Neutralization of Multiple Leading Special Elements",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-162": {
+      "name": "Improper Neutralization of Trailing Special Elements",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-163": {
+      "name": "Improper Neutralization of Multiple Trailing Special Elements",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-164": {
+      "name": "Improper Neutralization of Internal Special Elements",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-165": {
+      "name": "Improper Neutralization of Multiple Internal Special Elements",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-166": {
+      "name": "Improper Handling of Missing Special Element",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-167": {
+      "name": "Improper Handling of Additional Special Element",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-168": {
+      "name": "Improper Handling of Inconsistent Special Elements",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-170": {
+      "name": "Improper Null Termination",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-172": {
+      "name": "Encoding Error",
+      "scenario": "delimiter_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-173": {
+      "name": "Improper Handling of Alternate Encoding",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-174": {
+      "name": "Double Decoding of the Same Data",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-175": {
+      "name": "Improper Handling of Mixed Encoding",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-176": {
+      "name": "Improper Handling of Unicode Encoding",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-177": {
+      "name": "Improper Handling of URL Encoding (Hex Encoding)",
+      "scenario": "delimiter_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-178": {
+      "name": "Improper Handling of Case Sensitivity",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-181": {
+      "name": "Incorrect Behavior Order: Validate Before Filter",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-182": {
+      "name": "Collapse of Data into Unsafe Value",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-183": {
+      "name": "Permissive List of Allowed Inputs",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-184": {
+      "name": "Incomplete List of Disallowed Inputs",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-185": {
+      "name": "Incorrect Regular Expression",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-187": {
+      "name": "Partial String Comparison",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-188": {
+      "name": "Reliance on Data/Memory Layout",
+      "scenario": "ingress_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-190": {
+      "name": "Integer Overflow or Wraparound",
+      "scenario": "parseInt_overflow",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-191": {
+      "name": "Integer Underflow (Wrap or Wraparound)",
+      "scenario": "parseInt_overflow",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-192": {
+      "name": "Integer Coercion Error",
+      "scenario": "parseInt_overflow",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-193": {
+      "name": "Off-by-one Error",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-194": {
+      "name": "Unexpected Sign Extension",
+      "scenario": "parseInt_overflow",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-195": {
+      "name": "Signed to Unsigned Conversion Error",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-196": {
+      "name": "Unsigned to Signed Conversion Error",
+      "scenario": "parseInt_overflow",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-197": {
+      "name": "Numeric Truncation Error",
+      "scenario": "numeric_truncation",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-198": {
+      "name": "Use of Incorrect Byte Ordering",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-200": {
+      "name": "Information Exposure",
+      "scenario": "credential_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-201": {
+      "name": "Insertion of Sensitive Information Into Sent Data",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-202": {
+      "name": "Exposure of Sensitive Information Through Data Queries",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-203": {
+      "name": "Observable Discrepancy",
+      "scenario": "control_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-204": {
+      "name": "Observable Response Discrepancy",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-205": {
+      "name": "Observable Behavioral Discrepancy",
+      "scenario": "control_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-206": {
+      "name": "Observable Internal Behavioral Discrepancy",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-207": {
+      "name": "Observable Behavioral Discrepancy With Equivalent Error",
+      "scenario": "structural_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-208": {
+      "name": "Observable Timing Discrepancy",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-210": {
+      "name": "Self-generated Error Message Containing Sensitive Information",
+      "scenario": "structural_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-211": {
+      "name": "Externally-Generated Error Message Containing Sensitive Information",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-212": {
+      "name": "Improper Removal of Sensitive Information Before Storage or Transfer",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-213": {
+      "name": "Exposure of Sensitive Information Due to Incompatible Policies",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-214": {
+      "name": "Invocation of Process Using Visible Sensitive Information",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-215": {
+      "name": "Insertion of Sensitive Information Into Debugging Code",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-219": {
+      "name": "Storage of File with Sensitive Data Under Web Root",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-220": {
+      "name": "Storage of File with Sensitive Data Under FTP Root",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-221": {
+      "name": "Information Loss or Omission",
+      "scenario": "control_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-222": {
+      "name": "Truncation of Security-relevant Information",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-223": {
+      "name": "Omission of Security-relevant Information",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-224": {
+      "name": "Obscured Security-relevant Information by Alternate Name",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-226": {
+      "name": "Sensitive Information in Resource Not Removed Before Reuse",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-228": {
+      "name": "Improper Handling of Syntactically Invalid Structure",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-229": {
+      "name": "Improper Handling of Values",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-230": {
+      "name": "Improper Handling of Missing Values",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-231": {
+      "name": "Improper Handling of Extra Values",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-232": {
+      "name": "Improper Handling of Undefined Values",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-233": {
+      "name": "Improper Handling of Parameters",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-234": {
+      "name": "Failure to Handle Missing Parameter",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-235": {
+      "name": "Improper Handling of Extra Parameters",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-236": {
+      "name": "Improper Handling of Undefined Parameters",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-237": {
+      "name": "Improper Handling of Structural Elements",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-238": {
+      "name": "Improper Handling of Incomplete Element",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-239": {
+      "name": "Failure to Handle Incomplete Element",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-240": {
+      "name": "Improper Handling of Inconsistent Structural Elements",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-241": {
+      "name": "Improper Handling of Unexpected Data Type",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-242": {
+      "name": "Use of Inherently Dangerous Function",
+      "scenario": "ingress_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-244": {
+      "name": "Improper Clearing of Heap Memory Before Release (Heap Inspection)",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-245": {
+      "name": "J2EE Bad Practices: Direct Management of Connections",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-246": {
+      "name": "J2EE Bad Practices: Direct Use of Sockets",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-248": {
+      "name": "Uncaught Exception",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-256": {
+      "name": "Plaintext Storage of a Password",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-257": {
+      "name": "Storing Passwords in a Recoverable Format",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-258": {
+      "name": "Empty Password in Configuration File",
+      "scenario": "storage_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-260": {
+      "name": "Password in Configuration File",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-261": {
+      "name": "Weak Encoding for Password",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-262": {
+      "name": "Not Using Password Aging",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-263": {
+      "name": "Password Aging with Long Expiration",
+      "scenario": "meta_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-266": {
+      "name": "Incorrect Privilege Assignment",
+      "scenario": "auth_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-267": {
+      "name": "Privilege Defined With Unsafe Actions",
+      "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-268": {
+      "name": "Privilege Chaining",
+      "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-270": {
+      "name": "Privilege Context Switching Error",
+      "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-271": {
+      "name": "Privilege Dropping / Lowering Errors",
+      "scenario": "auth_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-272": {
+      "name": "Least Privilege Violation",
+      "scenario": "auth_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-273": {
+      "name": "Improper Check for Dropped Privileges",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-274": {
+      "name": "Improper Handling of Insufficient Privileges",
+      "scenario": "auth_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-278": {
+      "name": "Insecure Preservation of Permissions During Resource Copy",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-279": {
+      "name": "Incorrect Execution-Assigned Permissions",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-280": {
+      "name": "Improper Handling of Insufficient Permissions or Privileges",
+      "scenario": "auth_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-281": {
+      "name": "Improper Preservation of Permissions",
+      "scenario": "transform_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-282": {
+      "name": "Improper Ownership Management",
+      "scenario": "external_structural_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-283": {
+      "name": "Unverified Ownership",
+      "scenario": "external_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-285": {
+      "name": "Improper Authorization",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-288": {
+      "name": "Authentication Bypass Using an Alternate Path or Channel",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-289": {
+      "name": "Authentication Bypass by Alternate Name",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-291": {
+      "name": "Reliance on IP Address for Authentication",
+      "scenario": "ingress_auth_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-293": {
+      "name": "Using Referer Field for Authentication",
+      "scenario": "ingress_auth_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-294": {
+      "name": "Authentication Bypass by Capture-replay",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-296": {
+      "name": "Improper Following of a Certificate's Chain of Trust",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-297": {
+      "name": "Improper Validation of Certificate with Host Mismatch",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-298": {
+      "name": "Improper Validation of Certificate Expiration",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-299": {
+      "name": "Improper Check for Certificate Revocation",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-301": {
+      "name": "Reflection Attack in an Authentication Protocol",
+      "scenario": "auth_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-302": {
+      "name": "Authentication Bypass by Assumed-Immutable Data",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-303": {
+      "name": "Incorrect Implementation of Authentication Algorithm",
+      "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-304": {
+      "name": "Missing Critical Step in Authentication",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-305": {
+      "name": "Authentication Bypass by Primary Weakness",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-306": {
+      "name": "Missing Authentication",
+      "scenario": "file_write_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-308": {
+      "name": "Use of Single-factor Authentication",
+      "scenario": "ingress_auth_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-309": {
+      "name": "Use of Password System for Primary Authentication",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-313": {
+      "name": "Cleartext Storage in a File or on Disk",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-314": {
+      "name": "Cleartext Storage in the Registry",
+      "scenario": "env_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-315": {
+      "name": "Cleartext Storage of Sensitive Information in a Cookie",
+      "scenario": "cookie_write",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-316": {
+      "name": "Cleartext Storage of Sensitive Information in Memory",
+      "scenario": "memcpy",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-317": {
+      "name": "Cleartext Storage of Sensitive Information in GUI",
+      "scenario": "cleartext_gui",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-318": {
+      "name": "Cleartext Storage of Sensitive Information in Executable",
+      "scenario": "meta_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-321": {
+      "name": "Use of Hard-coded Cryptographic Key",
+      "scenario": "meta_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-322": {
+      "name": "Key Exchange without Entity Authentication",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-323": {
+      "name": "Reusing a Nonce, Key Pair in Encryption",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-324": {
+      "name": "Use of a Key Past its Expiration Date",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-325": {
+      "name": "Missing Required Cryptographic Step",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-326": {
+      "name": "Inadequate Encryption Strength",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-328": {
+      "name": "Use of Weak Hash",
+      "scenario": "weak_hash",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-329": {
+      "name": "Generation of Predictable IV/Nonce",
+      "scenario": "iv_generation",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-330": {
+      "name": "Use of Insufficiently Random Values",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-331": {
+      "name": "Insufficient Entropy",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-332": {
+      "name": "Insufficient Entropy in PRNG",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-333": {
+      "name": "Improper Handling of Insufficient Entropy in TRNG",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-334": {
+      "name": "Small Space of Random Values",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-335": {
+      "name": "Incorrect Usage of Seeds in PRNG",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-336": {
+      "name": "Same Seed in PRNG",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-337": {
+      "name": "Predictable Seed in PRNG",
+      "scenario": "prng_seed",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-338": {
+      "name": "Use of Cryptographically Weak PRNG",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-339": {
+      "name": "Small Seed Space in PRNG",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-340": {
+      "name": "Generation of Predictable Numbers or Identifiers",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-341": {
+      "name": "Predictable from Observable State",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-342": {
+      "name": "Predictable Exact Value from Previous Values",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-343": {
+      "name": "Predictable Value Range from Previous Values",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-344": {
+      "name": "Use of Invariant Value in Dynamically Changing Context",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-345": {
+      "name": "Insufficient Verification of Data Authenticity",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-346": {
+      "name": "Origin Validation Error",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-348": {
+      "name": "Use of Less Trusted Source",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-349": {
+      "name": "Acceptance of Extraneous Untrusted Data With Trusted Data",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-350": {
+      "name": "Reliance on Reverse DNS Resolution for a Security-Critical Action",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-351": {
+      "name": "Insufficient Type Distinction",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-352": {
+      "name": "Cross-Site Request Forgery (CSRF)",
+      "scenario": "file_write_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-353": {
+      "name": "Missing Support for Integrity Check",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-354": {
+      "name": "Improper Validation of Integrity Check Value",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-356": {
+      "name": "Product UI does not Warn User of Unsafe Actions",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-357": {
+      "name": "Insufficient UI Warning of Dangerous Operations",
+      "scenario": "meta_control_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-358": {
+      "name": "Improperly Implemented Security Check for Standard",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-359": {
+      "name": "Exposure of Private Personal Information to an Unauthorized Actor",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-360": {
+      "name": "Trust of System Event Data",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-363": {
+      "name": "Race Condition Enabling Link Following",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-364": {
+      "name": "Signal Handler Race Condition",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-366": {
+      "name": "Race Condition within a Thread",
+      "scenario": "transform_shared",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-367": {
+      "name": "Time-of-check Time-of-use (TOCTOU) Race Condition",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-368": {
+      "name": "Context Switching Race Condition",
+      "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-369": {
+      "name": "Divide By Zero",
+      "scenario": "division_zero",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-370": {
+      "name": "Missing Check for Certificate Revocation after Initial Check",
+      "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-374": {
+      "name": "Passing Mutable Objects to an Untrusted Method",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-375": {
+      "name": "Returning a Mutable Object to an Untrusted Caller",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-377": {
+      "name": "Insecure Temporary File",
+      "scenario": "transform_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-378": {
+      "name": "Creation of Temporary File With Insecure Permissions",
+      "scenario": "transform_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-379": {
+      "name": "Creation of Temporary File in Directory with Insecure Permissions",
+      "scenario": "transform_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-382": {
+      "name": "J2EE Bad Practices: Use of System.exit()",
+      "scenario": "system_exit",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-385": {
+      "name": "Covert Timing Channel",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-386": {
+      "name": "Symbolic Name not Mapping to Correct Object",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-390": {
+      "name": "Detection of Error Condition Without Action",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-392": {
+      "name": "Missing Report of Error Condition",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-393": {
+      "name": "Return of Wrong Status Code",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-394": {
+      "name": "Unexpected Status Code or Return Value",
+      "scenario": "external_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-395": {
+      "name": "Use of NullPointerException Catch to Detect NULL Pointer Dereference",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-396": {
+      "name": "Declaration of Catch for Generic Exception",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-397": {
+      "name": "Declaration of Throws for Generic Exception",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-401": {
+      "name": "Missing Release of Memory after Effective Lifetime",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-402": {
+      "name": "Transmission of Private Resources into a New Sphere (Resource Leak)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-403": {
+      "name": "Exposure of File Descriptor to Unintended Control Sphere (Descriptor Leak)",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-404": {
+      "name": "Improper Resource Shutdown or Release",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-405": {
+      "name": "Asymmetric Resource Consumption (Amplification)",
+      "scenario": "resource_intensive",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-406": {
+      "name": "Insufficient Control of Network Message Volume (Network Amplification)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-407": {
+      "name": "Inefficient Algorithmic Complexity",
+      "scenario": "regex_user_pattern",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-408": {
+      "name": "Incorrect Behavior Order: Early Amplification",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-409": {
+      "name": "Improper Handling of Highly Compressed Data (Decompression Bomb)",
+      "scenario": "decompress_bomb",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-410": {
+      "name": "Insufficient Resource Pool",
+      "scenario": "ingress_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-412": {
+      "name": "Unrestricted Externally Accessible Lock",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-413": {
+      "name": "Improper Resource Locking",
+      "scenario": "global_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-414": {
+      "name": "Missing Lock Check",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-415": {
+      "name": "Double Free",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-416": {
+      "name": "Use After Free",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-419": {
+      "name": "Unprotected Primary Channel",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-420": {
+      "name": "Unprotected Alternate Channel",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-422": {
+      "name": "Unprotected Windows Messaging Channel (Shatter)",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-424": {
+      "name": "Improper Protection of Alternate Path",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-425": {
+      "name": "Direct Request (Forced Browsing)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-426": {
+      "name": "Untrusted Search Path",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-427": {
+      "name": "Uncontrolled Search Path Element",
+      "scenario": "transform_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-428": {
+      "name": "Unquoted Search Path or Element",
+      "scenario": "transform_file",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-430": {
+      "name": "Deployment of Wrong Handler (Not Verifying Handler)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-431": {
+      "name": "Missing Handler",
+      "scenario": "ingress_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-432": {
+      "name": "Dangerous Signal Handler not Disabled During Sensitive Operations",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-433": {
+      "name": "Unparsed Raw Web Content Delivery",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-436": {
+      "name": "Interpretation Conflict",
+      "scenario": "interpretation_conflict",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-437": {
+      "name": "Incomplete Model of Endpoint Features",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-439": {
+      "name": "Behavioral Change in New Version or Environment",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-440": {
+      "name": "Expected Behavior Violation",
+      "scenario": "external_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-441": {
+      "name": "Unintended Proxy or Intermediary (Confused Deputy)",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-444": {
+      "name": "HTTP Request/Response Smuggling",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-446": {
+      "name": "UI Discrepancy for Security Feature",
+      "scenario": "egress_control_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-447": {
+      "name": "Unimplemented or Unsupported Feature in UI",
+      "scenario": "egress_control_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-448": {
+      "name": "Obsolete Feature in UI",
+      "scenario": "egress_structural_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-449": {
+      "name": "The UI Performs the Wrong Action",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-450": {
+      "name": "Multiple Interpretations of UI Input",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-451": {
+      "name": "User Interface (UI) Misrepresentation of Critical Information",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-453": {
+      "name": "Insecure Default Variable Initialization",
+      "scenario": "storage_control_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-454": {
+      "name": "External Initialization of Trusted Variables or Data Stores",
+      "scenario": "global_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-456": {
+      "name": "Missing Initialization of a Variable",
+      "scenario": "storage_control_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-457": {
+      "name": "Use of Uninitialized Variable",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-459": {
+      "name": "Incomplete Cleanup",
+      "scenario": "structural_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-460": {
+      "name": "Improper Cleanup on Thrown Exception",
+      "scenario": "control_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-462": {
+      "name": "Duplicate Key in Associative List (Alist)",
+      "scenario": "transform_datastructure",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-463": {
+      "name": "Deletion of Data Structure Sentinel",
+      "scenario": "transform_datastructure",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-464": {
+      "name": "Addition of Data Structure Sentinel",
+      "scenario": "file_readdir",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-466": {
+      "name": "Return of Pointer Value Outside of Expected Range",
+      "scenario": "pointer_return",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-467": {
+      "name": "Use of sizeof() on a Pointer Type",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-468": {
+      "name": "Incorrect Pointer Scaling",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-469": {
+      "name": "Use of Pointer Subtraction to Determine Size",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-470": {
+      "name": "Unsafe Reflection",
+      "scenario": "reflection_load",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-471": {
+      "name": "Modification of Assumed-Immutable Data (MAID)",
+      "scenario": "session_write",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-472": {
+      "name": "External Control of Assumed-Immutable Web Parameter",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-473": {
+      "name": "PHP External Variable Modification",
+      "scenario": "global_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-474": {
+      "name": "Use of Function with Inconsistent Implementations",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-475": {
+      "name": "Undefined Behavior for Input to API",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-477": {
+      "name": "Use of Obsolete Function",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-478": {
+      "name": "Missing Default Case in Multiple Condition Expression",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-479": {
+      "name": "Signal Handler Use of a Non-Reentrant Function",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-480": {
+      "name": "Use of Incorrect Operator",
+      "scenario": "transform_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-481": {
+      "name": "Assigning instead of Comparing",
+      "scenario": "transform_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-482": {
+      "name": "Comparing instead of Assigning",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-483": {
+      "name": "Incorrect Block Delimitation",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-484": {
+      "name": "Omitted Break Statement in Switch",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-486": {
+      "name": "Comparison of Classes by Name",
+      "scenario": "external_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-487": {
+      "name": "Reliance on Package-level Scope",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-488": {
+      "name": "Exposure of Data Element to Wrong Session",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-489": {
+      "name": "Active Debug Code",
+      "scenario": "meta_egress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-491": {
+      "name": "Public cloneable() Method Without Final (Object Hijack)",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-492": {
+      "name": "Use of Inner Class Containing Sensitive Data",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-493": {
+      "name": "Critical Public Variable Without Final Modifier",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-494": {
+      "name": "Download of Code Without Integrity Check",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-495": {
+      "name": "Private Data Structure Returned From A Public Method",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-496": {
+      "name": "Public Data Assigned to Private Array-Typed Field",
+      "scenario": "public_to_private_array",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-497": {
+      "name": "Exposure of Sensitive System Information to an Unauthorized Control Sphere",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-498": {
+      "name": "Cloneable Class Containing Sensitive Information",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-499": {
+      "name": "Serializable Class Containing Sensitive Data",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-500": {
+      "name": "Public Static Field Not Marked Final",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-501": {
+      "name": "Trust Boundary Violation",
+      "scenario": "session_write",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-502": {
+      "name": "Deserialization of Untrusted Data",
+      "scenario": "eval_exec",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-506": {
+      "name": "Embedded Malicious Code",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-507": {
+      "name": "Trojan Horse",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-508": {
+      "name": "Non-Replicating Malicious Code",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-509": {
+      "name": "Replicating Malicious Code (Virus)",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-510": {
+      "name": "Trapdoor",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-511": {
+      "name": "Logic/Time Bomb",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-512": {
+      "name": "Spyware",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-514": {
+      "name": "Covert Channel",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-515": {
+      "name": "Covert Storage Channel",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-520": {
+      "name": ".NET Misconfiguration: Use of Impersonation",
+      "scenario": "auth_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-521": {
+      "name": "Weak Password Requirements",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-523": {
+      "name": "Unprotected Transport of Credentials",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-524": {
+      "name": "Use of Cache Containing Sensitive Information",
+      "scenario": "transform_cache_sensitive",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-526": {
+      "name": "Cleartext Storage of Sensitive Information in an Environment Variable",
+      "scenario": "transform_env_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-527": {
+      "name": "Exposure of Version-Control Repository to an Unauthorized Control Sphere",
+      "scenario": "env_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-528": {
+      "name": "Exposure of Core Dump File to an Unauthorized Control Sphere",
+      "scenario": "transform_coredump",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-529": {
+      "name": "Exposure of Access Control List Files to an Unauthorized Control Sphere",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-530": {
+      "name": "Exposure of Backup File to an Unauthorized Control Sphere",
+      "scenario": "backup_file_exposure",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-531": {
+      "name": "Inclusion of Sensitive Information in Test Code",
+      "scenario": "structural_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-532": {
+      "name": "Insertion of Sensitive Information into Log File",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-535": {
+      "name": "Exposure of Information Through Shell Error Message",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-536": {
+      "name": "Exposure of Information Through Servlet Runtime Error Message",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-537": {
+      "name": "Exposure of Information Through Java Runtime Error Message",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-538": {
+      "name": "Insertion of Sensitive Information into Externally-Accessible File or Directory",
+      "scenario": "storage_storage_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-539": {
+      "name": "Use of Persistent Cookies Containing Sensitive Information",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-540": {
+      "name": "Inclusion of Sensitive Information in Source Code",
+      "scenario": "meta_egress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-541": {
+      "name": "Inclusion of Sensitive Information in an Include File",
+      "scenario": "meta_egress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-543": {
+      "name": "Use of Singleton Pattern Without Synchronized Access",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-544": {
+      "name": "Missing Standardized Error Handling Mechanism",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-546": {
+      "name": "Suspicious Comment",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-547": {
+      "name": "Use of Hard-coded, Security-relevant Constants",
+      "scenario": "meta_auth_no_storage",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-548": {
+      "name": "Exposure of Information Through Directory Listing",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-549": {
+      "name": "Missing Password Field Masking",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-550": {
+      "name": "Server-generated Error Message Containing Sensitive Information",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-551": {
+      "name": "Incorrect Behavior Order: Authorization Before Parsing and Canonicalization",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-552": {
+      "name": "Files or Directories Accessible to External Parties",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-553": {
+      "name": "Command Shell in Externally Accessible Directory",
+      "scenario": "external_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-554": {
+      "name": "ASP.NET Misconfiguration: Not Using Input Validation Framework",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-555": {
+      "name": "J2EE Misconfiguration: Plaintext Password in Configuration File",
+      "scenario": "meta_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-556": {
+      "name": "ASP.NET Misconfiguration: Use of Identity Impersonation",
+      "scenario": "meta_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-558": {
+      "name": "Use of getlogin() in Multithreaded Application",
+      "scenario": "external_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-560": {
+      "name": "Use of umask() with chmod()-style Argument",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-561": {
+      "name": "Dead Code",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-562": {
+      "name": "Return of Stack Variable Address",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-563": {
+      "name": "Assignment to Variable without Use",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-564": {
+      "name": "SQL Injection: Hibernate",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-565": {
+      "name": "Reliance on Cookies without Validation or Integrity Checking",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-566": {
+      "name": "Authorization Bypass Through User-Controlled SQL Primary Key",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-567": {
+      "name": "Unsynchronized Access to Shared Data in a Multithreaded Context",
+      "scenario": "control_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-568": {
+      "name": "finalize() Method Without super.finalize()",
+      "scenario": "structural_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-570": {
+      "name": "Expression is Always False",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-571": {
+      "name": "Expression is Always True",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-572": {
+      "name": "Call to Thread run() instead of start()",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-573": {
+      "name": "Improper Following of Specification by Caller",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-575": {
+      "name": "EJB Bad Practices: Use of AWT Swing",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-576": {
+      "name": "EJB Bad Practices: Use of Java I/O",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-577": {
+      "name": "EJB Bad Practices: Use of Sockets",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-578": {
+      "name": "EJB Bad Practices: Use of Class Loader",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-579": {
+      "name": "J2EE Bad Practices: Non-serializable Object Stored in Session",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-580": {
+      "name": "clone() Method Without super.clone()",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-581": {
+      "name": "Object Model Violation: Just One of Equals and Hashcode Defined",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-582": {
+      "name": "Array Declared Public, Final, and Static",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-583": {
+      "name": "finalize() Method Declared Public",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-584": {
+      "name": "Return Inside Finally Block",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-585": {
+      "name": "Empty Synchronized Block",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-586": {
+      "name": "Explicit Call to Finalize()",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-587": {
+      "name": "Assignment of a Fixed Address to a Pointer",
+      "scenario": "meta_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-588": {
+      "name": "Attempt to Access Child of a Non-structure Pointer",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-589": {
+      "name": "Call to Non-ubiquitous API",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-590": {
+      "name": "Free of Memory not on the Heap",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-591": {
+      "name": "Sensitive Data Storage in Improperly Locked Memory",
+      "scenario": "storage_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-593": {
+      "name": "Authentication Bypass: OpenSSL CTX Object Modified after SSL Objects are Created",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-594": {
+      "name": "J2EE Framework: Saving Unserializable Objects to Disk",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-595": {
+      "name": "Comparison of Object References Instead of Object Contents",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-597": {
+      "name": "Use of Wrong Operator in String Comparison",
+      "scenario": "ingress_control_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-598": {
+      "name": "Use of GET Request Method With Sensitive Query Strings",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-599": {
+      "name": "Missing Validation of OpenSSL Certificate",
+      "scenario": "external_ingress_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-600": {
+      "name": "Uncaught Exception in Servlet",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-602": {
+      "name": "Client-Side Enforcement of Server-Side Security",
+      "scenario": "client_side_security",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-603": {
+      "name": "Use of Client-Side Authentication",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-605": {
+      "name": "Multiple Binds to the Same Port",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-606": {
+      "name": "Unchecked Input for Loop Condition",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-607": {
+      "name": "Public Static Final Field References Mutable Object",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-608": {
+      "name": "Struts: Non-private Field in ActionForm Class",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-609": {
+      "name": "Double-Checked Locking",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-610": {
+      "name": "Externally Controlled Reference to a Resource in Another Sphere",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-611": {
+      "name": "XML External Entity (XXE)",
+      "scenario": "xml_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-612": {
+      "name": "Improper Authorization of Index Containing Sensitive Information",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-615": {
+      "name": "Inclusion of Sensitive Information in Source Code Comments",
+      "scenario": "meta_egress_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-616": {
+      "name": "Incomplete Identification of Uploaded File Variables (PHP)",
+      "scenario": "upload_variables",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-617": {
+      "name": "Reachable Assertion",
+      "scenario": "reachable_assertion",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-618": {
+      "name": "Exposed Unsafe ActiveX Method",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-619": {
+      "name": "Dangling Database Cursor ('Cursor Injection')",
+      "scenario": "transform_cursor_dangle",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-620": {
+      "name": "Unverified Password Change",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-621": {
+      "name": "Variable Extraction Error",
+      "scenario": "extract_variable",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-622": {
+      "name": "Improper Validation of Function Hook Arguments",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-623": {
+      "name": "Unsafe ActiveX Control Marked Safe For Scripting",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-624": {
+      "name": "Executable Regular Expression Error",
+      "scenario": "regex_exec_error",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-625": {
+      "name": "Permissive Regular Expression",
+      "scenario": "regex_exec_error",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-626": {
+      "name": "Null Byte Interaction Error (Poison Null Byte)",
+      "scenario": "format_string",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-627": {
+      "name": "Dynamic Variable Evaluation",
+      "scenario": "eval_exec",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-636": {
+      "name": "Not Failing Securely (Fail Open)",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-638": {
+      "name": "Not Using Complete Mediation",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-639": {
+      "name": "Authorization Bypass Through User-Controlled Key (IDOR)",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-640": {
+      "name": "Weak Password Recovery Mechanism for Forgotten Password",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-641": {
+      "name": "Improper Restriction of Names for Files and Other Resources",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-642": {
+      "name": "External Control of Critical State Data",
+      "scenario": "session_write",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-643": {
+      "name": "XPath Injection",
+      "scenario": "xpath_query",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-644": {
+      "name": "Improper Neutralization of HTTP Headers for Scripting Syntax",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-645": {
+      "name": "Overly Restrictive Account Lockout Mechanism",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-646": {
+      "name": "Reliance on File Name or Extension of Externally-Supplied File",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-647": {
+      "name": "Use of Non-Canonical URL Paths for Authorization Decisions",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-648": {
+      "name": "Incorrect Use of Privileged APIs",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-649": {
+      "name": "Reliance on Obfuscation or Protection Mechanism that is Not Constant-Time",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-650": {
+      "name": "Trusting HTTP Permission Methods on the Server Side",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-651": {
+      "name": "Exposure of WSDL File Containing Sensitive Information",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-652": {
+      "name": "Improper Neutralization of Data within XQuery Expressions",
+      "scenario": "xquery_injection",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-654": {
+      "name": "Reliance on a Single Factor in a Security Decision",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-655": {
+      "name": "Insufficient Psychological Acceptability",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-656": {
+      "name": "Reliance on Security Through Obscurity",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-657": {
+      "name": "Violation of Secure Design Principles",
+      "scenario": "structural_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-662": {
+      "name": "Improper Synchronization",
+      "scenario": "transform_shared",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-663": {
+      "name": "Use of a Non-reentrant Function in a Concurrent Context",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-665": {
+      "name": "Improper Initialization",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-666": {
+      "name": "Operation on Resource in Wrong Phase of Lifetime",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-667": {
+      "name": "Improper Locking",
+      "scenario": "transform_shared",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-669": {
+      "name": "Incorrect Resource Transfer Between Spheres",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-670": {
+      "name": "Always-Incorrect Control Flow Implementation",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-671": {
+      "name": "Lack of Administrator Control over Security",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-672": {
+      "name": "Operation on a Resource after Expiration or Release",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-673": {
+      "name": "External Influence of Sphere Definition",
+      "scenario": "external_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-674": {
+      "name": "Uncontrolled Recursion",
+      "scenario": "transform_compute",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-675": {
+      "name": "Multiple Operations on Resource in Single-Operation Context",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-676": {
+      "name": "Use of Potentially Dangerous Function",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-680": {
+      "name": "Integer Overflow to Buffer Overflow",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-683": {
+      "name": "Function Call With Incorrect Order of Arguments",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-684": {
+      "name": "Failure to Provide Specified Functionality",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-685": {
+      "name": "Function Call With Incorrect Number of Arguments",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-686": {
+      "name": "Function Call With Incorrect Argument Type",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-687": {
+      "name": "Function Call With Incorrectly Specified Argument Value",
+      "scenario": "transform_compute",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-688": {
+      "name": "Function Call With Incorrect Variable or Reference as Argument",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-689": {
+      "name": "Permission Race Condition During Resource Copy",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-690": {
+      "name": "Unchecked Return Value to NULL Pointer Dereference",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-692": {
+      "name": "Incomplete Denylist to Cross-Site Scripting",
+      "scenario": "xss_html",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-694": {
+      "name": "Use of Multiple Resources with Duplicate Identifier",
+      "scenario": "transform_cache_sensitive",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-695": {
+      "name": "Use of Low-Level Functionality",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-698": {
+      "name": "Execution After Redirect",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-704": {
+      "name": "Incorrect Type Conversion or Cast",
+      "scenario": "data_convert",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-705": {
+      "name": "Incorrect Control Flow Scoping",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-706": {
+      "name": "Use of Incorrectly-Resolved Name or Reference",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-708": {
+      "name": "Incorrect Ownership Assignment",
+      "scenario": "control_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-733": {
+      "name": "Compiler Optimization Removal or Modification of Security-critical Code",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-749": {
+      "name": "Exposed Dangerous Method or Function",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-754": {
+      "name": "Improper Check for Unusual or Exceptional Conditions",
+      "scenario": "transform_compute",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-755": {
+      "name": "Improper Handling of Exceptional Conditions",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-756": {
+      "name": "Missing Custom Error Page",
+      "scenario": "control_egress_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-757": {
+      "name": "Selection of Less-Secure Algorithm During Negotiation",
+      "scenario": "weak_crypto_negotiation",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-758": {
+      "name": "Reliance on Undefined, Unspecified, or Implementation-Defined Behavior",
+      "scenario": "transform_compute",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-759": {
+      "name": "Use of a One-Way Hash without a Salt",
+      "scenario": "credential_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-760": {
+      "name": "Use of a One-Way Hash with a Predictable Salt",
+      "scenario": "credential_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-761": {
+      "name": "Free of Pointer not at Start of Buffer",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-762": {
+      "name": "Mismatched Memory Management Routines",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-763": {
+      "name": "Release of Invalid Pointer or Reference",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-764": {
+      "name": "Multiple Locks of a Critical Resource",
+      "scenario": "control_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-765": {
+      "name": "Multiple Unlocks of a Critical Resource",
+      "scenario": "control_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-766": {
+      "name": "Critical Data Element Declared Public",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-767": {
+      "name": "Access to Critical Private Variable via Public Method",
+      "scenario": "external_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-768": {
+      "name": "Incorrect Short Circuit Evaluation",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-771": {
+      "name": "Missing Reference to Active Allocated Resource",
+      "scenario": "transform_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-772": {
+      "name": "Missing Release of Resource after Effective Lifetime",
+      "scenario": "transform_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-773": {
+      "name": "Missing Reference to Active File Descriptor or Handle",
+      "scenario": "transform_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-774": {
+      "name": "Allocation of File Descriptors or Handles Without Limits or Throttling",
+      "scenario": "resource_alloc",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-775": {
+      "name": "Missing Release of File Descriptor or Handle after Effective Lifetime",
+      "scenario": "transform_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-776": {
+      "name": "XML Entity Expansion (Billion Laughs)",
+      "scenario": "xml_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-777": {
+      "name": "Regular Expression without Anchors",
+      "scenario": "regex_user_pattern",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-779": {
+      "name": "Logging of Excessive Data",
+      "scenario": "log_write",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-780": {
+      "name": "Use of RSA Algorithm without OAEP",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-781": {
+      "name": "Improper Address Validation in IOCTL with METHOD_NEITHER",
+      "scenario": "ioctl_validation",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-782": {
+      "name": "Exposed IOCTL with Insufficient Access Control",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-783": {
+      "name": "Operator Precedence Logic Error",
+      "scenario": "control_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-784": {
+      "name": "Reliance on Cookies without Validation or Integrity Checking in a Security Decision",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-785": {
+      "name": "Use of Path Manipulation Function without Maximum-sized Buffer",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-786": {
+      "name": "Access of Memory Location Before Start of Buffer",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-787": {
+      "name": "Out-of-bounds Write",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-788": {
+      "name": "Access of Memory Location After End of Buffer",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-789": {
+      "name": "Memory Allocation with Excessive Size Value",
+      "scenario": "mem_alloc",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-790": {
+      "name": "Improper Filtering of Special Elements",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-791": {
+      "name": "Incomplete Filtering of One or More Instances of Special Elements",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-792": {
+      "name": "Incomplete Filtering of One Instance of a Special Element",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-793": {
+      "name": "Only Filtering One Instance of a Special Element",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-794": {
+      "name": "Incomplete Filtering of Multiple Instances of a Special Element",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-795": {
+      "name": "Only Filtering Special Elements at a Designated Location",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-796": {
+      "name": "Only Filtering Special Elements Relative to a Marker",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-797": {
+      "name": "Only Filtering Special Elements at an Absolute Position",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-798": {
+      "name": "Hardcoded Credentials",
+      "scenario": "hardcoded_credentials",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-799": {
+      "name": "Improper Control of Interaction Frequency",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-804": {
+      "name": "Guessable CAPTCHA",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-805": {
+      "name": "Buffer Access with Incorrect Length Value",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-806": {
+      "name": "Buffer Access Using Size of Source Buffer",
+      "scenario": "storage_storage_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-807": {
+      "name": "Reliance on Untrusted Inputs in a Security Decision",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-820": {
+      "name": "Missing Synchronization",
+      "scenario": "transform_shared",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-821": {
+      "name": "Incorrect Synchronization",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-822": {
+      "name": "Untrusted Pointer Dereference",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-823": {
+      "name": "Use of Out-of-range Pointer Offset",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-825": {
+      "name": "Expired Pointer Dereference",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-826": {
+      "name": "Premature Release of Resource During Expected Lifetime",
+      "scenario": "transform_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-827": {
+      "name": "Improper Control of Document Type Definition",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-828": {
+      "name": "Signal Handler with Functionality that is not Async-Signal-Safe",
+      "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-829": {
+      "name": "Inclusion of Functionality from Untrusted Control Sphere",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-830": {
+      "name": "Inclusion of Web Functionality from an Untrusted Source",
+      "scenario": "structural_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-831": {
+      "name": "Signal Handler Function Associated with Multiple Signals",
+      "scenario": "meta_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-832": {
+      "name": "Unlock of a Resource that is not Locked",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-833": {
+      "name": "Deadlock",
+      "scenario": "control_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-834": {
+      "name": "Excessive Iteration",
+      "scenario": "ingress_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-835": {
+      "name": "Loop with Unreachable Exit Condition (Infinite Loop)",
+      "scenario": "control_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-836": {
+      "name": "Use of Password Hash Instead of Password for Authentication",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-837": {
+      "name": "Improper Enforcement of a Single, Unique Action",
+      "scenario": "process_data",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-838": {
+      "name": "Inappropriate Encoding for Output",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-839": {
+      "name": "Numeric Range Comparison Without Minimum Check",
+      "scenario": "buffer_from",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-841": {
+      "name": "Improper Enforcement of Behavioral Workflow",
+      "scenario": "workflow_enforcement",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-842": {
+      "name": "Placement of User into Incorrect Group",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-843": {
+      "name": "Type Confusion",
+      "scenario": "transform_memory",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-863": {
+      "name": "Incorrect Authorization",
+      "scenario": "protected_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-908": {
+      "name": "Use of Uninitialized Resource",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-909": {
+      "name": "Missing Initialization of Resource",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-910": {
+      "name": "Use of Expired File Descriptor",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-911": {
+      "name": "Improper Update of Reference Count",
+      "scenario": "storage_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-912": {
+      "name": "Hidden Functionality",
+      "scenario": "structural_transform_no_meta",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-913": {
+      "name": "Improper Control of Dynamically-Managed Code Resources",
+      "scenario": "eval_exec",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-914": {
+      "name": "Improper Control of Dynamically-Identified Variables",
+      "scenario": "extract_variable",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-916": {
+      "name": "Use of Password Hash With Insufficient Computational Effort",
+      "scenario": "credential_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-917": {
+      "name": "Expression Language Injection",
+      "scenario": "expression_eval",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-918": {
+      "name": "Server-Side Request Forgery (SSRF)",
+      "scenario": "external_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-920": {
+      "name": "Improper Restriction of Power Consumption",
+      "scenario": "command_injection_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-921": {
+      "name": "Storage of Sensitive Data in a Mechanism without Access Control",
+      "scenario": "storage_storage_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-922": {
+      "name": "Insecure Storage of Sensitive Information",
+      "scenario": "storage_storage_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-923": {
+      "name": "Improper Restriction of Communication Channel to Intended Endpoints",
+      "scenario": "egress_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-924": {
+      "name": "Improper Enforcement of Message Integrity During Transmission",
+      "scenario": "message_integrity",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-925": {
+      "name": "Improper Verification of Intent by Broadcast Receiver",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-927": {
+      "name": "Use of Implicit Intent for Sensitive Communication",
+      "scenario": "storage_external_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    }
+  },
+  "neverFired": [
+    "CWE-128",
+    "CWE-179",
+    "CWE-180",
+    "CWE-243",
+    "CWE-252",
+    "CWE-253",
+    "CWE-259",
+    "CWE-276",
+    "CWE-277",
+    "CWE-286",
+    "CWE-421",
+    "CWE-455",
+    "CWE-574",
+    "CWE-628",
+    "CWE-637",
+    "CWE-653",
+    "CWE-681",
+    "CWE-824",
+    "CWE-926",
+    "CWE-1321"
+  ],
+  "falsePositives": []
+}
