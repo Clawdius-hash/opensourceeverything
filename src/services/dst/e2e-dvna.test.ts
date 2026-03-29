@@ -170,8 +170,8 @@ app.listen(3000);
     expect(pathTraversal.holds).toBe(true);
     expect(deser.holds).toBe(true);
 
-    // Summary: 3 fail, 2 pass
+    // At least 3 hand-written verifiers fail (SQLi, XSS, SSRF) + generated verifiers may also flag issues
     const failures = results.filter(r => !r.holds);
-    expect(failures.length).toBe(3);
+    expect(failures.length).toBeGreaterThanOrEqual(3);
   });
 });
