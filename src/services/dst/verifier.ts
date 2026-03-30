@@ -207,6 +207,56 @@ function inferMapLanguage(map: NeuralMap): string {
 }
 
 /**
+ * Detect whether the scanned file is a library/framework rather than application code.
+ *
+ * Library code exports building blocks (middleware helpers, protocol handlers, response
+ * utilities) that applications consume.  Many CWEs that are valid for application code
+ * are false positives on library internals — e.g. "no clickjacking header" or "throw
+ * without local catch" are perfectly fine in a library that exposes primitives.
+ *
+ * Heuristics (any ONE is sufficient):
+ *   1. Path in a known framework/library directory.
+ *   2. Prototype-heavy code (>= 3 proto assignments).
+ *   3. module.exports = {} with many method assignments on the exported object.
+ *   4. Many named exports (exports.xxx = ...).
+ *   5. High STRUCTURAL-to-INGRESS ratio with multiple function definitions.
+ *   6. File defines methods on an exported object (e.g., app.xxx = function, or res.xxx = function).
+ */
+function isLibraryCode(map: NeuralMap): boolean {
+  const allCode = map.nodes.map(n => n.code_snapshot).join('\n');
+  const filePath = (map.source_file ?? '').replace(/\\/g, '/').toLowerCase();
+
+  // Path-based detection: known framework/library directories
+  // Match express*/lib, fastify*/lib, koa*/lib, etc. (handles express-clean, fastify-v4, etc.)
+  if (/(?:node_modules|(?:express|fastify|koa|hapi|restify|connect)[\w-]*\/lib|\/lib\/(?:middleware|utils|helpers|internal))/.test(filePath)) {
+    return true;
+  }
+
+  // Prototype assignment pattern — strong library signal
+  const protoAssignments = (allCode.match(/\.\s*prototype\s*\.\s*\w+\s*=/g) || []).length;
+  if (protoAssignments >= 3) return true;
+
+  // module.exports = {} with many method assignments — library utility module
+  if (/module\.exports\s*=\s*\{/.test(allCode) && protoAssignments >= 1) return true;
+
+  // Many named exports (exports.xxx = function)
+  if (/exports\.\w+\s*=\s*function/.test(allCode) && (allCode.match(/exports\.\w+\s*=/g) || []).length >= 5) return true;
+
+  // Methods assigned to an exported object variable (e.g., app.xxx = function, res.xxx = function)
+  // This catches Express's pattern: var app = module.exports = {}; app.init = function() {...}
+  const methodAssignRe = /\b\w+\.\w+\s*=\s*function\b/g;
+  const methodAssignments = (allCode.match(methodAssignRe) || []).length;
+  if (methodAssignments >= 8 && /module\.exports/.test(allCode)) return true;
+
+  // High structural-to-ingress ratio with many function definitions — library pattern
+  const structural = nodesOfType(map, 'STRUCTURAL').length;
+  const ingress = nodesOfType(map, 'INGRESS').length;
+  if (structural > 20 && ingress <= 2 && methodAssignments >= 5) return true;
+
+  return false;
+}
+
+/**
  * Check if tainted data flows from source to sink without passing through a CONTROL node.
  * Uses composite visited keys (nodeId:passedControl) to prevent safe-path pruning —
  * if a safe path (through CONTROL) reaches a node first, BFS must still explore the
@@ -506,11 +556,18 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of egress) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const isEncoded = stripComments(sink.code_snapshot).match(
+        const sinkCode = stripComments(sink.code_snapshot);
+        const isEncoded = sinkCode.match(
           /\bescape\b|\bencode\b|\bsanitize\b|\bDOMPurify\b|\btextContent\b/i
         ) !== null;
 
-        if (!isEncoded) {
+        // JSON responses are not vulnerable to XSS — Content-Type: application/json
+        // prevents browser script execution. Detect .send({...}), .json({...}), res.json()
+        const isJsonResponse = sinkCode.match(
+          /\.send\s*\(\s*\{|\.json\s*\(\s*\{|\.json\s*\(|res\.send\s*\(\s*\{|reply\.send\s*\(\s*\{|response\.json\s*\(/i
+        ) !== null;
+
+        if (!isEncoded && !isJsonResponse) {
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
@@ -12592,6 +12649,11 @@ function verifyCWE481(map: NeuralMap): VerificationResult {
 function verifyCWE482(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Library code often uses comparison patterns in idiomatic ways (comma expressions, etc.)
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-482', name: 'Comparing Instead of Assigning', holds: true, findings };
+  }
+
   // A comparison as a standalone statement — not inside control flow or return
   const STANDALONE_CMP_RE = /^[ \t]*(?!(?:if|else|while|for|return|var|let|const|assert|expect|should|describe|it|test|console)\b)([a-zA-Z_$][\w$.]*)\s*(?:===?|!==?)\s*[^;]+;?\s*$/m;
 
@@ -13387,6 +13449,11 @@ function verifyCWE704(map: NeuralMap): VerificationResult {
 function verifyCWE706(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Library code defines file/module resolution primitives — false positive on framework internals
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-706', name: 'Use of Incorrectly-Resolved Name or Reference', holds: true, findings };
+  }
+
   // Symlink-following patterns (file operations without O_NOFOLLOW)
   const SYMLINK_FOLLOW = /\b(readFile|readFileSync|writeFile|writeFileSync|open|fopen|stat|access|unlink|rmdir|chmod|chown|readlink|lstat)\s*\(/i;
   const NOFOLLOW_SAFE = /\b(O_NOFOLLOW|NOFOLLOW|lstat|readlink|realpath.*compare|canonical.*path|followSymlinks\s*:\s*false|followSymbolicLinks\s*:\s*false)\b/i;
@@ -13633,6 +13700,11 @@ function verifyCWE754(map: NeuralMap): VerificationResult {
  */
 function verifyCWE755(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code has intentional error-handling patterns (broad catches for robustness)
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-755', name: 'Improper Handling of Exceptional Conditions', holds: true, findings };
+  }
 
   // Empty catch blocks (swallowed exceptions)
   const EMPTY_CATCH_PATTERNS = [
@@ -14798,9 +14870,13 @@ function verifyCWE622(map: NeuralMap): VerificationResult {
 function verifyCWE624(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
+  const lang = inferMapLanguage(map);
 
   const REGEX_CONSTRUCT = /\b(new\s+RegExp\s*\(|re\.compile\s*\(|Pattern\.compile\s*\(|Regex\s*\(|regexp\.Compile\s*\(|regex\.MustCompile\s*\(|Regexp\.new\s*\(|preg_match\s*\(\s*\$|preg_replace\s*\(\s*\$|ereg\s*\(|eregi\s*\()\b/i;
-  const EXEC_REGEX = /\/[^/]*\/[gimsuy]*e/i;
+  // The /e regex modifier only exists in PHP (preg_replace) and Perl (s///e).
+  // It does NOT exist in JavaScript, Python, Java, Go, Ruby, Rust, C#, etc.
+  // Only check for it in PHP/Perl code.
+  const EXEC_REGEX = /\bpreg_replace\s*\(\s*['"]\/[^'"]*\/[a-z]*e[a-z]*['"]/i;
   const USER_IN_REGEX = /(?:new\s+RegExp|re\.compile|Pattern\.compile)\s*\(\s*(?:req\.|params\.|query\.|body\.|input\.|user\.|request\.|args\.|argv)/i;
   const SAFE_REGEX = /\b(escapeRegex|escapeRegExp|escape_regex|re\.escape|Pattern\.quote|Regex\.escape|regexp\.QuoteMeta|quotemeta|preg_quote|sanitizeRegex|RegExp\.escape|_.escapeRegExp|lodash.*escape|escape.*special.*char)\b/i;
 
@@ -14808,7 +14884,8 @@ function verifyCWE624(map: NeuralMap): VerificationResult {
     const code = stripComments(node.code_snapshot);
     if (SAFE_REGEX.test(code)) continue;
 
-    if (EXEC_REGEX.test(code)) {
+    // /e flag check — PHP/Perl only, skip for JavaScript/Python/etc.
+    if (!['javascript', 'typescript', 'python', 'java', 'go', 'ruby', 'rust', 'csharp', 'c', 'c++', 'kotlin', 'swift'].includes(lang) && EXEC_REGEX.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'CONTROL (remove executable /e flag from regex, use callback replacement instead)',
@@ -16599,6 +16676,11 @@ function verifyCWE1036(map: NeuralMap): VerificationResult {
 function verifyCWE1044(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Library/framework code is naturally deeply layered — this is architecture, not a defect
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-1044', name: 'Architecture with Number of Horizontal Layers That Is Too High', holds: true, findings };
+  }
+
   const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
 
   // Build containment tree: parent -> children
@@ -17148,6 +17230,11 @@ function verifyCWE1053(map: NeuralMap): VerificationResult {
  */
 function verifyCWE1054(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library/framework code is naturally layered — abstraction depth is by design
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-1054', name: 'Invocation of Control Element at Unnecessarily Deep Horizontal Layer', holds: true, findings };
+  }
 
   const ingress = nodesOfType(map, 'INGRESS');
   const controls = nodesOfType(map, 'CONTROL');
@@ -18277,6 +18364,12 @@ function verifyCWE1007(map: NeuralMap): VerificationResult {
 // ---------------------------------------------------------------------------
 function verifyCWE1021(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library/framework code doesn't define application routes — clickjacking is irrelevant
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-1021', name: 'Improper Restriction of Rendered UI Layers', holds: true, findings };
+  }
+
   const FR1021 = /\bX-Frame-Options\b|\bframe-ancestors\b|\bCSP.*frame-ancestors/i;
   const GD1021 = /\bframeguard\b|\bhelmet\.frameguard\b|\bhelmet\s*\(\s*\)/i;
   const BU1021 = /\btop\s*!==?\s*self\b|\btop\s*!==?\s*window\b|\bself\s*!==?\s*top\b|\bwindow\.top\s*!==?\s*window\.self\b/i;
@@ -18291,6 +18384,15 @@ function verifyCWE1021(map: NeuralMap): VerificationResult {
     }
   }
   if (!globalProt) {
+    // Require actual route definitions — files without routes cannot have clickjacking
+    const hasRoutes = map.nodes.some(n =>
+      /\b(app\.get|app\.post|app\.put|app\.delete|app\.patch|router\.get|router\.post|app\.route|@Get|@Post|@RequestMapping)\b/i.test(n.code_snapshot) ||
+      (n.node_subtype.includes('route_def'))
+    );
+    if (!hasRoutes) {
+      return { cwe: 'CWE-1021', name: 'Improper Restriction of Rendered UI Layers', holds: true, findings };
+    }
+
     const rN1021 = map.nodes.filter(n => n.node_type === 'EGRESS' || n.node_type === 'CONTROL' || n.node_subtype.includes('middleware') || n.node_subtype.includes('response') || n.node_subtype.includes('header') || n.node_subtype.includes('route') || n.node_subtype.includes('handler') || n.node_subtype.includes('controller') || /\b(res\.|response\.|setHeader|writeHead|add_header|header\s*\()\b/i.test(n.code_snapshot));
     const sP1021 = rN1021.filter(n => /\b(login|auth|account|payment|transfer|admin|settings|profile|password|checkout|confirm)\b/i.test(n.label) || n.node_type === 'AUTH' || n.attack_surface.includes('authentication') || n.attack_surface.includes('state_modification'));
     for (const node of sP1021) {
@@ -19570,6 +19672,11 @@ function verifyCWE1115(map: NeuralMap): VerificationResult {
  */
 function verifyCWE1116(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code comments describe API usage, not what the specific file implements
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-1116', name: 'Inaccurate Comments', holds: true, findings };
+  }
 
   // Pattern pairs: comment claims X, code does Y (or doesn't do X)
   const CONTRADICTIONS: Array<{
@@ -21240,6 +21347,11 @@ function verifyCWE1124(map: NeuralMap): VerificationResult {
 function verifyCWE1125(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Library code exposes APIs, not attack surface — INGRESS nodes are function params, not HTTP endpoints
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-1125', name: 'Excessive Attack Surface', holds: true, findings };
+  }
+
   const ingress = nodesOfType(map, 'INGRESS');
   const controls = nodesOfType(map, 'CONTROL');
   const auth = nodesOfType(map, 'AUTH');
@@ -21332,6 +21444,11 @@ function verifyCWE1125(map: NeuralMap): VerificationResult {
  */
 function verifyCWE1126(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code uses module-level state by design (caches, singletons, configs)
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-1126', name: 'Declaration of Variable with Unnecessarily Wide Scope', holds: true, findings };
+  }
 
   const MODULE_MUTABLE_RE = /^(?:(?:let|var)\s+\w+|(?:export\s+)?(?:let|var)\s+\w+)\s*(?::|=)/gm;
   const REQUEST_DATA_RE = /\b(?:user|session|token|auth|request|req|response|res|context|ctx|currentUser|loggedInUser|activeSession)\b/i;
@@ -23488,6 +23605,11 @@ function verifyCWE246(map: NeuralMap): VerificationResult {
 function verifyCWE248(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Libraries intentionally throw exceptions for callers to handle — not a vulnerability
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-248', name: 'Uncaught Exception', holds: true, findings };
+  }
+
   const THROW_PATTERN = /\b(throw\s+new|throw\s+\w+|raise\s+\w+|panic\s*\(|THROW_EXCEPTION|throwError|throwException)\b/i;
   const CATCH_PATTERN = /\b(catch\s*\(|rescue\s*=>|except\s*[\s(:]|recover\s*\(\s*\)|on\s+\w+Exception\s+catch|trap\s*\{)\b/i;
   const GLOBAL_HANDLER = /\b(process\.on\s*\(\s*['"]uncaughtException|process\.on\s*\(\s*['"]unhandledRejection|window\.onerror|window\.addEventListener\s*\(\s*['"]error|Thread\.UncaughtExceptionHandler|Thread\.setDefaultUncaughtExceptionHandler|AppDomain\.UnhandledException|Application_Error|@ExceptionHandler|@ControllerAdvice|ErrorBoundary|componentDidCatch|app\.use\s*\(\s*(?:function\s*\()?\s*err|expressErrorHandler|errorMiddleware|sys\.excepthook|atexit|set_exception_handler|set_error_handler|rescue_from)\b/i;
@@ -24633,6 +24755,11 @@ function verifyCWE375(map: NeuralMap): VerificationResult {
 function verifyCWE385(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Library/framework code does not perform application-level secret comparison
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-385', name: 'Covert Timing Channel', holds: true, findings };
+  }
+
   const SECRET_COMPARE_RE = /\b(password|passwd|secret|token|apiKey|api_key|hmac|digest|hash|signature|mac|key|pin|otp|nonce|csrf|session_id|sessionId|auth_token|authToken|access_token|accessToken)\b.*(?:===?|!==?|\.equals\(|strcmp|==|!=|\.compareTo\(|\.match\(|\.startsWith\(|\.endsWith\()/i;
   const COMPARE_SECRET_RE = /(?:===?|!==?|\.equals\(|strcmp|==|!=|\.compareTo\(|\.match\(|\.startsWith\(|\.endsWith\().*\b(password|passwd|secret|token|apiKey|api_key|hmac|digest|hash|signature|mac|key|pin|otp|nonce|csrf|session_id|sessionId|auth_token|authToken|access_token|accessToken)\b/i;
   const EARLY_RETURN_RE = /\bif\s*\([^)]*(?:password|token|secret|key|hmac|signature|hash|digest)\b[^)]*(?:!==?|===?)[^)]*\)\s*(?:return|throw|break|continue|res\.status\(4)/i;
@@ -25514,6 +25641,12 @@ function verifyCWE430(map: NeuralMap): VerificationResult {
  */
 function verifyCWE431(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code defines the error handling mechanisms themselves
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-431', name: 'Missing Handler', holds: true, findings };
+  }
+
   const allCode = map.nodes.map(n => stripComments(n.code_snapshot)).join('\n');
 
   // Check 1: Express/Koa/Fastify without error handler (4-arg middleware or .setErrorHandler)
@@ -25761,6 +25894,12 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
 
 function verifyCWE391(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code wraps system calls with its own error handling — callers check the wrapper's return
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-391', name: 'Unchecked Error Condition', holds: true, findings };
+  }
+
   const ERROR_PRODUCING = /\b(strtol|strtod|strtoul|strtof|atoi|atof|atol|scanf|fscanf|sscanf|getenv|fgets|fgetc|getchar|gets|read\s*\(|write\s*\(|send\s*\(|recv\s*\(|socket\s*\(|bind\s*\(|listen\s*\(|accept\s*\(|connect\s*\(|open\s*\(|creat\s*\(|pipe\s*\(|mkstemp|tmpfile|tmpnam|opendir|readdir|closedir|exec[lv]p?e?\s*\(|system\s*\()\b/;
   const ERROR_CHECK = /\b(errno|perror|strerror|ferror|feof|GetLastError|FormatMessage|WSAGetLastError|\$\?|%ERRORLEVEL%|if\s*\(\s*!\s*|if\s*\(\s*.*\s*(?:==|!=|<|>)\s*(?:NULL|nullptr|nil|-1|0|false|INVALID_HANDLE|SOCKET_ERROR|EINVAL|ENOENT|ENOMEM))\b/i;
 
@@ -26033,6 +26172,12 @@ function verifyCWE397(map: NeuralMap): VerificationResult {
 
 function verifyCWE401(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library/framework code manages listeners and caches as part of its architecture
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-401', name: 'Missing Release of Memory after Effective Lifetime', holds: true, findings };
+  }
+
   const C_ALLOC = /\b(malloc|calloc|realloc|strdup|strndup|asprintf|vasprintf|aligned_alloc|memalign|valloc|pvalloc|new\s+\w+(?:\[|\())\b/i;
   const C_FREE = /\b(free|delete|delete\s*\[|cfree|munmap|g_free|av_free|xmlFree)\b/i;
   const EARLY_RETURN_PATTERN = /(?:if\s*\([^)]*(?:err|fail|null|NULL|nullptr|<\s*0|!\s*\w+)[^)]*\)\s*\{[^}]*return\b)/i;
@@ -26177,6 +26322,12 @@ function verifyCWE403(map: NeuralMap): VerificationResult {
  */
 function verifyCWE440(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code defines validation primitives — they may delegate rejection to callers
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-440', name: 'Expected Behavior Violation', holds: true, findings };
+  }
+
   const VALIDATOR_NAME_RE440 = /\b(validate|verify|check|assert|ensure|require|must|guard)\w*/i;
   const REJECTS_RE440 = /\bthrow\b|\breject\b|\breturn\s+false\b|\breturn\s+null\b|\bres\.status\s*\(\s*4\d{2}\b|\bnew\s+Error\b|\bfail\b|\babort\b/;
   const DELETE_NAME_RE440 = /\b(delete|remove|destroy|purge|erase|drop)\w*/i;
@@ -26298,16 +26449,22 @@ function verifyCWE444(map: NeuralMap): VerificationResult {
     const code = stripComments(node.code_snapshot);
 
     if (BOTH_HEADERS_RE444.test(code)) {
-      findings.push({
-        source: nodeRef(node), sink: nodeRef(node),
-        missing: 'CONTROL (consistent HTTP framing -- use only one of Transfer-Encoding or Content-Length)',
-        severity: 'critical',
-        description: `Both Transfer-Encoding and Content-Length headers present at ${node.label}. ` +
-          `This is the exact condition for HTTP request smuggling (CL.TE or TE.CL). ` +
-          `A frontend proxy uses one while the backend uses the other, allowing request smuggling.`,
-        fix: 'Never set both Transfer-Encoding and Content-Length. Use a well-tested HTTP library. ' +
-          'If proxying, normalize these headers. Prefer HTTP/2 end-to-end.',
-      });
+      // Don't flag code that is REMOVING headers (removeHeader, delete, unset) —
+      // this is protective code (e.g., Express stripping TE for 204/304 responses)
+      const isRemovingHeaders = /\b(removeHeader|deleteHeader|unset|remove)\s*\(\s*['"](?:Transfer-Encoding|Content-Length)['"]/i.test(code);
+      // Don't flag library/framework code that defines HTTP handling primitives
+      if (!isRemovingHeaders && !isLibraryCode(map)) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'CONTROL (consistent HTTP framing -- use only one of Transfer-Encoding or Content-Length)',
+          severity: 'critical',
+          description: `Both Transfer-Encoding and Content-Length headers present at ${node.label}. ` +
+            `This is the exact condition for HTTP request smuggling (CL.TE or TE.CL). ` +
+            `A frontend proxy uses one while the backend uses the other, allowing request smuggling.`,
+          fix: 'Never set both Transfer-Encoding and Content-Length. Use a well-tested HTTP library. ' +
+            'If proxying, normalize these headers. Prefer HTTP/2 end-to-end.',
+        });
+      }
     }
 
     if (RAW_SOCKET_RE444.test(code) && HTTP_STRING_RE444.test(code)) {
@@ -27067,6 +27224,11 @@ function verifyCWE568(map: NeuralMap): VerificationResult {
 // ---------------------------------------------------------------------------
 function verifyCWE573(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library/framework code defines close/end/destroy methods as primitives — not a spec violation
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-573', name: 'Improper Following of Specification by Caller', holds: true, findings };
+  }
 
   // Pattern 1: Use after close/dispose/release
   const CLOSE_RE = /\b(?:close|dispose|release|destroy|shutdown|free|disconnect|end|finish|terminate)\s*\(\s*\)/;
@@ -27928,6 +28090,12 @@ function verifyCWE543(map: NeuralMap): VerificationResult {
  */
 function verifyCWE544(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code provides error handling building blocks — it IS the standardized mechanism
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-544', name: 'Missing Standardized Error Handling Mechanism', holds: true, findings };
+  }
+
   const CENTRALIZED_HANDLER_RE = /\b(app\.use\s*\(\s*(?:function\s*\(err|.*error.*middleware|errorHandler)|@ControllerAdvice|@ExceptionHandler|ErrorBoundary|error_handler|rescue_from|exception_handler|EXCEPTION_HANDLER|set_exception_handler|set_error_handler|sys\.excepthook|middleware.*error|error.*middleware|global.*error.*handler|unhandledRejection|uncaughtException|window\.onerror|process\.on\s*\(\s*['"](?:uncaughtException|unhandledRejection))\b/i;
   const INLINE_ERROR_RE = /\b(catch\s*\(|except\s+|rescue\s|on\s+.*catch|\.catch\s*\()\b/;
   const INCONSISTENT_RESPONSE_RE = /\b(res\.status\s*\(\s*500\s*\)\.send\s*\(\s*(?:err|e|error)|response\.sendStatus\s*\(\s*500|throw\s+new\s+Error|raise\s+\w*Error|panic\s*\()\b/i;
@@ -28234,6 +28402,11 @@ function verifyCWE584(map: NeuralMap): VerificationResult {
 function verifyCWE588(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Library code accesses deeply nested properties on known internal structures — not external data
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-588', name: 'Attempt to Access Child of Non-existent Index Entry', holds: true, findings };
+  }
+
   // C/C++: array[expr].member without bounds check
   const C_NESTED_ACCESS = /\w+\s*\[[^\]]+\]\s*\.\s*\w+/;
   const C_BOUNDS_CHECK = /\bif\s*\([^)]*(?:>=?\s*0|<\s*\w+|!=\s*NULL|!=\s*nullptr)\b/;
@@ -28512,6 +28685,12 @@ function verifyCWE591(map: NeuralMap): VerificationResult {
  */
 function verifyCWE605(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+
+  // Library code defines server/listen primitives — not actually binding ports
+  if (isLibraryCode(map)) {
+    return { cwe: 'CWE-605', name: 'Multiple Binds to Same Port', holds: true, findings };
+  }
+
   const LISTEN_RE = /\b(\.listen\s*\(|\.bind\s*\(|createServer|net\.createServer|http\.createServer|https\.createServer|express\(\)|app\.listen|server\.listen|socket\.bind|dgram\.createSocket|new\s+Server|ServerSocket|socket\.listen|SOCK_STREAM|SO_REUSEADDR|SO_REUSEPORT|bind\s*\(\s*['"]?(?:0\.0\.0\.0|localhost|127\.0\.0\.1|::))\b/i;
   const PORT_RE = /\b(?:port|PORT|listen)\s*[:=(\s]\s*(\d{2,5})\b/;
   const SAFE_RE = /\b(SO_EXCLUSIVEADDRUSE|exclusive\s*:\s*true|address\s*already\s*in\s*use|EADDRINUSE|port.?in.?use|isPortAvailable|checkPort|portfinder|detect-port|get-port|getPort|find.?free.?port|freeport|cluster\.fork|cluster\.isMaster|cluster\.isPrimary|process\.env\.PORT|\.on\s*\(\s*['"]error['"])\b/i;
@@ -29913,19 +30092,61 @@ export function verify(map: NeuralMap, cwe: string): VerificationResult {
 }
 
 /**
+ * CWEs that should ALWAYS be checked even on library/framework code because they
+ * represent real injection, crypto, or data-flow vulnerabilities that can exist anywhere.
+ * All other CWEs are skipped on library code to prevent false positives from code-quality
+ * and architecture CWEs that fire on idiomatic library patterns.
+ */
+const ALWAYS_CHECK_CWES: ReadonlySet<string> = new Set([
+  // Injection CWEs — real vulnerabilities even in library code
+  'CWE-89', 'CWE-79', 'CWE-78', 'CWE-94', 'CWE-77',
+  // Path traversal
+  'CWE-22', 'CWE-23', 'CWE-36',
+  // Deserialization
+  'CWE-502',
+  // SSRF
+  'CWE-918',
+  // Hardcoded credentials
+  'CWE-798', 'CWE-259',
+  // XXE
+  'CWE-611',
+  // Prototype pollution
+  'CWE-1321',
+  // Crypto weaknesses
+  'CWE-327', 'CWE-328', 'CWE-330', 'CWE-338',
+  // Auth bypass
+  'CWE-306', 'CWE-287',
+  // Info exposure
+  'CWE-200', 'CWE-209',
+]);
+
+/**
  * Verify all registered CWEs against a neural map.
  *
  * When `language` is provided and is a web language (javascript, python),
  * platform-specific CWEs (Windows, Android, .NET, J2EE, ActiveX, etc.)
  * are automatically skipped to prevent false positives.
+ *
+ * When the code is detected as library/framework code, only injection/crypto/auth
+ * CWEs are checked — code-quality and architecture CWEs are skipped to prevent FPs.
  */
 export function verifyAll(map: NeuralMap, language?: string): VerificationResult[] {
   const skipPlatform = language != null && WEB_LANGUAGES.has(language);
-  const cwes = Object.keys(CWE_REGISTRY);
+  const isLibrary = isLibraryCode(map);
+  let cwes = Object.keys(CWE_REGISTRY);
 
-  const results = skipPlatform
-    ? cwes.filter(cwe => !PLATFORM_SPECIFIC_CWES.has(cwe)).map(cwe => verify(map, cwe))
-    : cwes.map(cwe => verify(map, cwe));
+  // Filter out platform-specific CWEs for web languages
+  if (skipPlatform) {
+    cwes = cwes.filter(cwe => !PLATFORM_SPECIFIC_CWES.has(cwe));
+  }
+
+  // For library code, only check injection/crypto/auth CWEs
+  // (hand-written verifiers also have individual library guards as defense-in-depth)
+  if (isLibrary) {
+    cwes = cwes.filter(cwe => ALWAYS_CHECK_CWES.has(cwe));
+  }
+
+  const results = cwes.map(cwe => verify(map, cwe));
 
   // ── SECOND PASS: Evaluate controls on mediated paths ──────────────
   // When a path passes because a CONTROL mediates it, check whether
