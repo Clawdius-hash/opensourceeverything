@@ -275,13 +275,75 @@ export const verifyCWE281 = createTransformStorageVerifier(
     'Use stat() to read source permissions and chmod() to apply them to the destination.',
 );
 
-export const verifyCWE377 = createTransformStorageVerifier(
-  'CWE-377', 'Insecure Temporary File', 'medium',
-  fileStorageNodes, TEMP_FILE_SAFE,
-  'CONTROL (secure temp file creation — mkstemp/O_EXCL)',
-  'Use mkstemp() or fs.mkdtemp() for secure temp files. Never use tmpnam() or mktemp(). ' +
-    'Create temp files with O_EXCL to prevent race conditions.',
-);
+/**
+ * CWE-377: Insecure Temporary File
+ * Pattern: TRANSFORM(temp path generation) → STORAGE(file write) without secure creation
+ *
+ * UPGRADED from factory: the generic version checked for TEMP_FILE_SAFE on the sink.
+ * This version specifically detects:
+ *   (a) Dangerous temp functions: tmpnam(), mktemp(), tempnam() — predictable names
+ *   (b) Predictable patterns: "/tmp/" + Date.now(), "/tmp/prefix_" + pid
+ *   (c) Missing O_EXCL: open() without O_EXCL creates TOCTOU race
+ * And recognizes safe alternatives:
+ *   (a) mkstemp() / mkdtemp() — atomic creation with unpredictable names
+ *   (b) fs.mkdtemp() — Node.js secure temp directory
+ *   (c) O_EXCL flag — prevents symlink TOCTOU
+ *   (d) Python tempfile.NamedTemporaryFile / tempfile.mkstemp
+ *
+ * The TOCTOU race: attacker creates symlink at predicted temp path between
+ * name generation and file creation, causing the app to write to arbitrary files.
+ */
+export function verifyCWE377(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const sources = nodesOfType(map, 'TRANSFORM');
+  const fileSinks = fileStorageNodes(map);
+
+  for (const src of sources) {
+    for (const sink of fileSinks) {
+      if (src.id === sink.id) continue;
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        // Check source for dangerous temp name generation
+        const hasDangerousTempGen = src.code_snapshot.match(
+          /\btmpnam\b|\bmktemp\b(?!p)|\btempnam\b|\b\/tmp\/\b.*\+|\bos\.tmpnam\b|\btmpName\b/i
+        ) !== null;
+
+        // Check source for predictable patterns (Date.now, pid, sequential counter)
+        const hasPredictableName = src.code_snapshot.match(
+          /\/tmp\/.*Date\.now|\/tmp\/.*getpid|\/tmp\/.*process\.pid|\/tmp\/.*Math\.random|\/tmp\/.*counter/i
+        ) !== null;
+
+        // Check if source uses secure temp creation
+        const hasSecureCreation = src.code_snapshot.match(
+          /\bmkstemp\b|\bmkdtemp\b|\bfs\.mkdtemp\b|\btempfile\.NamedTemporary|\btempfile\.mkstemp|\bos\.tmpfile\b/i
+        ) !== null;
+
+        // Check if sink uses O_EXCL or equivalent atomic creation
+        const hasAtomicCreate = sink.code_snapshot.match(
+          /\bO_EXCL\b|\bo_excl\b|\bwx\b|\b0o[67]00\b|\b0[67]00\b|\bfs\.mkdtemp\b/i
+        ) !== null;
+
+        // Flag if dangerous creation and no mitigation
+        if ((hasDangerousTempGen || hasPredictableName) && !hasSecureCreation && !hasAtomicCreate) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (secure temp file creation — use mkstemp/fs.mkdtemp or O_EXCL flag)',
+            severity: 'medium',
+            description: `Temp file at ${sink.label} uses predictable name from ${src.label}. ` +
+              `Between name generation and file creation, an attacker can create a symlink at the predicted path, ` +
+              `causing the application to write to an arbitrary file (TOCTOU race).`,
+            fix: 'Use mkstemp() (C) or fs.mkdtemp() (Node.js) which atomically create the file with an unpredictable name. ' +
+              'If you must use open(): pass O_CREAT | O_EXCL to fail if the file already exists. ' +
+              'In Python: use tempfile.NamedTemporaryFile() or tempfile.mkstemp(). ' +
+              'NEVER use tmpnam(), mktemp(), or Date.now() for temp file paths.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-377', name: 'Insecure Temporary File', holds: findings.length === 0, findings };
+}
 
 export const verifyCWE378 = createTransformStorageVerifier(
   'CWE-378', 'Creation of Temporary File With Insecure Permissions', 'medium',

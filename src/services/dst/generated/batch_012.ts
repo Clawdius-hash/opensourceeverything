@@ -120,13 +120,75 @@ export const verifyCWE521 = createAuthControlVerifier(
     'and use a strength estimator (zxcvbn). Do not rely solely on complexity rules.',
 );
 
-export const verifyCWE620 = createAuthControlVerifier(
-  'CWE-620', 'Unverified Password Change', 'high',
-  /\bcurrent.*password\b|\bold.*password\b|\bverify.*password\b|\breauth\b/i,
-  'CONTROL (current password verification before password change)',
-  'Require the current password before allowing password changes. ' +
-    'This prevents attackers with session access from locking out the real user.',
-);
+/**
+ * CWE-620: Unverified Password Change
+ * UPGRADED — hand-written with specific sink filters and safe patterns.
+ *
+ * Pattern: User input (INGRESS) reaches a password-changing AUTH node
+ * without passing through a CONTROL node that verifies the current password.
+ *
+ * This is an authentication bypass: if an attacker has a stolen session token,
+ * they can change the password without knowing the original, permanently
+ * locking out the legitimate user.
+ *
+ * Specific sinks: AUTH nodes whose code contains password-changing operations
+ *   (setPassword, updatePassword, changePassword, password =, hash(newPassword),
+ *    bcrypt.hash, UPDATE users SET password)
+ * Specific safe patterns:
+ *   - Verifying current/old password before setting new one
+ *   - bcrypt.compare / argon2.verify on the old password
+ *   - Re-authentication before password change
+ *   - Password reset via email token (different flow, not same-session change)
+ */
+export function verifyCWE620(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Sinks: AUTH nodes that change/set/update passwords
+  const PASSWORD_CHANGE_PATTERN = /\b(setPassword|updatePassword|changePassword|resetPassword|hashPassword|password\s*=|SET\s+password|UPDATE.*password|bcrypt\.hash|argon2\.hash)\b/i;
+  const passwordChangeSinks = map.nodes.filter(n =>
+    n.node_type === 'AUTH' &&
+    PASSWORD_CHANGE_PATTERN.test(n.code_snapshot)
+  );
+
+  // Safe: current password verified before change
+  const VERIFY_CURRENT_SAFE = /\b(currentPassword|oldPassword|current_password|old_password|existingPassword)\b|\bbcrypt\.compare\b|\bargon2\.verify\b|\bverifyPassword\b|\bcheckPassword\b|\bvalidatePassword\b|\breauth|compareSync\b/i;
+
+  for (const src of ingress) {
+    for (const sink of passwordChangeSinks) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        // Check if the surrounding code verifies the current password
+        const isSafe = VERIFY_CURRENT_SAFE.test(sink.code_snapshot) ||
+          VERIFY_CURRENT_SAFE.test(src.code_snapshot);
+
+        // Also check: is there any node in the graph that verifies the old password?
+        // Look for a CONTROL node on the path that does password comparison
+        const hasPasswordVerifyControl = map.nodes.some(n =>
+          n.node_type === 'CONTROL' &&
+          VERIFY_CURRENT_SAFE.test(n.code_snapshot)
+        );
+
+        if (!isSafe && !hasPasswordVerifyControl) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (current password verification before allowing password change)',
+            severity: 'high',
+            description: `User input from ${src.label} reaches password change at ${sink.label} ` +
+              `without verifying the current password. An attacker with a stolen session ` +
+              `can change the password and permanently lock out the legitimate user.`,
+            fix: 'Require the current password in the password change form. ' +
+              'Verify it with bcrypt.compare() or equivalent before setting the new password. ' +
+              'For admin resets, use a separate authenticated admin endpoint with audit logging.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-620', name: 'Unverified Password Change', holds: findings.length === 0, findings };
+}
 
 export const verifyCWE640 = createAuthControlVerifier(
   'CWE-640', 'Weak Password Recovery Mechanism for Forgotten Password', 'high',

@@ -89,6 +89,12 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
 
   // INGRESS — file I/O
   open:                   { nodeType: 'INGRESS',    subtype: 'file_read',     tainted: false },
+
+  // STRUCTURAL — FastAPI dependency injection
+  Depends:                { nodeType: 'STRUCTURAL',  subtype: 'dependency',   tainted: false },
+
+  // AUTH — FastAPI OAuth2 token extraction
+  OAuth2PasswordBearer:   { nodeType: 'AUTH',        subtype: 'authenticate', tainted: false },
 };
 
 // ── Member calls (object.method) ──────────────────────────────────────────
@@ -127,6 +133,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'request.body':             { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'request.content_params':   { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
 
+  // ── Django REST Framework (DRF) ──
+  'serializer.validated_data': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
   // ── FastAPI depends / path params (via function signature) ──
   // FastAPI injects via type hints; callee-level patterns are on the request object
   'Request.body':             { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
@@ -156,6 +165,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Path.read_bytes':          { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
   'Path.open':                { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
 
+  // ── Data science file ingestion (phoneme-expansion/python_datascience) ──
+  'pandas.read_csv':          { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
+  'pd.read_csv':              { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
+
   // ── Unsafe deserialization → EXTERNAL (can execute arbitrary code, like eval) ──
   'pickle.load':              { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
   'pickle.loads':             { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
@@ -166,6 +179,34 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'marshal.load':             { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
   'marshal.loads':            { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
   'shelve.open':              { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+
+  // ── Data science deserialization — CWE-502 (phoneme-expansion/python_datascience) ──
+  'pandas.read_pickle':       { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+  'pd.read_pickle':           { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+  'numpy.load':               { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+  'np.load':                  { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+  'torch.load':               { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+  'joblib.load':              { nodeType: 'EXTERNAL', subtype: 'deserialize',  tainted: false },
+
+  // ── Data science expression evaluation — CWE-94 (phoneme-expansion/python_datascience) ──
+  'pandas.eval':              { nodeType: 'EXTERNAL', subtype: 'system_exec',  tainted: false },
+  'DataFrame.query':          { nodeType: 'EXTERNAL', subtype: 'system_exec',  tainted: false },
+
+  // ── XML parsing — XXE (CWE-611) ──
+  'xml.etree.ElementTree.parse':      { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
+  'xml.etree.ElementTree.fromstring': { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
+  'xml.etree.ElementTree.iterparse':  { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
+  'ET.parse':                         { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
+  'ET.fromstring':                    { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
+  'ET.iterparse':                     { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
+
+  // ── FastAPI WebSocket receive (persistent tainted input) ──
+  'WebSocket.receive_text':   { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },
+  'WebSocket.receive_json':   { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },
+
+  // ── FastAPI UploadFile (file upload vector) ──
+  'UploadFile.read':          { nodeType: 'INGRESS', subtype: 'file_upload',    tainted: true },
+  'UploadFile.filename':      { nodeType: 'INGRESS', subtype: 'file_upload',    tainted: true },
 
   // ── Socket / network read ──
   'socket.recv':              { nodeType: 'INGRESS', subtype: 'network_read', tainted: true },
@@ -204,6 +245,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'StreamingResponse':        { nodeType: 'EGRESS',  subtype: 'http_response', tainted: false },
   'FileResponse':             { nodeType: 'EGRESS',  subtype: 'http_response', tainted: false },
   'Response':                 { nodeType: 'EGRESS',  subtype: 'http_response', tainted: false },
+
+  // ── FastAPI WebSocket send (data exfiltration channel) ──
+  'WebSocket.send_text':      { nodeType: 'EGRESS',  subtype: 'websocket_write', tainted: false },
+  'WebSocket.send_json':      { nodeType: 'EGRESS',  subtype: 'websocket_write', tainted: false },
 
   // ── File write (EGRESS) ──
   'pathlib.Path.write_text':  { nodeType: 'EGRESS',  subtype: 'file_write',   tainted: false },
@@ -293,7 +338,26 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'urllib.parse.urlparse':      { nodeType: 'TRANSFORM', subtype: 'parse',    tainted: false },
   'urllib.parse.urlencode':     { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
   'urllib.parse.quote':         { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
-  'urllib.parse.unquote':       { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
+  'urllib.parse.unquote':       { nodeType: 'TRANSFORM', subtype: 'decode',   tainted: false },
+  'urllib.parse.unquote_plus':  { nodeType: 'TRANSFORM', subtype: 'decode',   tainted: false },
+  'urllib.parse.parse_qs':      { nodeType: 'INGRESS',   subtype: 'user_input', tainted: true },
+  'urllib.parse.parse_qsl':     { nodeType: 'INGRESS',   subtype: 'user_input', tainted: true },
+
+  // ── cgi ──
+  'cgi.FieldStorage':           { nodeType: 'INGRESS',   subtype: 'user_input', tainted: true },
+
+  // ── BaseHTTPRequestHandler handler methods ──
+  'BaseHTTPRequestHandler.do_GET':  { nodeType: 'STRUCTURAL', subtype: 'http_handler', tainted: false },
+  'BaseHTTPRequestHandler.do_POST': { nodeType: 'STRUCTURAL', subtype: 'http_handler', tainted: false },
+  // ── BaseHTTPRequestHandler output (EGRESS) ──
+  'self.wfile.write':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'self.send_response':       { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'self.send_header':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'wfile.write':              { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // ── http.client — raw HTTP (SSRF vector) ──
+  'http.client.HTTPConnection':   { nodeType: 'EXTERNAL', subtype: 'api_call',  tainted: false },
+  'http.client.HTTPSConnection':  { nodeType: 'EXTERNAL', subtype: 'api_call',  tainted: false },
 
   // ── subprocess / os — system execution ──
   'subprocess.run':           { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
@@ -311,11 +375,23 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'os.spawnl':                { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'os.spawnle':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
 
+  // ── asyncio subprocess — async command execution ──
+  'asyncio.create_subprocess_exec':   { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'asyncio.create_subprocess_shell':  { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+
   // ── importlib — dynamic imports ──
   'importlib.import_module':  { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
 
+  // ── ctypes — native code loading ──
+  'ctypes.cdll.LoadLibrary':    { nodeType: 'EXTERNAL', subtype: 'native_load', tainted: false },
+  'ctypes.CDLL':                { nodeType: 'EXTERNAL', subtype: 'native_load', tainted: false },
+  'ctypes.windll.LoadLibrary':  { nodeType: 'EXTERNAL', subtype: 'native_load', tainted: false },
+
   // ── Celery — task dispatch ──
   'celery.send_task':         { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
+
+  // ── FastAPI BackgroundTasks — deferred execution ──
+  'BackgroundTasks.add_task': { nodeType: 'EXTERNAL', subtype: 'deferred_exec', tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════
   // STORAGE — persistent state
@@ -334,6 +410,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'session.bulk_save_objects':{ nodeType: 'STORAGE',  subtype: 'db_write',    tainted: false },
   'session.bulk_insert_mappings': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'session.bulk_update_mappings': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+
+  // ── SQLModel (FastAPI ORM) ──
+  'session.exec':             { nodeType: 'STORAGE',  subtype: 'db_read',     tainted: false },
 
   // ── Django ORM ──
   'objects.all':              { nodeType: 'STORAGE',  subtype: 'db_read',     tainted: false },
@@ -358,6 +437,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'objects.select_related':   { nodeType: 'STORAGE',  subtype: 'db_read',     tainted: false },
   'objects.prefetch_related': { nodeType: 'STORAGE',  subtype: 'db_read',     tainted: false },
   'objects.raw':              { nodeType: 'STORAGE',  subtype: 'db_read',     tainted: false },
+  'objects.extra':            { nodeType: 'STORAGE',  subtype: 'db_read',     tainted: false },
+  'django.db.models.expressions.RawSQL': { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
+  'django.db.connection.cursor': { nodeType: 'STORAGE', subtype: 'db_connect', tainted: false },
 
   // ── Raw DB-API / sqlite3 ──
   'cursor.execute':           { nodeType: 'STORAGE',  subtype: 'db_write',    tainted: false },
@@ -435,6 +517,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'markupsafe.escape':        { nodeType: 'TRANSFORM', subtype: 'sanitize',  tainted: false },
   'markupsafe.Markup':        { nodeType: 'TRANSFORM', subtype: 'sanitize',  tainted: false },
   'bleach.clean':             { nodeType: 'TRANSFORM', subtype: 'sanitize',  tainted: false },
+  'django.utils.safestring.mark_safe': { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
+  'django.utils.html.format_html': { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
 
   // ── re — regex ──
   're.match':                 { nodeType: 'TRANSFORM', subtype: 'parse',     tainted: false },
@@ -536,6 +620,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'django.contrib.auth.logout':          { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },
   'django.contrib.auth.decorators.login_required':    { nodeType: 'AUTH', subtype: 'authorize', tainted: false },
   'django.contrib.auth.decorators.permission_required': { nodeType: 'AUTH', subtype: 'authorize', tainted: false },
+  'django.views.decorators.csrf.csrf_exempt': { nodeType: 'AUTH', subtype: 'authorize', tainted: false },
 
   // ── Flask-Login ──
   'flask_login.login_user':     { nodeType: 'AUTH',  subtype: 'authenticate', tainted: false },
@@ -549,6 +634,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // ── OAuth / OIDC ──
   'authlib.jose.jwt':          { nodeType: 'AUTH',   subtype: 'authenticate', tainted: false },
+
+  // ── django-allauth (social auth) ──
+  'allauth.socialaccount.models.SocialLogin.connect': { nodeType: 'EXTERNAL', subtype: 'social_auth', tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════
   // META — config, logging, debug
@@ -709,17 +797,17 @@ function isLikelyListMethod(objectName: string, methodName: string): boolean {
 // ── Sink patterns (CWE → dangerous regex) ─────────────────────────────────
 
 export const sinkPatterns: Record<string, RegExp> = {
-  'CWE-78':  /(?:subprocess\.(?:call|run|Popen|check_call|check_output)\s*\([^)]*shell\s*=\s*True|os\.system\s*\(\s*(?:f['"]|['"].*\+|.*\.format)|os\.popen\s*\()/,
+  'CWE-78':  /(?:subprocess\.(?:call|run|Popen|check_call|check_output)\s*\([^)]*shell\s*=\s*True|os\.system\s*\(\s*(?:f['"]|['"].*\+|.*\.format)|os\.popen\s*\(|asyncio\.create_subprocess_shell\s*\(\s*(?:f['"]|['"].*\+|.*\.format)|asyncio\.create_subprocess_exec\s*\(\s*(?:f['"]|['"].*\+|.*\.format))/,
   'CWE-89':  /(?:cursor\.execute|\.raw)\s*\(\s*(?:f['"]|['"].*%s.*['"].*%|['"].*\.format)/,
   'CWE-94':  /\b(?:eval|exec)\s*\(\s*(?:request|input|argv|sys\.stdin|f['"])/,
   'CWE-79':  /(?:render_template_string\s*\(\s*(?:request|input|f['"'])|autoescape\s*=\s*False|html\.unescape\s*\()/,
   'CWE-22':  /(?:open\s*\(\s*(?:request|input|argv|f['"].*\{)|(?:tarfile\.open|zipfile\.ZipFile)\s*\([^)]*\)\.extractall\s*\()/,
-  'CWE-502': /(?:pickle\.loads?\s*\(|yaml\.load\s*\([^)]*(?!Loader)|marshal\.loads?\s*\(|shelve\.open\s*\()/,
+  'CWE-502': /(?:pickle\.loads?\s*\(|yaml\.load\s*\([^)]*(?!Loader)|marshal\.loads?\s*\(|shelve\.open\s*\(|(?:pandas|pd)\.read_pickle\s*\(|(?:numpy|np)\.load\s*\([^)]*allow_pickle\s*=\s*True|torch\.load\s*\(|joblib\.load\s*\()/,
   'CWE-327': /(?:hashlib\.(?:md5|sha1)\s*\()/,
   'CWE-345': /jwt\.decode\s*\([^)]*verify\s*=\s*False/,
   'CWE-798': /(?:SECRET_KEY|PASSWORD|API_KEY|TOKEN)\s*=\s*['"][^'"]{10,}['"]/,
   'CWE-489': /(?:app\.run\s*\([^)]*debug\s*=\s*True|DEBUG\s*=\s*True)/,
-  'CWE-918': /(?:requests\.(?:get|post)\s*\(\s*(?:request|input|f['"])|urllib\.request\.urlopen\s*\(\s*(?:request|input|f['"]))/,
+  'CWE-918': /(?:requests\.(?:get|post)\s*\(\s*(?:request|input|f['"])|urllib\.request\.urlopen\s*\(\s*(?:request|input|f['"])|http\.client\.HTTPConnection\s*\(\s*(?:request|input|f['"])|http\.client\.HTTPSConnection\s*\(\s*(?:request|input|f['"]))/,
   'CWE-915': /getattr\s*\(\s*\w+\s*,\s*(?:request|input|argv)/,
   'CWE-427': /importlib\.import_module\s*\(\s*(?:request|input|argv|f['"])/,
   'CWE-119': /ctypes\.(?:cast|pointer|POINTER|c_void_p)/,
@@ -727,6 +815,8 @@ export const sinkPatterns: Record<string, RegExp> = {
   'CWE-913': /(?:globals\s*\(\)\s*\[|__subclasshook__)/,
   'CWE-942': /CORS_ALLOW_ALL_ORIGINS\s*=\s*True/,
   'CWE-617': /\bassert\s+(?:user|is_admin|is_auth|has_perm|check_)/,
+  'CWE-611': /(?:xml\.etree\.ElementTree\.(?:parse|fromstring|iterparse)|ET\.(?:parse|fromstring|iterparse)|xml\.sax\.parse|minidom\.parse|minidom\.parseString)\s*\(/,
+  'CWE-426': /ctypes\.(?:cdll\.LoadLibrary|CDLL|windll\.LoadLibrary)\s*\(\s*(?:request|input|argv|f['"]|['"].*\+|.*\.format)/,
 };
 
 // ── Safe patterns (CWE → mitigating regex) ────────────────────────────────
@@ -737,11 +827,12 @@ export const safePatterns: Record<string, RegExp> = {
   'CWE-94':  /ast\.literal_eval\s*\(/,                           // safe eval alternative
   'CWE-79':  /(?:html\.escape|markupsafe\.escape|bleach\.clean)\s*\(/,
   'CWE-22':  /(?:os\.path\.(?:abspath|realpath|normpath)|pathlib\.Path\.resolve)\s*\(/, // path normalization
-  'CWE-502': /yaml\.safe_load\s*\(/,                             // safe YAML
+  'CWE-502': /(?:yaml\.safe_load\s*\(|torch\.load\s*\([^)]*weights_only\s*=\s*True|(?:numpy|np)\.load\s*\([^)]*allow_pickle\s*=\s*False)/, // safe YAML, safe torch.load, safe np.load
   'CWE-327': /(?:hashlib\.(?:sha256|sha512|sha3_256|sha3_512|blake2[bs]|pbkdf2_hmac|scrypt)|bcrypt\.hashpw|passlib\.hash)\s*\(/,
   'CWE-345': /jwt\.decode\s*\([^)]*algorithms\s*=\s*\[/,        // explicit algorithm
   'CWE-918': /(?:urllib\.parse\.urlparse|validators\.url)\s*\(/,  // URL validation
   'CWE-367': /tempfile\.(?:mkstemp|NamedTemporaryFile|TemporaryFile)\s*\(/, // safe tempfile
+  'CWE-611': /defusedxml\.(?:parse|fromstring|iterparse|ElementTree\.parse)\s*\(/, // defusedxml blocks XXE
 };
 
 // ── Pattern count ─────────────────────────────────────────────────────────

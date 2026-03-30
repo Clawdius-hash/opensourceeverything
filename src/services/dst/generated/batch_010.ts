@@ -159,14 +159,133 @@ export const verifyCWE638 = createAuthVerifier(
     'Do not cache authorization decisions unless cache invalidation is guaranteed.',
 );
 
-export const verifyCWE639 = createAuthVerifier(
-  'CWE-639', 'Authorization Bypass Through User-Controlled Key (IDOR)', 'high',
-  storageNodes,
-  /\bisOwner\b|\bownership\b|\bbelongsTo\b|\buser\.id\b.*===|\breq\.user\b.*\bcheck\b|\bscoped\b/i,
-  'AUTH (object-level authorization — verify requester owns/can access the referenced object)',
-  'Verify that the authenticated user is authorized to access the specific object referenced by the key. ' +
-    'Do not trust user-supplied IDs without ownership checks (IDOR/BOLA prevention).',
-);
+/**
+ * CWE-639: Authorization Bypass Through User-Controlled Key — IDOR / BOLA
+ * (UPGRADED — hand-written quality)
+ *
+ * Detects when a user-supplied identifier (ID, key, filename) is used to
+ * access a resource without verifying that the authenticated user is
+ * authorized to access THAT SPECIFIC resource.
+ *
+ * This is distinct from CWE-285 (missing authorization entirely). IDOR means
+ * authentication exists but object-level authorization is missing — the user
+ * IS logged in, but can access other users' data by changing the ID.
+ *
+ * Dangerous patterns:
+ *   - req.params.id used directly in DB lookup: findById(req.params.id)
+ *   - req.query.userId → SELECT * FROM orders WHERE user_id = ?
+ *   - req.body.fileId → fs.readFile(uploads/ + fileId)
+ *   - Path parameter used in storage access without ownership check
+ *
+ * Safe patterns:
+ *   - Scoped queries: findOne({ id: req.params.id, userId: req.user.id })
+ *   - Ownership check: if (resource.userId !== req.user.id) return 403
+ *   - belongsTo() / isOwner() / canAccess() authorization functions
+ *   - Policy-based access: authorize(req.user, 'read', resource)
+ *   - Row-level security in database (RLS)
+ *
+ * Key insight: the INGRESS provides a user-controlled key. The STORAGE
+ * looks up a resource by that key. The question is: does ANY node between
+ * them (or at the sink) verify ownership?
+ */
+export function verifyCWE639(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Storage nodes that look up resources by ID/key
+  const lookupSinks = map.nodes.filter(n =>
+    n.node_type === 'STORAGE' &&
+    (n.node_subtype.includes('query') || n.node_subtype.includes('read') ||
+     n.node_subtype.includes('lookup') || n.node_subtype.includes('find') ||
+     n.code_snapshot.match(
+       /\b(findById|findOne|findByPk|findUnique|getItem|getObject|get\s*\(|SELECT\b|readFile|download)\b/i
+     ) !== null ||
+     n.code_snapshot.match(
+       /\b(where|filter|params|key|id)\b/i
+     ) !== null)
+  );
+
+  // Only consider INGRESS nodes that carry user-controlled identifiers
+  // (object keys like IDs, filenames, slugs — NOT search terms or free text)
+  const idIngress = ingress.filter(n => {
+    // Path/route parameters are almost always object identifiers
+    const isPathParam = n.node_subtype.includes('param') || n.node_subtype.includes('path');
+
+    // Request body with ID-like fields
+    const isBodyId = n.node_subtype.includes('body') &&
+      (n.code_snapshot.match(/\b(id|Id|ID|key|fileId|userId|docId|orderId)\b/) !== null ||
+       n.data_out.some(d => /\bid\b|key|slug|filename/i.test(d.name)));
+
+    // Query string with ID-like parameter names (not search/filter terms)
+    const isQueryId = n.node_subtype === 'http_query' &&
+      (n.code_snapshot.match(/\b(id|Id|ID|key|fileId|userId|docId)\b/) !== null ||
+       n.data_out.some(d => /\bid\b|key|slug|filename/i.test(d.name)));
+
+    // Code references req.params (strong signal for object identifier)
+    const codeRefsParam = n.code_snapshot.match(
+      /\b(req\.params|request\.param|args\.id|params\[|:id|:userId|:fileId)\b/i
+    ) !== null;
+
+    // Data output names suggest identifiers
+    const dataIsId = n.data_out.some(d => /^(id|key|slug|filename|fileId|userId|docId|orderId)$/i.test(d.name));
+
+    return isPathParam || isBodyId || isQueryId || codeRefsParam || dataIsId;
+  });
+
+  for (const src of idIngress) {
+    for (const sink of lookupSinks) {
+      if (hasPathWithoutAuth(map, src.id, sink.id)) {
+        const sinkCode = sink.code_snapshot;
+        const srcCode = src.code_snapshot;
+
+        // Safe: scoped query includes the authenticated user's ID
+        const scopedQuery = /\b(userId|user_id|owner_id|ownerId|createdBy|author_id)\b.*\b(req\.user|session\.user|currentUser|ctx\.user)\b/i.test(sinkCode) ||
+          /\b(req\.user|session\.user|currentUser|ctx\.user)\b.*\b(userId|user_id|owner_id)\b/i.test(sinkCode);
+
+        // Safe: explicit ownership check function
+        const ownershipCheck = /\b(isOwner|belongsTo|canAccess|hasAccess|checkOwnership|authorize|isAuthorized)\s*\(/i.test(sinkCode);
+
+        // Safe: policy / RBAC / ABAC check
+        const policyCheck = /\b(policy|ability|casl|casbin|permit|rbac|abac)\b/i.test(sinkCode);
+
+        // Safe: row-level security or scoped ORM
+        const rowLevelSecurity = /\bRLS\b|\b\.scope\s*\(|\bwithUser\b|\bscopedTo\b|\bbelongsToMany.*through\b/i.test(sinkCode);
+
+        // Also check upstream: is there a CONTROL or AUTH node in the path that checks ownership?
+        const hasUpstreamAuth = map.nodes.some(n =>
+          n.node_type === 'AUTH' &&
+          /\b(isOwner|belongsTo|ownership|authorize|canAccess)\b/i.test(n.code_snapshot)
+        );
+
+        const isSafe = scopedQuery || ownershipCheck || policyCheck || rowLevelSecurity || hasUpstreamAuth;
+
+        if (!isSafe) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'AUTH (object-level authorization — verify the authenticated user owns or can access the specific resource identified by the user-supplied key)',
+            severity: 'high',
+            description: `User-controlled identifier from ${src.label} is used to access resource at ${sink.label} ` +
+              `without verifying the authenticated user is authorized to access that specific object. ` +
+              `An attacker can change the ID parameter to access other users' data (IDOR/BOLA).`,
+            fix: 'Add object-level authorization. Scope queries to the authenticated user: ' +
+              'db.findOne({ id: req.params.id, userId: req.user.id }) instead of db.findById(req.params.id). ' +
+              'Alternatively, load the resource then check ownership: ' +
+              'if (resource.userId !== req.user.id) return res.status(403). ' +
+              'Use UUIDs instead of sequential IDs to reduce enumeration risk (but this is NOT a substitute for authorization).',
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-639',
+    name: 'Authorization Bypass Through User-Controlled Key (IDOR)',
+    holds: findings.length === 0,
+    findings,
+  };
+}
 
 export const verifyCWE642 = createAuthVerifier(
   'CWE-642', 'External Control of Critical State Data', 'high',

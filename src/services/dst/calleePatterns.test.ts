@@ -69,11 +69,11 @@ describe('calleePatterns — lookupCallee', () => {
     expect(result!.subtype).toBe('http_response');
   });
 
-  it('res.redirect → EGRESS/http_response', () => {
+  it('res.redirect → EGRESS/redirect', () => {
     const result = lookupCallee(['res', 'redirect']);
     expect(result).not.toBeNull();
     expect(result!.nodeType).toBe('EGRESS');
-    expect(result!.subtype).toBe('http_response');
+    expect(result!.subtype).toBe('redirect');
   });
 
   // ── Member calls: req.* ──
@@ -400,11 +400,11 @@ describe('calleePatterns — lookupCallee', () => {
     expect(result!.subtype).toBe('http_response');
   });
 
-  it('reply.redirect → EGRESS/http_response (Fastify)', () => {
+  it('reply.redirect → EGRESS/redirect (Fastify)', () => {
     const result = lookupCallee(['reply', 'redirect']);
     expect(result).not.toBeNull();
     expect(result!.nodeType).toBe('EGRESS');
-    expect(result!.subtype).toBe('http_response');
+    expect(result!.subtype).toBe('redirect');
   });
 
   it('reply.setCookie → EGRESS/http_response (Fastify)', () => {
@@ -460,11 +460,11 @@ describe('calleePatterns — lookupCallee', () => {
     expect(result!.subtype).toBe('http_response');
   });
 
-  it('ctx.redirect → EGRESS/http_response (Koa)', () => {
+  it('ctx.redirect → EGRESS/redirect (Koa)', () => {
     const result = lookupCallee(['ctx', 'redirect']);
     expect(result).not.toBeNull();
     expect(result!.nodeType).toBe('EGRESS');
-    expect(result!.subtype).toBe('http_response');
+    expect(result!.subtype).toBe('redirect');
   });
 
   it('ctx.throw → CONTROL/guard (Koa)', () => {
@@ -591,11 +591,11 @@ describe('calleePatterns — lookupCallee', () => {
     expect(result!.subtype).toBe('http_response');
   });
 
-  it('response.redirect → EGRESS/http_response (NestJS)', () => {
+  it('response.redirect → EGRESS/redirect (NestJS)', () => {
     const result = lookupCallee(['response', 'redirect']);
     expect(result).not.toBeNull();
     expect(result!.nodeType).toBe('EGRESS');
-    expect(result!.subtype).toBe('http_response');
+    expect(result!.subtype).toBe('redirect');
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

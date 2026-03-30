@@ -238,3 +238,162 @@ def get_users():
     expect(allLanguages.has('python')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Python Constant Folding — Anti-Evasion Tests
+// ---------------------------------------------------------------------------
+
+describe('PythonProfile — constant folding anti-evasion', () => {
+  beforeAll(async () => {
+    if (!parser) parser = await createPythonParser();
+  });
+
+  it('folds chr() concatenation via variable → resolves globals()[name] to system_exec', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('q')
+name = chr(101)+chr(118)+chr(97)+chr(108)
+globals()[name](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    // chr(101)+chr(118)+chr(97)+chr(108) folds to "eval"
+    // globals()["eval"]() resolves to EXTERNAL/system_exec
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('folds string concatenation inline: globals()["ev"+"al"](x) → system_exec', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('q')
+globals()["ev"+"al"](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('folds bytes([...]).decode() via variable → resolves to system_exec', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('q')
+name = bytes([101,118,97,108]).decode()
+globals()[name](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('folds base64.b64decode().decode() via variable → resolves to system_exec', () => {
+    const code = `
+import base64
+from flask import request
+user_input = request.args.get('q')
+name = base64.b64decode("ZXZhbA==").decode()
+globals()[name](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('resolves evasion in subscript: globals()[chr(101)+chr(118)+chr(97)+chr(108)](x)', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('q')
+globals()[chr(101)+chr(118)+chr(97)+chr(108)](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    // Should resolve to EXTERNAL/system_exec because chr(101)+... folds to "eval"
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('resolves getattr evasion: getattr(__builtins__, chr(101)+chr(118)+chr(97)+chr(108))', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('cmd')
+getattr(__builtins__, chr(101)+chr(118)+chr(97)+chr(108))(user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    // getattr with folded 2nd arg "eval" should resolve to EXTERNAL/system_exec
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('marks unresolvable tainted dynamic dispatch with needs_runtime_eval', () => {
+    const code = `
+from flask import request
+func_name = request.args.get('fn')
+globals()[func_name]("payload")
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    // The tainted subscript should produce a dynamic_dispatch node
+    const dynNodes = map.nodes.filter(n =>
+      n.node_subtype === 'dynamic_dispatch' &&
+      n.tags.includes('needs_runtime_eval')
+    );
+    expect(dynNodes.length).toBeGreaterThan(0);
+  });
+
+  it('folds chr() concatenation used as variable then used in subscript', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('q')
+fn_name = chr(101)+chr(118)+chr(97)+chr(108)
+globals()[fn_name](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    // fn_name should have constantValue "eval"
+    // globals()[fn_name]() should resolve via variable lookup to EXTERNAL/system_exec
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  it('folds concatenated_string (implicit concat): globals()["ev" "al"](x) → system_exec', () => {
+    const code = `
+from flask import request
+user_input = request.args.get('q')
+name = "ev" "al"
+globals()[name](user_input)
+`;
+    const tree = parsePython(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion.py', pythonProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+});

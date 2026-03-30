@@ -15,7 +15,7 @@
 
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
-  nodeRef, nodesOfType, hasPathWithoutIntermediateType,
+  nodeRef, nodesOfType, hasPathWithoutIntermediateType, hasTaintedPathWithoutControl,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -293,34 +293,103 @@ export const verifyCWE349 = createIntermediateTransformVerifier(
     'Never merge untrusted data into trusted structures without validation.',
 );
 
-/** CWE-91: XML Injection (Blind XPath Injection) */
+/**
+ * CWE-91: XML Injection / Blind XPath Injection (UPGRADED — hand-written quality)
+ *
+ * Detects user input flowing into XML document construction or XPath query
+ * building without proper encoding or parameterization.
+ *
+ * Two distinct attack vectors:
+ *
+ * 1. XML Element Injection — user input embedded in XML document via string
+ *    concatenation. Attacker injects new elements or attributes.
+ *    Sinks: createElement+string, template literals building XML, xml string concat,
+ *           etree.SubElement with unescaped text, DOMParser.parseFromString
+ *
+ * 2. XPath Injection — user input embedded in XPath query string.
+ *    Attacker alters query logic (e.g., ' or '1'='1 bypasses auth).
+ *    Sinks: selectNodes, evaluate, xpath.select, doc.find (lxml)
+ *
+ * Safe patterns:
+ *   - createTextNode() — DOM API that auto-escapes text content
+ *   - escapeXml() / xmlEncode() — explicit XML entity encoding
+ *   - Parameterized XPath (XPathEvaluator with variables)
+ *   - xml2js / fast-xml-parser builder APIs (structured, not string-based)
+ *   - lxml.etree.SubElement with .text= (auto-escapes)
+ *   - CDATA sections for known text blocks
+ *
+ * NOT safe:
+ *   - innerHTML / outerHTML with XML (browser context)
+ *   - String concatenation: '<user>' + input + '</user>'
+ *   - Template literals: `//user[name='${input}']`
+ *   - etree.fromstring('<root>' + input + '</root>')
+ */
 export function verifyCWE91(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
-  const sinks = map.nodes.filter(n =>
-    n.node_type === 'TRANSFORM' &&
+
+  // XML construction sinks — both TRANSFORM and EXTERNAL types
+  const xmlSinks = map.nodes.filter(n =>
+    (n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL') &&
     (n.node_subtype.includes('xml') || n.node_subtype.includes('xpath') ||
-     n.attack_surface.includes('xml_construct') ||
-     n.code_snapshot.match(/\b(createElement|appendChild|xml|xpath|selectNodes|etree\.SubElement)\b/i) !== null)
+     n.attack_surface.includes('xml_construct') || n.attack_surface.includes('xpath_query') ||
+     n.code_snapshot.match(
+       /\b(createElement|appendChild|parseFromString|selectNodes|xpath\.select|evaluate|etree\.(SubElement|fromstring|XML)|DOMParser|xml2js|XPathExpression)\b/i
+     ) !== null ||
+     // String-based XML construction
+     n.code_snapshot.match(/<\w+[^>]*>.*(\+|\$\{)/) !== null)
   );
 
   for (const src of ingress) {
-    for (const sink of sinks) {
-      if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'TRANSFORM')) {
-        const isSafe = sink.code_snapshot.match(
-          /\bescapeXml\b|\bxmlEncode\b|\bcreateTextNode\b|\bparameteriz\b|\bsanitize.*xml\b/i
-        ) !== null;
+    for (const sink of xmlSinks) {
+      // Use path-without-control for this CWE: the issue is reaching XML
+      // construction without ANY control node validating/encoding the input
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        const code = sink.code_snapshot;
+
+        // Safe: DOM API createTextNode — auto-escapes text content
+        const usesCreateTextNode = /\bcreateTextNode\s*\(/i.test(code);
+
+        // Safe: explicit XML encoding functions
+        const usesXmlEncode = /\b(escapeXml|xmlEncode|xmlEscape|encodeXml|he\.encode|entities\.encode)\s*\(/i.test(code);
+
+        // Safe: parameterized XPath (variable binding, not string concat)
+        const usesParamXpath = /\bXPathEvaluator\b|\bxpath.*variable\b|\bbindVariable\b|\bNSResolver\b/i.test(code);
+
+        // Safe: structured XML builder APIs (not string-based)
+        const usesStructuredBuilder = /\b(xml2js\.Builder|xmlbuilder|create\(\{|js2xml)\b/i.test(code);
+
+        // Safe: etree with .text property assignment (auto-escapes)
+        const usesEtreeText = /\.text\s*=\s*\w/i.test(code) && /\betree\b/i.test(code);
+
+        // Safe: sanitizeXml or similar explicit sanitization
+        const usesSanitize = /\bsanitize.*xml\b|\bxmlSanitize\b/i.test(code);
+
+        const isSafe = usesCreateTextNode || usesXmlEncode || usesParamXpath ||
+          usesStructuredBuilder || usesEtreeText || usesSanitize;
 
         if (!isSafe) {
+          // Classify: is this XPath injection or XML element injection?
+          const isXpath = /\bxpath\b|\bselectNodes\b|\bevaluate\b|\b\/\/\w+\[/i.test(code);
+          const attackType = isXpath ? 'XPath query manipulation' : 'XML element/attribute injection';
+
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
-            missing: 'TRANSFORM (XML character encoding before document construction)',
+            missing: 'TRANSFORM (XML entity encoding or parameterized XPath before document construction)',
             severity: 'high',
             description: `User input from ${src.label} flows into XML construction at ${sink.label} without encoding. ` +
-              `An attacker can inject XML elements or alter XPath queries.`,
-            fix: 'Encode XML special characters (<, >, &, \', ") before embedding in XML. ' +
-              'Use DOM APIs (createTextNode) instead of string concatenation for XML construction.',
+              `Vulnerable to ${attackType}. ` +
+              (isXpath
+                ? `An attacker can inject XPath operators to bypass authentication or extract data (e.g., ' or '1'='1).`
+                : `An attacker can inject XML elements or attributes to alter document structure.`),
+            fix: isXpath
+              ? 'Use parameterized XPath queries with variable binding instead of string concatenation. ' +
+                'Example: use XPathEvaluator with resolver, not "//user[name=\'" + input + "\']". ' +
+                'If concatenation is unavoidable, escape \' " / and XPath operators in user input.'
+              : 'Use DOM APIs (createTextNode, setAttribute) instead of string concatenation for XML. ' +
+                'Example: instead of "<name>" + input + "</name>", use el.textContent = input. ' +
+                'Encode XML special characters (&, <, >, \', ") with escapeXml() or he.encode().',
           });
         }
       }

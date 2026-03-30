@@ -176,6 +176,25 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'HttpRequest.query_string':   { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
   'HttpRequest.content_type':   { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
 
+  // -- Actix-web ServiceRequest (middleware-level) --
+  'ServiceRequest.headers':     { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.path':        { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.query_string': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'ServiceRequest.uri':         { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.match_info':  { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.peer_addr':   { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.cookie':      { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.head':        { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ServiceRequest.content_type': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- Actix-web ConnectionInfo + extra extractors --
+  'ConnectionInfo.peer_addr':   { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ConnectionInfo.host':        { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ConnectionInfo.scheme':      { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'ConnectionInfo.realip_remote_addr': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'web::Header':                { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'web::ReqData':               { nodeType: 'INGRESS', subtype: 'http_request',  tainted: false },
+
   // -- Axum --
   'axum::extract::Json':        { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
   'axum::extract::Path':        { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
@@ -194,6 +213,18 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'extract::Host':              { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
   'extract::OriginalUri':       { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
   'TypedHeader':                { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+
+  // -- Axum raw extractors + WebSocket --
+  'extract::RawQuery':          { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'axum::extract::RawQuery':    { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'extract::RawForm':           { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'axum::extract::RawForm':     { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
+  'extract::WebSocketUpgrade':  { nodeType: 'INGRESS', subtype: 'websocket',     tainted: true },
+  'axum::extract::ws::WebSocketUpgrade': { nodeType: 'INGRESS', subtype: 'websocket', tainted: true },
+  'extract::MatchedPath':       { nodeType: 'META',    subtype: 'routing_info',  tainted: false },
+  'extract::NestedPath':        { nodeType: 'META',    subtype: 'routing_info',  tainted: false },
+  'extract::Extension':         { nodeType: 'INGRESS', subtype: 'http_request',  tainted: false },
+  'axum::extract::Extension':   { nodeType: 'INGRESS', subtype: 'http_request',  tainted: false },
 
   // -- Rocket --
   'rocket::serde::json':        { nodeType: 'INGRESS', subtype: 'http_request',  tainted: true },
@@ -689,8 +720,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'diesel::delete':             { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
   'diesel.select':              { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'diesel::select':             { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
-  'diesel.sql_query':           { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
-  'diesel::sql_query':          { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'diesel.sql_query':           { nodeType: 'STORAGE', subtype: 'db_read',       tainted: true },
+  'diesel::sql_query':          { nodeType: 'STORAGE', subtype: 'db_read',       tainted: true },
   'table.filter':               { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'table.select':               { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'table.order':                { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
@@ -745,6 +776,22 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'collection.distinct':        { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'db.collection':              { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
 
+  // -- rusqlite (synchronous SQLite) --
+  'Connection.open':            { nodeType: 'STORAGE', subtype: 'db_connect',    tainted: false },
+  'Connection::open':           { nodeType: 'STORAGE', subtype: 'db_connect',    tainted: false },
+  'Connection.open_in_memory':  { nodeType: 'STORAGE', subtype: 'db_connect',    tainted: false },
+  'Connection::open_in_memory': { nodeType: 'STORAGE', subtype: 'db_connect',    tainted: false },
+  'conn.execute':               { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
+  'conn.execute_batch':         { nodeType: 'STORAGE', subtype: 'db_write',      tainted: true },
+  'conn.prepare':               { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'conn.prepare_cached':        { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'conn.query_row':             { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'conn.transaction':           { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
+  'stmt.query_row':             { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'stmt.query_map':             { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'stmt.query':                 { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'stmt.execute':               { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
+
   // =========================================================================
   // EXTERNAL -- outbound network calls, external process execution
   // =========================================================================
@@ -780,8 +827,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- std::process::Command --
   'Command.new':                { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
   'Command::new':               { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
-  'Command.arg':                { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
-  'Command.args':               { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
+  'Command.arg':                { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: true },
+  'Command.args':               { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: true },
   'Command.output':             { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
   'Command.spawn':              { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
   'Command.status':             { nodeType: 'EXTERNAL', subtype: 'exec',         tainted: false },
@@ -795,10 +842,36 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'tokio::process::Command.new': { nodeType: 'EXTERNAL', subtype: 'exec',        tainted: false },
   'tokio::process::Command.output': { nodeType: 'EXTERNAL', subtype: 'exec',     tainted: false },
   'tokio::process::Command.spawn': { nodeType: 'EXTERNAL', subtype: 'exec',      tainted: false },
+  'tokio::process::Command.arg': { nodeType: 'EXTERNAL', subtype: 'exec',        tainted: true },
+  'tokio::process::Command.args': { nodeType: 'EXTERNAL', subtype: 'exec',       tainted: true },
+  'tokio::process::Command.env': { nodeType: 'EXTERNAL', subtype: 'exec',        tainted: false },
+  'tokio::process::Command.current_dir': { nodeType: 'EXTERNAL', subtype: 'exec', tainted: false },
+  'tokio::process::Command.stdin': { nodeType: 'EXTERNAL', subtype: 'exec',      tainted: false },
+  'tokio::process::Command.stdout': { nodeType: 'EXTERNAL', subtype: 'exec',     tainted: false },
+  'tokio::process::Command.stderr': { nodeType: 'EXTERNAL', subtype: 'exec',     tainted: false },
+  'tokio::process::Command.status': { nodeType: 'EXTERNAL', subtype: 'exec',     tainted: false },
+  'tokio::process::Command.kill_on_drop': { nodeType: 'EXTERNAL', subtype: 'exec', tainted: false },
 
   // -- tonic (gRPC) --
   'tonic::transport::Channel.connect': { nodeType: 'EXTERNAL', subtype: 'rpc',   tainted: false },
   'tonic::Request.new':         { nodeType: 'EXTERNAL', subtype: 'rpc',          tainted: false },
+
+  // -- tonic gRPC — server-side request extraction --
+  'Request.metadata':           { nodeType: 'INGRESS', subtype: 'grpc_metadata', tainted: true },
+  'tonic::Request.metadata':    { nodeType: 'INGRESS', subtype: 'grpc_metadata', tainted: true },
+  'Request.remote_addr':        { nodeType: 'INGRESS', subtype: 'grpc_metadata', tainted: true },
+  'tonic::Request.remote_addr': { nodeType: 'INGRESS', subtype: 'grpc_metadata', tainted: true },
+  'Request.into_inner':         { nodeType: 'INGRESS', subtype: 'grpc_request',  tainted: true },
+  'tonic::Request.into_inner':  { nodeType: 'INGRESS', subtype: 'grpc_request',  tainted: true },
+  'Streaming.next':             { nodeType: 'INGRESS', subtype: 'grpc_stream',   tainted: true },
+  'Streaming.message':          { nodeType: 'INGRESS', subtype: 'grpc_stream',   tainted: true },
+  'tonic::Streaming.next':      { nodeType: 'INGRESS', subtype: 'grpc_stream',   tainted: true },
+  'tonic::Streaming.message':   { nodeType: 'INGRESS', subtype: 'grpc_stream',   tainted: true },
+
+  // -- tonic gRPC — responses (EGRESS) --
+  'tonic::Status.new':          { nodeType: 'EGRESS',  subtype: 'grpc_response', tainted: false },
+  'tonic::Status.ok':           { nodeType: 'EGRESS',  subtype: 'grpc_response', tainted: false },
+  'tonic::Response.new':        { nodeType: 'EGRESS',  subtype: 'grpc_response', tainted: false },
 
   // =========================================================================
   // STRUCTURAL -- routing, middleware, module structure
@@ -853,6 +926,31 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Server.builder':             { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
   'Server::builder':            { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
   'Server.add_service':         { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
+
+  // -- tower middleware (CONTROL + RESOURCE) --
+  'ServiceBuilder.layer':       { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'ServiceBuilder.service':     { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'ServiceBuilder::new':        { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'tower::ServiceBuilder.layer': { nodeType: 'CONTROL', subtype: 'middleware',   tainted: false },
+  'tower::ServiceBuilder::new': { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  // tower-http CORS layer
+  'CorsLayer.new':              { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer::new':             { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer.permissive':       { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer::permissive':      { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer.very_permissive':  { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer::very_permissive': { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer.allow_origin':     { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer.allow_methods':    { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  'CorsLayer.allow_headers':    { nodeType: 'CONTROL',  subtype: 'middleware',   tainted: false },
+  // tower rate limiting / concurrency — RESOURCE (finite capacity)
+  'ConcurrencyLimitLayer.new':  { nodeType: 'RESOURCE', subtype: 'rate_limit',  tainted: false },
+  'ConcurrencyLimitLayer::new': { nodeType: 'RESOURCE', subtype: 'rate_limit',  tainted: false },
+  'RateLimitLayer.new':         { nodeType: 'RESOURCE', subtype: 'rate_limit',  tainted: false },
+  'RateLimitLayer::new':        { nodeType: 'RESOURCE', subtype: 'rate_limit',  tainted: false },
+  // tower timeout
+  'TimeoutLayer.new':           { nodeType: 'CONTROL',  subtype: 'guard',       tainted: false },
+  'TimeoutLayer::new':          { nodeType: 'CONTROL',  subtype: 'guard',       tainted: false },
 
   // -- derive macros (structural) --
   'derive.Serialize':           { nodeType: 'STRUCTURAL', subtype: 'dependency', tainted: false },
@@ -1033,6 +1131,10 @@ const NON_DB_OBJECTS = new Set([
   'file', 'File', 'handle',
   'Config', 'config',
   'OsRng', 'thread_rng',
+  // tower / tonic / actix middleware types
+  'ServiceBuilder', 'CorsLayer', 'ConcurrencyLimitLayer', 'RateLimitLayer', 'TimeoutLayer',
+  'ServiceRequest', 'ConnectionInfo',
+  'Streaming', 'Request', 'Response', 'Status',
 ]);
 
 // -- Sink patterns (CWE -> dangerous regex) -----------------------------------

@@ -105,6 +105,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Bundle.main.infoDictionary':   { nodeType: 'INGRESS', subtype: 'env_read', tainted: false },
   'Bundle.main.object':           { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
 
+  // -- WebSocket ingress --
+  'ws.onText':                    { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },
+  'URLSessionWebSocketTask.receive': { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },
+
   // -- Pasteboard (user input) --
   'UIPasteboard.general.string':  { nodeType: 'INGRESS', subtype: 'user_input', tainted: true },
   'UIPasteboard.general.strings': { nodeType: 'INGRESS', subtype: 'user_input', tainted: true },
@@ -113,6 +117,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Vapor server-side --
   'req.content.decode':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.content.get':              { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.session.data':             { nodeType: 'INGRESS', subtype: 'session_read', tainted: true },
   'req.query.decode':             { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'req.parameters.get':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'req.headers':                  { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
@@ -143,6 +149,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'WKWebView.evaluateJavaScript': { nodeType: 'EGRESS', subtype: 'display', tainted: false },
   'WKWebView.load':               { nodeType: 'EGRESS', subtype: 'display', tainted: false },
   'WKWebView.loadHTMLString':     { nodeType: 'EGRESS', subtype: 'display', tainted: false },
+  'WKWebView.loadFileURL':       { nodeType: 'EGRESS', subtype: 'xss_sink', tainted: false },
 
   // -- URL open --
   'UIApplication.shared.open':    { nodeType: 'EGRESS', subtype: 'display', tainted: false },
@@ -163,6 +170,12 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'URLSession.shared.dataTask':   { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
   'URLRequest.init':              { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
   'URL.init':                     { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
+
+  // -- Insecure deserialization --
+  'NSKeyedUnarchiver.unarchiveObject': { nodeType: 'EXTERNAL', subtype: 'deserialize', tainted: false },
+
+  // -- URL protocol interception --
+  'URLProtocol.registerClass':    { nodeType: 'EXTERNAL', subtype: 'network_intercept', tainted: false },
 
   // -- Network framework --
   'NWConnection.start':           { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
@@ -228,6 +241,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'realm.add':                      { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'realm.delete':                   { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
 
+  // -- Vapor raw SQL --
+  'SQLDatabase.raw':                { nodeType: 'STORAGE', subtype: 'sql', tainted: false },
+
   // -- Vapor Fluent ORM --
   'Model.query':                    { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
   'Model.find':                     { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
@@ -269,6 +285,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'P256.Signing.PrivateKey':        { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
   'P256.KeyAgreement.PrivateKey':   { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
   'Curve25519.Signing.PrivateKey':  { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
+
+  // -- Security.framework --
+  'SecKeyCreateSignature':        { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
 
   // -- CommonCrypto --
   'CC_SHA256':                      { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
@@ -351,6 +370,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Keychain (auth context) --
   'SecItemAdd':                     { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },
+  'SecAccessControl.init':          { nodeType: 'AUTH', subtype: 'access_policy', tainted: false },
 
   // -- Vapor auth --
   'req.auth.require':               { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },

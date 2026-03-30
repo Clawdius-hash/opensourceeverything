@@ -1495,6 +1495,28 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       break;
     }
 
+    // ── Const / Static items — emit META config_value so verifiers can
+    //    scan for hardcoded credentials (CWE-798) and other config issues.
+    case 'const_item':
+    case 'static_item': {
+      const nameNode = node.childForFieldName('name');
+      const constLabel = nameNode ? nameNode.text : node.text.slice(0, 40);
+      const constN = createNode({
+        label: constLabel,
+        node_type: 'META',
+        node_subtype: 'config_value',
+        language: 'rust',
+        file: ctx.neuralMap.source_file,
+        line_start: node.startPosition.row + 1,
+        line_end: node.endPosition.row + 1,
+        code_snapshot: node.text.slice(0, 300),
+      });
+      ctx.neuralMap.nodes.push(constN);
+      ctx.lastCreatedNodeId = constN.id;
+      ctx.emitContainsIfNeeded(constN.id);
+      break;
+    }
+
     // ── Silent pass-throughs ────────────────────────────────────────────
 
     case 'empty_statement':

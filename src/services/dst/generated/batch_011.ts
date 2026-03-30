@@ -86,13 +86,72 @@ export const verifyCWE364 = createControlTransformVerifier(
     'Use volatile sig_atomic_t for shared state. Avoid locks in signal handlers.',
 );
 
-export const verifyCWE367 = createControlTransformVerifier(
-  'CWE-367', 'Time-of-check Time-of-use (TOCTOU) Race Condition', 'medium',
-  transformNodes, ATOMIC_SAFE,
-  'CONTROL (atomic check-and-use — no time gap between check and use)',
-  'Combine check and use into an atomic operation. Use O_EXCL for file creation. ' +
-    'Use database transactions for check-then-modify patterns.',
-);
+/**
+ * CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition
+ * UPGRADED — hand-written with specific sink filters and safe patterns.
+ *
+ * Pattern: A CONTROL node checks file metadata (stat, access, exists),
+ * then a TRANSFORM or STORAGE node operates on the same file by path.
+ * Between the check and the use, an attacker can swap the file (symlink, rename).
+ *
+ * Specific sources: CONTROL nodes with file-checking calls
+ *   (fs.stat, fs.access, fs.existsSync, os.path.exists, os.access, File.exists, lstat)
+ * Specific sinks: TRANSFORM or STORAGE nodes with file-operating calls
+ *   (open, readFile, writeFile, unlink, rename, createReadStream, fopen, chmod)
+ * Safe patterns:
+ *   - O_EXCL / O_CREAT (atomic create-if-not-exists)
+ *   - fstat on file descriptor (not path — checks the actual opened file)
+ *   - flock / lockf / advisory locks
+ *   - atomic rename (rename is atomic on same filesystem)
+ *   - openat with O_NOFOLLOW (prevents symlink following)
+ *   - database transactions wrapping both check and use
+ */
+export function verifyCWE367(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Sources: CONTROL nodes that check file state by path
+  const FILE_CHECK_PATTERN = /\b(stat|statSync|lstat|lstatSync|access|accessSync|exists|existsSync|isFile|isDirectory|os\.path\.exists|os\.access|os\.path\.isfile|File\.exists|Files\.exists|Path\.Exists)\b/i;
+  const fileChecks = map.nodes.filter(n =>
+    n.node_type === 'CONTROL' &&
+    FILE_CHECK_PATTERN.test(n.code_snapshot)
+  );
+
+  // Sinks: TRANSFORM or STORAGE nodes that operate on files by path
+  const FILE_USE_PATTERN = /\b(open|openSync|readFile|readFileSync|writeFile|writeFileSync|unlink|unlinkSync|rename|renameSync|createReadStream|createWriteStream|fopen|fwrite|fread|chmod|chown|copyFile|copyFileSync|appendFile|appendFileSync|truncate|rmdir|mkdir)\b/i;
+  const fileOps = map.nodes.filter(n =>
+    (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE') &&
+    FILE_USE_PATTERN.test(n.code_snapshot)
+  );
+
+  // Safe patterns: atomic operations that close the TOCTOU gap
+  const TOCTOU_SAFE = /\bO_EXCL\b|\bO_CREAT\b|\bfstat\w*\b|\bflock\b|\blockf\b|\bO_NOFOLLOW\b|\bopenat\b|\btransaction\b|\batomic\b|\bcompareAndSwap\b|\brename\b.*\batomic\b|\bfs\.open\b.*\bwx\b/i;
+
+  for (const src of fileChecks) {
+    for (const sink of fileOps) {
+      if (src.id === sink.id) continue;
+      if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'CONTROL')) {
+        // Check if the sink uses an atomic pattern that prevents TOCTOU
+        const isSafe = TOCTOU_SAFE.test(sink.code_snapshot) || TOCTOU_SAFE.test(src.code_snapshot);
+        if (!isSafe) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (atomic check-and-use — file state can change between stat() and open())',
+            severity: 'medium',
+            description: `File metadata check at ${src.label} precedes file operation at ${sink.label} ` +
+              `without atomic protection. An attacker can replace the file (e.g., with a symlink) ` +
+              `between the check and the use.`,
+            fix: 'Open the file first, then use fstat() on the file descriptor instead of stat() on the path. ' +
+              'Use O_EXCL|O_CREAT for atomic file creation. Use O_NOFOLLOW to prevent symlink attacks. ' +
+              'For check-then-modify, use file locks (flock) or atomic rename.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-367', name: 'Time-of-check Time-of-use (TOCTOU) Race Condition', holds: findings.length === 0, findings };
+}
 
 export const verifyCWE386 = createControlTransformVerifier(
   'CWE-386', 'Symbolic Name not Mapping to Correct Object', 'medium',

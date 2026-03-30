@@ -1,16 +1,13 @@
 /**
  * DST Generated Verifiers — Batch 017
- * Gap fill: CWEs 1–199 missing from all registries.
- * 33 CWEs total:
- *   A. Deprecated/Category stubs (27) — always hold, no graph pattern
- *   B. Real verifiers (6) — factory-driven graph checks
- *      CWE-13  Password in Config File
- *      CWE-20  Improper Input Validation
- *      CWE-107 Struts Unused Validation Form
- *      CWE-110 Struts Validator Without Form Field
- *      CWE-116 Improper Encoding/Escaping of Output
- *      CWE-119 Memory Buffer Bounds
- *      CWE-186 Overly Restrictive Regex
+ * Gap fill: CWEs 1–199 — real verifiers only (7 CWEs).
+ *   CWE-13  Password in Config File
+ *   CWE-20  Improper Input Validation
+ *   CWE-107 Struts Unused Validation Form
+ *   CWE-110 Struts Validator Without Form Field
+ *   CWE-116 Improper Encoding/Escaping of Output
+ *   CWE-119 Memory Buffer Bounds
+ *   CWE-186 Overly Restrictive Regex
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
@@ -70,48 +67,7 @@ const E = /\bencrypt\b|\bhash\b|\bcipher\b|\bprotect\b|\bsecure\b|\bDPAPI\b|\bRS
 const B = /\bbounds\b|\blength.*check\b|\bindex.*valid\b|\bBuffer\.alloc\b|\bArray\.isArray\b/i;
 
 // ---------------------------------------------------------------------------
-// A. Deprecated / Category stubs — always hold, no exploitable graph pattern
-// ---------------------------------------------------------------------------
-
-function stub(cweId: string, cweName: string): (map: NeuralMap) => VerificationResult {
-  return (_map: NeuralMap): VerificationResult => ({
-    cwe: cweId,
-    name: cweName,
-    holds: true,
-    findings: [],
-  });
-}
-
-export const verifyCWE1 = stub('CWE-1', 'DEPRECATED: Location');
-export const verifyCWE2 = stub('CWE-2', '7PK - Environment');
-export const verifyCWE3 = stub('CWE-3', 'DEPRECATED: Technology-specific Environment Issues');
-export const verifyCWE4 = stub('CWE-4', 'DEPRECATED: J2EE Environment Issues');
-export const verifyCWE10 = stub('CWE-10', 'DEPRECATED: ASP.NET Environment Issues');
-export const verifyCWE16 = stub('CWE-16', 'Configuration');
-export const verifyCWE17 = stub('CWE-17', 'DEPRECATED: Code');
-export const verifyCWE18 = stub('CWE-18', 'DEPRECATED: Source Code');
-export const verifyCWE19 = stub('CWE-19', 'Data Processing Errors');
-export const verifyCWE21 = stub('CWE-21', 'DEPRECATED: Pathname Traversal and Equivalence Errors');
-export const verifyCWE60 = stub('CWE-60', 'DEPRECATED: UNIX Path Link Problems');
-export const verifyCWE63 = stub('CWE-63', 'DEPRECATED: Windows Path Link Problems');
-export const verifyCWE68 = stub('CWE-68', 'DEPRECATED: Windows Virtual File Problems');
-export const verifyCWE70 = stub('CWE-70', 'DEPRECATED: Mac Virtual File Problems');
-export const verifyCWE71 = stub('CWE-71', "DEPRECATED: Apple '.DS_Store'");
-export const verifyCWE92 = stub('CWE-92', 'DEPRECATED: Improper Sanitization of Custom Special Characters');
-export const verifyCWE100 = stub('CWE-100', 'DEPRECATED: Technology-Specific Input Validation Problems');
-export const verifyCWE101 = stub('CWE-101', 'DEPRECATED: Struts Validation Problems');
-export const verifyCWE132 = stub('CWE-132', 'DEPRECATED: Miscalculated Null Termination');
-export const verifyCWE133 = stub('CWE-133', 'String Errors');
-export const verifyCWE136 = stub('CWE-136', 'Type Errors');
-export const verifyCWE137 = stub('CWE-137', 'Data Neutralization Issues');
-export const verifyCWE139 = stub('CWE-139', 'DEPRECATED: General Special Element Problems');
-export const verifyCWE169 = stub('CWE-169', 'DEPRECATED: Technology-Specific Special Elements');
-export const verifyCWE171 = stub('CWE-171', 'DEPRECATED: Cleansing, Canonicalization, and Comparison Errors');
-export const verifyCWE189 = stub('CWE-189', 'Category: Numeric Errors');
-export const verifyCWE199 = stub('CWE-199', 'Category: Information Management Errors');
-
-// ---------------------------------------------------------------------------
-// B. Real verifiers — graph-pattern-based
+// Real verifiers — graph-pattern-based
 // ---------------------------------------------------------------------------
 
 // CWE-13: Password stored in plaintext config without encryption transform
@@ -271,15 +227,6 @@ export const verifyCWE186 = (function () {
 // ===========================================================================
 
 export const BATCH_017_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
-  // Deprecated / Category stubs
-  'CWE-1': verifyCWE1, 'CWE-2': verifyCWE2, 'CWE-3': verifyCWE3, 'CWE-4': verifyCWE4,
-  'CWE-10': verifyCWE10, 'CWE-16': verifyCWE16, 'CWE-17': verifyCWE17, 'CWE-18': verifyCWE18,
-  'CWE-19': verifyCWE19, 'CWE-21': verifyCWE21, 'CWE-60': verifyCWE60, 'CWE-63': verifyCWE63,
-  'CWE-68': verifyCWE68, 'CWE-70': verifyCWE70, 'CWE-71': verifyCWE71, 'CWE-92': verifyCWE92,
-  'CWE-100': verifyCWE100, 'CWE-101': verifyCWE101, 'CWE-132': verifyCWE132, 'CWE-133': verifyCWE133,
-  'CWE-136': verifyCWE136, 'CWE-137': verifyCWE137, 'CWE-139': verifyCWE139, 'CWE-169': verifyCWE169,
-  'CWE-171': verifyCWE171, 'CWE-189': verifyCWE189, 'CWE-199': verifyCWE199,
-  // Real verifiers
   'CWE-13': verifyCWE13, 'CWE-20': verifyCWE20, 'CWE-107': verifyCWE107,
   'CWE-110': verifyCWE110, 'CWE-116': verifyCWE116, 'CWE-119': verifyCWE119,
   'CWE-186': verifyCWE186,

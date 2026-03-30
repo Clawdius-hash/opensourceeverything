@@ -87,7 +87,78 @@ export const verifyCWE260 = createEgressVerifier('CWE-260', 'Password in Configu
 export const verifyCWE385 = createEgressVerifier('CWE-385', 'Covert Timing Channel', 'medium', 'STORAGE', noControl, /\bconstantTime\b|\btimingSafe\b|\bfixed.*delay\b/i, 'CONTROL (constant-time operations to prevent timing leakage)', 'Use constant-time operations for security comparisons. Add fixed delays where needed.');
 export const verifyCWE497 = createEgressVerifier('CWE-497', 'Exposure of Sensitive System Information to an Unauthorized Control Sphere', 'medium', 'STORAGE', noControl, REDACT_SAFE, 'CONTROL (system information filtering)', 'Do not expose system paths, versions, or configuration in responses. Use generic error messages.');
 export const verifyCWE514 = createEgressVerifier('CWE-514', 'Covert Channel', 'medium', 'STORAGE', noControl, /\bno.*covert\b|\bisolat\b|\bsandbox\b/i, 'CONTROL (covert channel prevention / information isolation)', 'Isolate security domains. Minimize shared resources between trust levels.');
-export const verifyCWE532 = createEgressVerifier('CWE-532', 'Insertion of Sensitive Information into Log File', 'medium', 'STORAGE', noControl, REDACT_SAFE, 'CONTROL (sensitive data redaction in logs)', 'Redact passwords, tokens, PII, and credit card numbers from log output. Use structured logging with field filtering.');
+/**
+ * CWE-532: Insertion of Sensitive Information into Log File
+ * UPGRADED — hand-written with specific sink and source filters.
+ *
+ * Pattern: STORAGE nodes containing sensitive data (passwords, tokens, SSNs,
+ * credit cards, API keys) flow to EGRESS nodes that are logging calls,
+ * without a CONTROL node that redacts the sensitive fields.
+ *
+ * The generic version checked ALL STORAGE -> ALL EGRESS. The upgraded version:
+ *   - Sources: STORAGE nodes whose code or label references sensitive data
+ *     (password, token, secret, ssn, credit_card, apiKey, sessionId, etc.)
+ *   - Sinks: EGRESS nodes that are specifically logging calls
+ *     (console.log, logger.info, winston, pino, log4j, logging.info, syslog, etc.)
+ *   - Safe patterns: explicit redaction before logging (masking, filtering fields,
+ *     structured logging with field exclusion, JSON.stringify replacer)
+ */
+export const verifyCWE532 = (function() {
+  const SENSITIVE_DATA_PATTERN = /\b(password|passwd|pwd|secret|token|apiKey|api_key|sessionId|session_id|ssn|social_security|credit_card|creditCard|cardNumber|card_number|cvv|pin|private_key|privateKey|auth_token|access_token|refresh_token)\b/i;
+
+  const LOG_SINK_PATTERN = /\b(console\.(log|info|warn|error|debug)|logger\.(log|info|warn|error|debug|trace)|log\.(info|warn|error|debug|trace)|winston\.|pino\.|bunyan\.|log4j|logging\.(info|warning|error|debug)|syslog|print|fprintf.*stderr|NSLog|Log\.(d|i|w|e|v))\s*\(/i;
+
+  const REDACT_SAFE_SPECIFIC = /\bredact\b|\bmask\b|\*{3,}|\bfilter\b.*\b(field|key|password)\b|\breplacer\b|\bomit\b.*\b(password|secret|token)\b|\bsanitize.*log\b|\[REDACTED\]|\[FILTERED\]|\btruncate\b.*\b(token|key)\b/i;
+
+  return (map: NeuralMap): VerificationResult => {
+    const findings: Finding[] = [];
+
+    // Sources: STORAGE nodes with sensitive data
+    const sensitiveStorage = map.nodes.filter(n =>
+      n.node_type === 'STORAGE' &&
+      (SENSITIVE_DATA_PATTERN.test(n.code_snapshot) ||
+       SENSITIVE_DATA_PATTERN.test(n.label) ||
+       n.data_out.some(d => d.sensitivity === 'SECRET' || d.sensitivity === 'AUTH' || d.sensitivity === 'PII'))
+    );
+
+    // Sinks: EGRESS nodes that are logging calls
+    const logSinks = map.nodes.filter(n =>
+      n.node_type === 'EGRESS' &&
+      LOG_SINK_PATTERN.test(n.code_snapshot)
+    );
+
+    for (const src of sensitiveStorage) {
+      for (const sink of logSinks) {
+        if (src.id === sink.id) continue;
+        if (noControl(map, src.id, sink.id)) {
+          const isSafe = REDACT_SAFE_SPECIFIC.test(sink.code_snapshot) ||
+            REDACT_SAFE_SPECIFIC.test(src.code_snapshot);
+
+          if (!isSafe) {
+            // Identify what sensitive data is being logged
+            const match = src.code_snapshot.match(SENSITIVE_DATA_PATTERN) || src.label.match(SENSITIVE_DATA_PATTERN);
+            const sensitiveField = match ? match[0] : 'sensitive data';
+
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'CONTROL (sensitive data redaction before logging)',
+              severity: 'medium',
+              description: `Sensitive data "${sensitiveField}" from ${src.label} is written to log at ${sink.label} ` +
+                `without redaction. Log files are often stored unencrypted, shared with third-party log aggregators, ` +
+                `and retained for years.`,
+              fix: 'Redact sensitive fields before logging: mask passwords with "***", truncate tokens, ' +
+                'remove PII. Use structured logging with a field filter (e.g., pino redact option, ' +
+                'winston format with custom replacer). Never log full request bodies without filtering.',
+            });
+          }
+        }
+      }
+    }
+
+    return { cwe: 'CWE-532', name: 'Insertion of Sensitive Information into Log File', holds: findings.length === 0, findings };
+  };
+})();
 export const verifyCWE548 = createEgressVerifier('CWE-548', 'Exposure of Information Through Directory Listing', 'medium', 'STORAGE', noControl, /\bdirectory.*listing.*off\b|\bautoindex.*off\b|\bOptions.*-Indexes\b/i, 'CONTROL (disable directory listing)', 'Disable directory listing in web server config. Use Options -Indexes (Apache) or autoindex off (nginx).');
 export const verifyCWE594 = createEgressVerifier('CWE-594', 'J2EE Framework: Saving Unserializable Objects to Disk', 'medium', 'STORAGE', noControl, /\bSerializable\b|\btransient\b|\bJSON\.stringify\b/i, 'CONTROL (serialization validation before persistence)', 'Ensure objects implement Serializable. Mark sensitive fields as transient.');
 

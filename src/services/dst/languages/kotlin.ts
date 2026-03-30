@@ -29,6 +29,11 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   check:            { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
   error:            { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
   TODO:             { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
+  // Constructors commonly used as sinks
+  File:             { nodeType: 'STORAGE',   subtype: 'file_access',   tainted: false },
+  URL:              { nodeType: 'TRANSFORM', subtype: 'parse',         tainted: false },
+  ProcessBuilder:   { nodeType: 'EXTERNAL',  subtype: 'system_exec',   tainted: false },
+  ObjectInputStream: { nodeType: 'EXTERNAL', subtype: 'deserialize',   tainted: false },
 };
 
 const MEMBER_CALLS: Record<string, CalleePattern> = {
@@ -43,6 +48,15 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'call.request.queryParameters': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'call.request.cookies':       { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'call.request.uri':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- Ktor multipart / WebSocket --
+  'call.receiveMultipart':      { nodeType: 'INGRESS', subtype: 'file_upload',  tainted: true },
+  'incoming.receive':           { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },
+
+  // -- Android intents / IPC --
+  'intent.getStringExtra':      { nodeType: 'INGRESS', subtype: 'ipc_read',    tainted: true },
+  'intent.data':                { nodeType: 'INGRESS', subtype: 'ipc_read',    tainted: true },
+  'ContentResolver.query':      { nodeType: 'INGRESS', subtype: 'ipc_read',    tainted: true },
 
   // -- Spring Boot (Kotlin) --
   'request.getParameter':       { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
@@ -91,6 +105,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'ResponseEntity.notFound':    { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'ResponseEntity.badRequest':  { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'ResponseEntity.created':     { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- Android activity navigation --
+  'startActivity':              { nodeType: 'EGRESS', subtype: 'ipc_send',      tainted: false },
 
   // -- File write --
   'File.writeText':             { nodeType: 'EGRESS', subtype: 'file_write',    tainted: false },
@@ -144,11 +161,53 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- Retrofit --
   'Retrofit.create':            { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
 
+  // -- Android WebView --
+  'WebView.loadUrl':            { nodeType: 'EXTERNAL', subtype: 'webview_nav',  tainted: false },
+  'WebView.evaluateJavascript': { nodeType: 'EXTERNAL', subtype: 'webview_exec', tainted: false },
+
   // -- Process --
   'Runtime.getRuntime.exec':    { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'Runtime.exec':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'ProcessBuilder.start':       { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'ProcessBuilder.command':     { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+
+  // -- HTTP / URL --
+  'url.openConnection':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'URL.openConnection':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'HttpURLConnection.connect':  { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'connection.inputStream':     { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+
+  // -- XML parsing --
+  'DocumentBuilderFactory.newInstance': { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false },
+  'factory.newDocumentBuilder':  { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false },
+  'builder.parse':               { nodeType: 'EXTERNAL', subtype: 'xml_parse',  tainted: false },
+  'DocumentBuilder.parse':       { nodeType: 'EXTERNAL', subtype: 'xml_parse',  tainted: false },
+  'SAXParserFactory.newInstance': { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false },
+  'XMLInputFactory.newInstance':  { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false },
+
+  // -- Deserialization (dangerous) --
+  'ObjectInputStream.readObject': { nodeType: 'EXTERNAL', subtype: 'deserialize', tainted: false },
+  'ois.readObject':              { nodeType: 'EXTERNAL', subtype: 'deserialize', tainted: false },
 
   // == STORAGE ==
+
+  // -- JDBC --
+  'DriverManager.getConnection': { nodeType: 'STORAGE', subtype: 'db_connect', tainted: false },
+  'conn.createStatement':       { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'connection.createStatement':  { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'conn.prepareStatement':      { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'connection.prepareStatement': { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'stmt.executeQuery':          { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'stmt.executeUpdate':         { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'stmt.execute':               { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'statement.executeQuery':     { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'statement.executeUpdate':    { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'statement.execute':          { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
+  'preparedStatement.executeQuery': { nodeType: 'STORAGE', subtype: 'sql',      tainted: false },
+  'preparedStatement.executeUpdate': { nodeType: 'STORAGE', subtype: 'sql',     tainted: false },
+
+  // -- Android SQLite --
+  'database.rawQuery':          { nodeType: 'STORAGE', subtype: 'sql',          tainted: false },
 
   // -- Room --
   'Dao.insert':                 { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
@@ -178,8 +237,12 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Crypto --
   'MessageDigest.getInstance':  { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
+  'MessageDigest.digest':       { nodeType: 'TRANSFORM', subtype: 'hash',       tainted: false },
+  'md.digest':                  { nodeType: 'TRANSFORM', subtype: 'hash',       tainted: false },
+  'md.update':                  { nodeType: 'TRANSFORM', subtype: 'hash',       tainted: false },
   'Mac.getInstance':            { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'Cipher.getInstance':         { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
+  'Cipher.doFinal':             { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'SecureRandom.nextBytes':     { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'KeyGenerator.getInstance':   { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
 
@@ -234,6 +297,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Ktor auth --
   'authentication':             { nodeType: 'AUTH', subtype: 'authenticate',     tainted: false },
+  'call.sessions.get':          { nodeType: 'AUTH', subtype: 'session_read',     tainted: false },
 
   // == STRUCTURAL ==
 
@@ -255,11 +319,13 @@ const STORAGE_READ_METHODS = new Set([
   'findAll', 'findById', 'findOne', 'findBy', 'find',
   'getAll', 'getById', 'get', 'count', 'exists', 'existsById',
   'query', 'select', 'fetch', 'fetchAll', 'fetchOne',
+  'executeQuery', 'rawQuery',
 ]);
 
 const STORAGE_WRITE_METHODS = new Set([
   'save', 'saveAll', 'insert', 'update', 'delete', 'deleteById',
   'deleteAll', 'upsert', 'execute', 'persist', 'merge', 'remove',
+  'executeUpdate', 'executeBatch',
 ]);
 
 const NON_DB_OBJECTS = new Set([

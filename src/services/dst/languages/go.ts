@@ -100,6 +100,16 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'c.Get':                  { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'c.Cookies':              { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
 
+  // -- chi router --
+  'chi.URLParam':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- gorilla/mux --
+  'mux.Vars':               { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- gorilla/websocket --
+  'upgrader.Upgrade':       { nodeType: 'INGRESS', subtype: 'websocket',    tainted: true },
+  'conn.ReadMessage':       { nodeType: 'INGRESS', subtype: 'websocket',    tainted: true },
+
   // -- os / environment --
   'os.Getenv':              { nodeType: 'INGRESS', subtype: 'env_read',     tainted: false },
   'os.LookupEnv':           { nodeType: 'INGRESS', subtype: 'env_read',     tainted: false },
@@ -158,6 +168,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'http.FileServer':        { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'http.NotFound':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'http.SetCookie':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- gorilla/websocket response --
+  'conn.WriteMessage':      { nodeType: 'EGRESS', subtype: 'websocket',     tainted: false },
 
   // -- Gin response --
   'c.JSON':                 { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -270,8 +283,22 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'exec.CommandContext':    { nodeType: 'EXTERNAL', subtype: 'system_exec',  tainted: false },
   'os.StartProcess':        { nodeType: 'EXTERNAL', subtype: 'system_exec',  tainted: false },
 
+  // -- net/rpc (legacy RPC) --
+  'rpc.Dial':               { nodeType: 'EXTERNAL', subtype: 'api_call',     tainted: false },
+  'rpc.DialHTTP':           { nodeType: 'EXTERNAL', subtype: 'api_call',     tainted: false },
+  'client.Call':            { nodeType: 'EXTERNAL', subtype: 'api_call',     tainted: false },
+
+  // -- reflect (CWE-470 unsafe reflection) --
+  'v.Call':                 { nodeType: 'EXTERNAL', subtype: 'unsafe_reflect', tainted: true },
+  'v.MethodByName':         { nodeType: 'EXTERNAL', subtype: 'unsafe_reflect', tainted: true },
+
   // -- plugin --
   'plugin.Open':            { nodeType: 'EXTERNAL', subtype: 'system_exec',  tainted: false },
+  'p.Lookup':               { nodeType: 'EXTERNAL', subtype: 'system_exec',  tainted: true },
+
+  // -- net/http/httputil reverse proxy --
+  'httputil.NewSingleHostReverseProxy': { nodeType: 'EXTERNAL', subtype: 'proxy', tainted: false },
+  'proxy.ServeHTTP':        { nodeType: 'EXTERNAL', subtype: 'proxy',        tainted: false },
 
   // -- http server start --
   'http.ListenAndServe':    { nodeType: 'EXTERNAL', subtype: 'server_start', tainted: false },
@@ -303,8 +330,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'tx.Query':               { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'tx.QueryRow':            { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'stmt.Exec':              { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
+  'stmt.ExecContext':       { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
   'stmt.Query':             { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'stmt.QueryContext':      { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'stmt.QueryRow':          { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
+  'stmt.QueryRowContext':   { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'rows.Scan':              { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'rows.Next':              { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
   'rows.Close':             { nodeType: 'STORAGE', subtype: 'db_read',       tainted: false },
@@ -339,6 +369,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'db.Migrator':            { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
   'db.Transaction':         { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
 
+  // -- ent ORM (Facebook) --
+  'ent.Open':               { nodeType: 'STORAGE', subtype: 'db_connect',    tainted: false },
+
   // -- Redis (go-redis) --
   'rdb.Get':                { nodeType: 'STORAGE', subtype: 'cache_read',    tainted: false },
   'rdb.Set':                { nodeType: 'STORAGE', subtype: 'cache_write',   tainted: false },
@@ -372,6 +405,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- encoding/csv --
   'csv.NewReader':          { nodeType: 'TRANSFORM', subtype: 'parse',       tainted: false },
   'csv.NewWriter':          { nodeType: 'TRANSFORM', subtype: 'serialize',   tainted: false },
+
+  // -- golang.org/x/net/html --
+  'html.Parse':             { nodeType: 'TRANSFORM', subtype: 'parse',       tainted: true },
+  'html.Render':            { nodeType: 'TRANSFORM', subtype: 'format',      tainted: false },
 
   // -- encoding/base64 --
   'base64.StdEncoding.EncodeToString': { nodeType: 'TRANSFORM', subtype: 'encode', tainted: false },
@@ -474,10 +511,16 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'url.PathUnescape':       { nodeType: 'TRANSFORM', subtype: 'encode',     tainted: false },
 
   // -- html / template --
+  // CRITICAL DISTINCTION: html/template auto-escapes (SAFE), text/template does NOT (DANGEROUS).
+  // template.Execute and template.ExecuteTemplate are the render calls for both packages.
+  // We mark them tainted:true because when text/template is used, output is unescaped (CWE-79).
+  // The scanner should flag text/template usage and treat html/template as the safe mitigation.
   'html.EscapeString':      { nodeType: 'TRANSFORM', subtype: 'sanitize',   tainted: false },
   'html.UnescapeString':    { nodeType: 'TRANSFORM', subtype: 'encode',     tainted: false },
   'template.HTMLEscapeString': { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
   'template.HTML':          { nodeType: 'EGRESS',    subtype: 'html_output', tainted: false },
+  'template.Execute':       { nodeType: 'EGRESS',    subtype: 'html_output', tainted: true },
+  'template.ExecuteTemplate': { nodeType: 'EGRESS',  subtype: 'html_output', tainted: true },
 
   // -- filepath --
   'filepath.Join':          { nodeType: 'TRANSFORM', subtype: 'format',     tainted: false },
@@ -549,6 +592,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- errgroup --
   'errgroup.WithContext':   { nodeType: 'CONTROL', subtype: 'event_handler', tainted: false },
 
+  // -- gRPC interceptors (middleware) --
+  'grpc.UnaryInterceptor':  { nodeType: 'CONTROL', subtype: 'middleware',    tainted: false },
+  'grpc.StreamInterceptor': { nodeType: 'CONTROL', subtype: 'middleware',    tainted: false },
+
   // -- time --
   'time.NewTicker':         { nodeType: 'CONTROL', subtype: 'event_handler', tainted: false },
   'time.NewTimer':          { nodeType: 'CONTROL', subtype: 'event_handler', tainted: false },
@@ -570,6 +617,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'c.IsAborted':            { nodeType: 'CONTROL', subtype: 'validation',    tainted: false },
   'c.Set':                  { nodeType: 'CONTROL', subtype: 'event_handler', tainted: false },
 
+  // -- go-playground/validator --
+  'validate.Struct':        { nodeType: 'CONTROL', subtype: 'validation',    tainted: false },
+  'validate.Var':           { nodeType: 'CONTROL', subtype: 'validation',    tainted: false },
+
   // -- http route registration (STRUCTURAL for route definition) --
   'http.HandleFunc':        { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
   'http.Handle':            { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
@@ -585,6 +636,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'router.PATCH':           { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
   'router.Use':             { nodeType: 'STRUCTURAL', subtype: 'middleware', tainted: false },
   'router.Group':           { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
+
+  // -- Chi router --
+  'chi.NewRouter':          { nodeType: 'STRUCTURAL', subtype: 'route',      tainted: false },
 
   // =========================================================================
   // AUTH -- authentication and authorization
@@ -611,9 +665,21 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'session.Set':            { nodeType: 'AUTH', subtype: 'authenticate',     tainted: false },
   'session.Save':           { nodeType: 'AUTH', subtype: 'authenticate',     tainted: false },
 
+  // -- gorilla/sessions --
+  'sessions.NewCookieStore':      { nodeType: 'AUTH', subtype: 'session_store', tainted: false },
+  'sessions.NewFilesystemStore':  { nodeType: 'AUTH', subtype: 'session_store', tainted: false },
+
+  // -- casbin (RBAC/ABAC authorization) --
+  'e.Enforce':              { nodeType: 'AUTH', subtype: 'authorize',        tainted: false },
+  'casbin.NewEnforcer':     { nodeType: 'AUTH', subtype: 'authorize',        tainted: false },
+
   // =========================================================================
   // META -- config, logging, debug
   // =========================================================================
+
+  // -- go/ast (code generation / analysis) --
+  'parser.ParseFile':       { nodeType: 'META', subtype: 'codegen',          tainted: false },
+  'ast.Inspect':            { nodeType: 'META', subtype: 'codegen',          tainted: false },
 
   // -- logging (already above) --
   'log.New':                { nodeType: 'META', subtype: 'config',           tainted: false },
@@ -726,6 +792,9 @@ const NON_DB_OBJECTS = new Set([
   'sync', 'atomic', 'time', 'signal',
   'testing', 't', 'b', 'err', 'error',
   'this', 'self',
+  'validate', 'casbin', 'sessions', 'template',
+  'chi', 'mux', 'upgrader', 'conn', 'proxy', 'httputil', 'html',
+  'rpc', 'grpc', 'plugin', 'v', 'p', 'parser', 'ast',
 ]);
 
 // -- Sink patterns (CWE -> dangerous regex) -----------------------------------
@@ -733,7 +802,7 @@ const NON_DB_OBJECTS = new Set([
 export const sinkPatterns: Record<string, RegExp> = {
   'CWE-78':  /exec\.Command\s*\([^)]*(?:r\.FormValue|r\.URL\.Query|os\.Args)/,
   'CWE-89':  /(?:Query|Exec)\s*\(\s*(?:fmt\.Sprintf|"(?:SELECT|INSERT|UPDATE|DELETE).*"\s*\+)/,
-  'CWE-79':  /(?:text\/template|template\.HTML\s*\()/,
+  'CWE-79':  /(?:text\/template|template\.HTML\s*\(|"text\/template"[^]*?\.Execute)/,
   'CWE-94':  /(?:template\.New\s*\([^)]*\)\.Parse\s*\(\s*(?:r\.|params|query|body)|plugin\.Open\s*\()/,
   'CWE-22':  /filepath\.Join\s*\([^)]*(?:r\.FormValue|r\.URL|params|query)/,
   'CWE-119': /(?:unsafe\.Pointer\s*\(|import\s+"C")/,
@@ -745,6 +814,7 @@ export const sinkPatterns: Record<string, RegExp> = {
   'CWE-400': /http\.ListenAndServe\s*\(/,
   'CWE-532': /log\.(?:Print|Printf|Println)\s*\([^)]*(?:password|secret|token|key|credential)/,
   'CWE-614': /http\.Cookie\{[^}]*(?!Secure)[^}]*\}/,
+  'CWE-470': /reflect\.ValueOf\([^)]*\)\.MethodByName\s*\(\s*(?:r\.|params|query|body|input|name|method)/,
   'CWE-749': /reflect\.(?:ValueOf\([^)]*\)\.(?:Call|Method|MethodByName)|MakeFunc|SliceHeader)/,
   'CWE-798': /(?:password|secret|apiKey|token)\s*(?::=|=)\s*"[^"]{8,}"/,
   'CWE-918': /http\.Get\s*\(\s*(?:r\.FormValue|r\.URL|params|query)/,
@@ -755,8 +825,8 @@ export const sinkPatterns: Record<string, RegExp> = {
 
 export const safePatterns: Record<string, RegExp> = {
   'CWE-78':  /exec\.Command\s*\(\s*"[^"]*"\s*,/,                    // literal command name
-  'CWE-89':  /(?:Query|Exec)\s*\(\s*"[^"]*\$\d+[^"]*"\s*,/,        // parameterized query ($1, $2)
-  'CWE-79':  /html\/template/,                                       // auto-escaped templates
+  'CWE-89':  /(?:(?:Query|Exec)\s*\(\s*"[^"]*(?:\$\d+|\?)[^"]*"\s*,|\.Prepare(?:Context)?\s*\()/,  // parameterized query ($1, ?) or prepared statement
+  'CWE-79':  /(?:html\/template|html\.EscapeString)/,                 // auto-escaped templates or explicit escaping
   'CWE-22':  /filepath\.Clean\s*\(/,                                  // path cleaning
   'CWE-295': /InsecureSkipVerify\s*:\s*false/,
   'CWE-327': /(?:sha256|sha512|sha3)\.(?:New|Sum)/,                  // strong hash

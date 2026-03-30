@@ -51,9 +51,14 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Request.Host':                 { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'Request.Method':               { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'Request.ReadFromJsonAsync':    { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'HttpContext.Request.ReadFormAsync': { nodeType: 'INGRESS', subtype: 'file_upload', tainted: true },
+  'HttpContext.Session.GetString': { nodeType: 'INGRESS', subtype: 'session_read', tainted: true },
 
   // -- Minimal API parameter binding --
   'HttpRequest.ReadFromJsonAsync':{ nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- SignalR client-side message handler --
+  'HubConnection.On':             { nodeType: 'INGRESS', subtype: 'realtime_message', tainted: true },
 
   // -- File read --
   'File.ReadAllText':             { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
@@ -124,8 +129,17 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Results.NotFound':             { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'Results.BadRequest':           { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'Results.File':                 { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'Results.Redirect':             { nodeType: 'EGRESS', subtype: 'http_redirect', tainted: false },
+  'Response.Redirect':            { nodeType: 'EGRESS', subtype: 'http_redirect', tainted: false },
   'Response.WriteAsync':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'Response.WriteAsJsonAsync':    { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- Blazor navigation --
+  'NavigationManager.NavigateTo': { nodeType: 'EGRESS', subtype: 'http_redirect', tainted: false },
+
+  // -- SignalR server push --
+  'Clients.All.SendAsync':       { nodeType: 'EGRESS', subtype: 'realtime_broadcast', tainted: false },
+  'Clients.Caller.SendAsync':    { nodeType: 'EGRESS', subtype: 'realtime_response', tainted: false },
 
   // -- File write --
   'File.WriteAllText':            { nodeType: 'EGRESS', subtype: 'file_write',    tainted: false },
@@ -156,6 +170,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // =========================================================================
   // EXTERNAL
   // =========================================================================
+
+  // -- Blazor JS interop --
+  'IJSRuntime.InvokeAsync':       { nodeType: 'EXTERNAL', subtype: 'js_interop', tainted: false },
+  'IJSRuntime.InvokeVoidAsync':   { nodeType: 'EXTERNAL', subtype: 'js_interop', tainted: false },
 
   // -- HttpClient --
   'HttpClient.GetAsync':          { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
@@ -209,6 +227,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'DbContext.Database.ExecuteSqlRaw': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'DbContext.Database.ExecuteSqlRawAsync': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'DbContext.Database.ExecuteSqlInterpolated': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+  'DbContext.Database.SqlQueryRaw': { nodeType: 'STORAGE', subtype: 'db_read',    tainted: false },
+  'DbContext.Database.BeginTransactionAsync': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'DbContext.Set':                { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
 
   // -- ADO.NET --
@@ -221,6 +241,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'SqlCommand.ExecuteNonQueryAsync': { nodeType: 'STORAGE', subtype: 'db_write',  tainted: false },
   'SqlCommand.ExecuteScalar':     { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
   'SqlCommand.ExecuteScalarAsync':{ nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
+  'SqlCommand.CommandText':       { nodeType: 'STORAGE', subtype: 'sql_assignment', tainted: false },
+  'SqlDataAdapter.Fill':          { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
   'SqlDataReader.Read':           { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
   'SqlDataReader.ReadAsync':      { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
   'SqlDataReader.GetString':      { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
@@ -237,6 +259,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'connection.QuerySingleAsync':  { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
   'connection.ExecuteAsync':      { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'connection.Execute':           { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
+  'connection.QueryMultiple':     { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
+  'connection.ExecuteScalar':     { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
 
   // -- Redis (StackExchange.Redis) --
   'db.StringGet':                 { nodeType: 'STORAGE', subtype: 'cache_read',   tainted: false },
@@ -293,6 +317,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Uri.EscapeDataString':         { nodeType: 'TRANSFORM', subtype: 'encode',     tainted: false },
   'Uri.UnescapeDataString':       { nodeType: 'TRANSFORM', subtype: 'encode',     tainted: false },
 
+  // -- Blazor raw HTML rendering --
+  'MarkupString':                 { nodeType: 'TRANSFORM', subtype: 'raw_html',   tainted: false },
+
   // -- Crypto --
   'SHA256.HashData':              { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'SHA256.Create':                { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
@@ -303,6 +330,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'HMACSHA256.HashData':          { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'Aes.Create':                   { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'RSA.Create':                   { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
+  'RSA.Encrypt':                  { nodeType: 'TRANSFORM', subtype: 'encrypt',    tainted: false },
   'RandomNumberGenerator.GetBytes': { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
   'RandomNumberGenerator.GetInt32': { nodeType: 'TRANSFORM', subtype: 'encrypt', tainted: false },
 
@@ -342,6 +370,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Validation (FluentValidation) --
   'AbstractValidator.RuleFor':    { nodeType: 'CONTROL', subtype: 'validation',   tainted: false },
+  'ModelState.IsValid':           { nodeType: 'CONTROL', subtype: 'validation',   tainted: false },
+  'HtmlEncoder.Default.Encode':   { nodeType: 'CONTROL', subtype: 'sanitize',     tainted: false },
 
   // =========================================================================
   // AUTH
@@ -357,6 +387,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'UserManager.IsInRoleAsync':    { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'SignInManager.PasswordSignInAsync': { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },
   'SignInManager.SignOutAsync':    { nodeType: 'AUTH', subtype: 'authenticate',    tainted: false },
+  'SignInManager.TwoFactorSignInAsync': { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },
+  'UserManager.ChangePasswordAsync': { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },
+  'UserManager.ResetPasswordAsync': { nodeType: 'AUTH', subtype: 'authenticate',  tainted: false },
+  'UserManager.GeneratePasswordResetTokenAsync': { nodeType: 'AUTH', subtype: 'authenticate', tainted: false },
+  'UserManager.AccessFailedAsync': { nodeType: 'AUTH', subtype: 'authenticate',   tainted: false },
   'RoleManager.CreateAsync':      { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'RoleManager.RoleExistsAsync':  { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
 
@@ -392,6 +427,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'app.UseRouting':               { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'app.UseEndpoints':             { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'app.UseMiddleware':            { nodeType: 'STRUCTURAL', subtype: 'middleware', tainted: false },
+  'app.MapGroup':                 { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'app.MapHub':                   { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
 
   // -- Server start --
   'app.Run':                      { nodeType: 'EXTERNAL', subtype: 'server_start', tainted: false },
@@ -421,6 +458,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- Configuration --
   'builder.Configuration':        { nodeType: 'META', subtype: 'config',          tainted: false },
   'builder.Services':             { nodeType: 'META', subtype: 'config',          tainted: false },
+
+  // -- Attributes (ASP.NET Core) --
+  'FromBody':                     { nodeType: 'META', subtype: 'ingress_binding', tainted: true },
+  'Authorize':                    { nodeType: 'META', subtype: 'auth_policy',     tainted: false },
 };
 
 // -- Wildcard member calls ---------------------------------------------------
@@ -514,6 +555,7 @@ const NON_DB_OBJECTS = new Set([
   'JsonSerializer', 'XmlSerializer',
   'Regex', 'Uri', 'DateTime', 'DateTimeOffset', 'Guid',
   'results', 'items', 'list', 'array', 'data', 'values',
+  'IJSRuntime', 'NavigationManager', 'HubConnection', 'Clients',
 ]);
 
 // -- Sink patterns -----------------------------------------------------------

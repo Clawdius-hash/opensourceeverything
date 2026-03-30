@@ -81,7 +81,78 @@ export const verifyCWE575 = createVerifier('CWE-575', 'EJB Bad Practices: Use of
 export const verifyCWE577 = createVerifier('CWE-577', 'EJB Bad Practices: Use of Sockets', 'medium', 'STRUCTURAL', 'EXTERNAL', noControl, RESTRICT_SAFE, 'CONTROL (managed connections — no direct socket usage in EJBs)', 'Use managed resources (connection pools, JMS) instead of raw sockets in EJBs.');
 export const verifyCWE607 = createVerifier('CWE-607', 'Public Static Final Field References Mutable Object', 'medium', 'STRUCTURAL', 'EXTERNAL', noControl, /\bfreeze\b|\bunmodifiable\b|\bimmutable\b|\bCollections\.unmodifiable\b/i, 'CONTROL (immutable public constants)', 'Make public static final fields immutable. Wrap collections with Collections.unmodifiableList().');
 export const verifyCWE648 = createVerifier('CWE-648', 'Incorrect Use of Privileged APIs', 'high', 'STRUCTURAL', 'EXTERNAL', noControl, /\bprivilege\b|\bleast.*privilege\b|\bdropPrivilege\b|\bsandbox\b/i, 'CONTROL (least-privilege API usage)', 'Use privileged APIs with minimum necessary permissions. Drop privileges after use.');
-export const verifyCWE829 = createVerifier('CWE-829', 'Inclusion of Functionality from Untrusted Control Sphere', 'high', 'STRUCTURAL', 'EXTERNAL', noControl, INTEGRITY_SAFE, 'CONTROL (integrity verification of external code)', 'Verify integrity (hash/signature) of external dependencies. Use lockfiles and SRI for CDN resources.');
+/**
+ * CWE-829: Inclusion of Functionality from Untrusted Control Sphere
+ * UPGRADED — hand-written with specific sink filters and safe patterns.
+ *
+ * Pattern: STRUCTURAL nodes (module definitions, build configs, HTML pages)
+ * include/require/import code from EXTERNAL sources (CDNs, URLs, dynamic paths)
+ * without integrity verification.
+ *
+ * This is the "supply chain attack" CWE. It catches:
+ *   - <script src="http://cdn.example.com/lib.js"> without integrity attribute
+ *   - require(userControlledPath) — dynamic require with untrusted path
+ *   - eval(fetchedCode) — executing code fetched at runtime
+ *   - import('http://...') — dynamic import from URL
+ *   - pip install / npm install from untrusted registries
+ *
+ * Specific sources: STRUCTURAL nodes that load external code
+ * Specific sinks: EXTERNAL nodes that represent untrusted code inclusion
+ * Safe patterns: SRI integrity attribute, CSP nonce, lockfile hash verification,
+ *   GPG signature check, pinned versions with hash, vendored dependencies
+ */
+export const verifyCWE829 = (function() {
+  // Sources: STRUCTURAL nodes that include/load code
+  const CODE_INCLUSION_PATTERN = /\b(require|import|include|load|source|eval|exec|execFile|dlopen|LoadLibrary|System\.load)\s*\(|<script\b.*\bsrc\s*=/i;
+
+  // Sinks: EXTERNAL nodes representing untrusted code sources
+  const UNTRUSTED_SOURCE_PATTERN = /https?:\/\/|\bcdn\b|\bunpkg\b|\bjsdelivr\b|\bcloudflare\b|\bdynamic\b.*\b(require|import)\b|\beval\b|\bFunction\b\s*\(|\bnew\s+Function\b|\bvm\.run\b|\bchild_process\b/i;
+
+  // Safe: integrity verification present
+  const INTEGRITY_SAFE_SPECIFIC = /\bintegrity\s*=\s*"sha(256|384|512)-|\bSRI\b|\bcrossorigin\b.*\bintegrity\b|\bCSP\b.*\bnonce\b|\block\s*file\b|\bpackage-lock\b|\byarn\.lock\b|\bhash\b.*\bverif\b|\bsignature\b.*\bverif\b|\bgpg\b.*\bverif\b|\bvendor\b|\bpinned\b|\bchecksum\b/i;
+
+  return (map: NeuralMap): VerificationResult => {
+    const findings: Finding[] = [];
+
+    const structuralSources = map.nodes.filter(n =>
+      n.node_type === 'STRUCTURAL' &&
+      CODE_INCLUSION_PATTERN.test(n.code_snapshot)
+    );
+
+    const externalSinks = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' &&
+      UNTRUSTED_SOURCE_PATTERN.test(n.code_snapshot)
+    );
+
+    for (const src of structuralSources) {
+      for (const sink of externalSinks) {
+        if (src.id === sink.id) continue;
+        if (noControl(map, src.id, sink.id)) {
+          const isSafe = INTEGRITY_SAFE_SPECIFIC.test(sink.code_snapshot) ||
+            INTEGRITY_SAFE_SPECIFIC.test(src.code_snapshot);
+
+          if (!isSafe) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'CONTROL (integrity verification — SRI hash, signature check, or pinned dependency)',
+              severity: 'high',
+              description: `Code inclusion at ${src.label} loads from untrusted source at ${sink.label} ` +
+                `without integrity verification. If the external source is compromised, ` +
+                `malicious code runs in your application's context.`,
+              fix: 'For CDN scripts: add integrity="sha384-..." and crossorigin attributes (SRI). ' +
+                'For npm/pip: use lockfiles with verified hashes. ' +
+                'For dynamic imports: validate paths against an allowlist. ' +
+                'Never eval() code fetched from external sources.',
+            });
+          }
+        }
+      }
+    }
+
+    return { cwe: 'CWE-829', name: 'Inclusion of Functionality from Untrusted Control Sphere', holds: findings.length === 0, findings };
+  };
+})();
 export const verifyCWE830 = createVerifier('CWE-830', 'Inclusion of Web Functionality from an Untrusted Source', 'high', 'STRUCTURAL', 'EXTERNAL', noControl, /\bSRI\b|\bintegrity\b|\bcrossorigin\b|\bCSP\b|\bnonce\b/i, 'CONTROL (SRI / CSP for external scripts)', 'Use Subresource Integrity (SRI) for CDN scripts. Set CSP to restrict script sources.');
 
 // ===========================================================================

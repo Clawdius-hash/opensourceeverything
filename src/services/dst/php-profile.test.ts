@@ -296,15 +296,15 @@ include $page;
     const tree = parsePHP(code);
     const { map } = buildNeuralMap(tree, code, 'lfi.php', phpProfile);
 
-    // Should detect INGRESS (superglobal) and STRUCTURAL (include)
+    // Should detect INGRESS (superglobal) and EXTERNAL/file_include (tainted include)
     const ingressNodes = map.nodes.filter(n => n.node_type === 'INGRESS');
     expect(ingressNodes.length).toBeGreaterThan(0);
 
-    // The include should have tainted data flow
-    const structuralNodes = map.nodes.filter(n =>
-      n.node_type === 'STRUCTURAL' && n.node_subtype === 'dependency'
+    // Tainted include should be classified as EXTERNAL/file_include
+    const fileIncludeNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'file_include'
     );
-    expect(structuralNodes.length).toBeGreaterThan(0);
+    expect(fileIncludeNodes.length).toBeGreaterThan(0);
   });
 
   // ── 14. mail() as EGRESS/email ───────────────────────────────────
@@ -562,5 +562,196 @@ foreach ($items as $item) {
     for (const node of map.nodes) {
       expect(node.language).toBe('php');
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHP Constant Folding -- Anti-Evasion Tests
+// ═══════════════════════════════════════════════════════════════════════════
+// Attackers construct dangerous function names at runtime to dodge static
+// analysis. tryFoldConstant folds them back. These tests verify each
+// evasion pattern is detected.
+
+describe('PHP constant folding -- anti-evasion', () => {
+  beforeAll(async () => {
+    if (!parser) parser = await createPHPParser();
+  });
+
+  // ── 1. String concatenation: 'ev'.'al' ──────────────────────────
+
+  it('folds string concat: $fn = "ev"."al"; $fn($input)', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+$fn = 'ev'.'al';
+$fn($input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-concat.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 2. chr() concatenation ───────────────────────────────────────
+
+  it('folds chr() concat: chr(101).chr(118).chr(97).chr(108) → "eval"', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+$fn = chr(101).chr(118).chr(97).chr(108);
+$fn($input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-chr.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 3. base64_decode ─────────────────────────────────────────────
+
+  it('folds base64_decode: base64_decode("ZXZhbA==") → "eval"', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+$fn = base64_decode('ZXZhbA==');
+$fn($input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-b64.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 4. hex2bin ───────────────────────────────────────────────────
+
+  it('folds hex2bin: hex2bin("6576616c") → "eval"', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+$fn = hex2bin('6576616c');
+$fn($input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-hex.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 5. str_rot13 ────────────────────────────────────────────────
+
+  it('folds str_rot13: str_rot13("riny") → "eval"', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+$fn = str_rot13('riny');
+$fn($input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-rot13.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 6. call_user_func with constructed name ──────────────────────
+
+  it('resolves call_user_func with folded string', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+call_user_func('ev'.'al', $input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-cuf.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 7. call_user_func with variable holding folded value ─────────
+
+  it('resolves call_user_func($fn, ...) where $fn has constantValue', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+$fn = base64_decode('ZXZhbA==');
+call_user_func($fn, $input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-cuf-var.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 8. Unresolvable dynamic dispatch → runtime eval marker ──────
+
+  it('marks unresolvable $fn(...) as dynamic_dispatch', () => {
+    const code = `<?php
+$fn = $_GET['func'];
+$fn($_GET['arg']);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-dynamic.php', phpProfile);
+
+    const dynNodes = map.nodes.filter(n =>
+      n.node_subtype === 'dynamic_dispatch'
+    );
+    expect(dynNodes.length).toBeGreaterThan(0);
+    expect(dynNodes[0].tags).toContain('needs_runtime_eval');
+    expect(dynNodes[0].tags).toContain('unresolved_callee');
+    expect(dynNodes[0].attack_surface).toContain('dynamic_dispatch');
+  });
+
+  // ── 9. Direct inline fold: (base64_decode('ZXZhbA=='))($input) ──
+
+  it('folds inline expression callee: (base64_decode(...))()', () => {
+    const code = `<?php
+$input = $_GET['cmd'];
+(base64_decode('ZXZhbA=='))($input);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-inline.php', phpProfile);
+
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(execNodes.length).toBeGreaterThan(0);
+  });
+
+  // ── 10. Data flow: tainted args wire through to resolved callee ──
+
+  it('wires tainted data flow through folded callee', () => {
+    const code = `<?php
+$cmd = $_GET['cmd'];
+$fn = 'ev'.'al';
+$fn($cmd);
+?>`;
+    const tree = parsePHP(code);
+    const { map } = buildNeuralMap(tree, code, 'evasion-flow.php', phpProfile);
+
+    const ingressNodes = map.nodes.filter(n => n.node_type === 'INGRESS');
+    const execNodes = map.nodes.filter(n =>
+      n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec'
+    );
+    expect(ingressNodes.length).toBeGreaterThan(0);
+    expect(execNodes.length).toBeGreaterThan(0);
+
+    // There should be a data flow edge from INGRESS -> EXTERNAL
+    const dataFlowEdges = map.nodes.flatMap(n =>
+      n.edges.filter(e => e.edge_type === 'DATA_FLOW')
+    );
+    expect(dataFlowEdges.length).toBeGreaterThan(0);
   });
 });

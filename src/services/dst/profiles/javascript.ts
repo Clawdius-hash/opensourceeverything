@@ -27,6 +27,184 @@ import { lookupCallee as _lookupCallee } from '../calleePatterns.js';
 import { analyzeStructure as _analyzeStructure } from '../structuralPatterns.js';
 
 // ---------------------------------------------------------------------------
+// Constant Folding — resolves string concatenation at parse time
+// ---------------------------------------------------------------------------
+// Handles evasion patterns like:
+//   window['ev' + 'al'](x)       → window.eval(x)
+//   require('child_' + 'process') → require('child_process')
+//   globalThis['set' + 'Timeout'] → globalThis.setTimeout
+//
+// This is the anti-evasion core. Attackers split dangerous function names
+// across string concatenation to dodge static analysis. We fold them back.
+
+function tryFoldConstant(n: SyntaxNode): string | null {
+  // Literal strings — also resolve hex/unicode escape sequences
+  if (n.type === 'string' || n.type === 'string_fragment') {
+    const raw = n.text.replace(/^['"`]|['"`]$/g, '');
+    return resolveEscapes(raw);
+  }
+  // Template strings with no interpolation (just backtick-wrapped literals)
+  if (n.type === 'template_string' && n.namedChildCount === 0) {
+    return resolveEscapes(n.text.replace(/^`|`$/g, ''));
+  }
+  // Number literals — return as string for charcode operations
+  if (n.type === 'number') {
+    return n.text;
+  }
+  // Binary expression: "ev" + "al" → "eval"
+  if (n.type === 'binary_expression') {
+    const op = n.childForFieldName('operator')?.text;
+    if (op === '+') {
+      const left = n.childForFieldName('left');
+      const right = n.childForFieldName('right');
+      if (left && right) {
+        const lv = tryFoldConstant(left);
+        const rv = tryFoldConstant(right);
+        if (lv !== null && rv !== null) return lv + rv;
+      }
+    }
+  }
+  // Parenthesized: ("ev" + "al") → "eval"
+  if (n.type === 'parenthesized_expression') {
+    const inner = n.namedChild(0);
+    return inner ? tryFoldConstant(inner) : null;
+  }
+  // Ternary constant folding: cond ? 'a' : 'a' → 'a'
+  if (n.type === 'ternary_expression') {
+    const consequence = n.childForFieldName('consequence');
+    const alternative = n.childForFieldName('alternative');
+    if (consequence && alternative) {
+      const cv = tryFoldConstant(consequence);
+      const av = tryFoldConstant(alternative);
+      if (cv !== null && av !== null && cv === av) return cv;
+    }
+  }
+  // ── CHARCODE EVASION: String.fromCharCode(101, 118, 97, 108) → "eval" ──
+  if (n.type === 'call_expression') {
+    const func = n.childForFieldName('function');
+    const args = n.childForFieldName('arguments');
+    if (func && args) {
+      // String.fromCharCode(...)
+      if (func.type === 'member_expression') {
+        const obj = func.childForFieldName('object');
+        const prop = func.childForFieldName('property');
+        if (obj?.text === 'String' && prop?.text === 'fromCharCode') {
+          const codes: number[] = [];
+          let allLiteral = true;
+          for (let i = 0; i < args.namedChildCount; i++) {
+            const arg = args.namedChild(i);
+            if (arg?.type === 'number') {
+              codes.push(parseInt(arg.text, 10));
+            } else {
+              allLiteral = false;
+              break;
+            }
+          }
+          if (allLiteral && codes.length > 0) {
+            return String.fromCharCode(...codes);
+          }
+        }
+      }
+      // atob('ZXZhbA==') → "eval" (base64 decode)
+      if (func.type === 'identifier' && func.text === 'atob') {
+        const firstArg = args.namedChild(0);
+        if (firstArg) {
+          const b64 = tryFoldConstant(firstArg);
+          if (b64 !== null) {
+            try {
+              return Buffer.from(b64, 'base64').toString('utf-8');
+            } catch { /* not valid base64 */ }
+          }
+        }
+      }
+      // Buffer.from([...], 'hex').toString() or Buffer.from('...', 'base64').toString()
+      // We handle the outer .toString() call — check if the inner is Buffer.from
+      if (func.type === 'member_expression') {
+        const innerObj = func.childForFieldName('object');
+        const method = func.childForFieldName('property');
+        if (method?.text === 'toString' && innerObj?.type === 'call_expression') {
+          const innerFunc = innerObj.childForFieldName('function');
+          const innerArgs = innerObj.childForFieldName('arguments');
+          if (innerFunc?.type === 'member_expression') {
+            const bufObj = innerFunc.childForFieldName('object');
+            const bufMethod = innerFunc.childForFieldName('property');
+            if (bufObj?.text === 'Buffer' && bufMethod?.text === 'from' && innerArgs) {
+              const firstArg = innerArgs.namedChild(0);
+              const secondArg = innerArgs.namedChild(1);
+              const encoding = secondArg ? tryFoldConstant(secondArg) : null;
+              if (firstArg && encoding) {
+                const data = tryFoldConstant(firstArg);
+                if (data !== null) {
+                  try {
+                    if (encoding === 'hex') return Buffer.from(data, 'hex').toString('utf-8');
+                    if (encoding === 'base64') return Buffer.from(data, 'base64').toString('utf-8');
+                  } catch { /* invalid encoding */ }
+                }
+              }
+            }
+          }
+        }
+      }
+      // [101,118,97,108].map(c => String.fromCharCode(c)).join('')
+      // Handle .join('') on the outer call — check for array.map(charcode).join pattern
+      if (func.type === 'member_expression') {
+        const joinObj = func.childForFieldName('object');
+        const joinMethod = func.childForFieldName('property');
+        if (joinMethod?.text === 'join' && joinObj?.type === 'call_expression') {
+          // Check if separator is empty string
+          const joinSep = args.namedChild(0);
+          const sep = joinSep ? tryFoldConstant(joinSep) : '';
+          if (sep !== null && sep === '') {
+            // Look inside for .map(c => String.fromCharCode(c))
+            const mapFunc = joinObj.childForFieldName('function');
+            if (mapFunc?.type === 'member_expression') {
+              const mapMethod = mapFunc.childForFieldName('property');
+              const arrayNode = mapFunc.childForFieldName('object');
+              if (mapMethod?.text === 'map' && arrayNode?.type === 'array') {
+                // Try to extract all numbers from the array
+                const codes: number[] = [];
+                let allNums = true;
+                for (let i = 0; i < arrayNode.namedChildCount; i++) {
+                  const el = arrayNode.namedChild(i);
+                  if (el?.type === 'number') {
+                    codes.push(parseInt(el.text, 10));
+                  } else {
+                    allNums = false;
+                    break;
+                  }
+                }
+                if (allNums && codes.length > 0) {
+                  // Check if the map callback is String.fromCharCode
+                  const mapArgs = joinObj.childForFieldName('arguments');
+                  const mapCallback = mapArgs?.namedChild(0);
+                  if (mapCallback) {
+                    const cbText = mapCallback.text;
+                    if (cbText.includes('fromCharCode') || cbText.includes('String.fromCharCode')) {
+                      return String.fromCharCode(...codes);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Resolve \xHH and \uHHHH escape sequences in strings
+function resolveEscapes(s: string): string {
+  return s
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\u\{([0-9a-fA-F]+)\}/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\');
+}
+
+// ---------------------------------------------------------------------------
 // AST Node Type Sets
 // ---------------------------------------------------------------------------
 
@@ -492,10 +670,15 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         if (reqCallee?.type === 'identifier' && reqCallee.text === 'require') {
           const reqArgs = valueNode.childForFieldName('arguments');
           const firstArg = reqArgs?.namedChild(0);
-          if (firstArg && (firstArg.type === 'string' || firstArg.type === 'template_string')) {
-            const moduleName = firstArg.text.replace(/^['"`]|['"`]$/g, '');
-            if (moduleName) {
-              aliasChain = [moduleName];
+          if (firstArg) {
+            // Direct string: require('child_process')
+            if (firstArg.type === 'string' || firstArg.type === 'template_string') {
+              const moduleName = firstArg.text.replace(/^['"`]|['"`]$/g, '');
+              if (moduleName) aliasChain = [moduleName];
+            } else {
+              // Concat folding: require('child_' + 'process') → 'child_process'
+              const folded = tryFoldConstant(firstArg);
+              if (folded) aliasChain = [folded];
             }
           }
         }
@@ -507,42 +690,7 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
     {
       const valueNode = declarator.childForFieldName('value');
       if (valueNode) {
-        const tryFold = (n: SyntaxNode): string | null => {
-          if (n.type === 'string' || n.type === 'string_fragment') {
-            return n.text.replace(/^['"`]|['"`]$/g, '');
-          }
-          if (n.type === 'template_string' && n.namedChildCount === 0) {
-            return n.text.replace(/^`|`$/g, '');
-          }
-          if (n.type === 'binary_expression') {
-            const op = n.childForFieldName('operator')?.text;
-            if (op === '+') {
-              const left = n.childForFieldName('left');
-              const right = n.childForFieldName('right');
-              if (left && right) {
-                const lv = tryFold(left);
-                const rv = tryFold(right);
-                if (lv !== null && rv !== null) return lv + rv;
-              }
-            }
-          }
-          if (n.type === 'parenthesized_expression') {
-            const inner = n.namedChild(0);
-            return inner ? tryFold(inner) : null;
-          }
-          // FIX 5: Ternary constant folding — cond ? 'a' : 'a' => 'a'
-          if (n.type === 'ternary_expression') {
-            const consequence = n.childForFieldName('consequence');
-            const alternative = n.childForFieldName('alternative');
-            if (consequence && alternative) {
-              const cv = tryFold(consequence);
-              const av = tryFold(alternative);
-              if (cv !== null && av !== null && cv === av) return cv;
-            }
-          }
-          return null;
-        };
-        const folded = tryFold(valueNode);
+        const folded = tryFoldConstant(valueNode);
         if (folded !== null) constantValue = folded;
       }
     }
@@ -1054,46 +1202,113 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
 
         // -- Computed property resolution: db[action](...) where action = "query" --
+        // Also handles inline concat: window['ev' + 'al'](...) → eval
         const computedCallee = node.childForFieldName('function');
         if (computedCallee?.type === 'subscript_expression') {
           const compObj = computedCallee.childForFieldName('object');
           const compIdx = computedCallee.childForFieldName('index');
-          if (compObj?.type === 'identifier' && compIdx?.type === 'identifier') {
+          // Try inline constant folding first: obj['ev' + 'al']()
+          let resolvedPropertyName: string | null = null;
+          if (compIdx) {
+            resolvedPropertyName = tryFoldConstant(compIdx);
+          }
+          // Fall back to variable lookup: const fn = 'eval'; obj[fn]()
+          if (!resolvedPropertyName && compObj?.type === 'identifier' && compIdx?.type === 'identifier') {
             const idxVar = ctx.resolveVariable(compIdx.text);
-            if (idxVar?.constantValue) {
-              const compChain = [compObj.text, idxVar.constantValue];
-              const compPattern = _lookupCallee(compChain);
-              if (compPattern) {
-                const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
-                const compN = createNode({
-                  label,
-                  node_type: compPattern.nodeType,
-                  node_subtype: compPattern.subtype,
-                  language: 'javascript',
-                  file: ctx.neuralMap.source_file,
-                  line_start: node.startPosition.row + 1,
-                  line_end: node.endPosition.row + 1,
-                  code_snapshot: node.text.slice(0, 200),
-                });
-                if (compPattern.nodeType === 'EXTERNAL' && compPattern.subtype === 'system_exec') {
-                  compN.attack_surface.push('command_injection');
+            if (idxVar?.constantValue) resolvedPropertyName = idxVar.constantValue;
+          }
+          if (compObj && resolvedPropertyName) {
+            // Also handle chained objects: extract chain from compObj
+            const objChain = compObj.type === 'identifier' ? [compObj.text] :
+              (compObj.type === 'member_expression' ? (() => {
+                const parts: string[] = [];
+                let cur: SyntaxNode | null = compObj;
+                while (cur?.type === 'member_expression') {
+                  const prop = cur.childForFieldName('property');
+                  if (prop) parts.unshift(prop.text);
+                  cur = cur.childForFieldName('object');
                 }
-                ctx.neuralMap.nodes.push(compN);
-                ctx.lastCreatedNodeId = compN.id;
-                ctx.emitContainsIfNeeded(compN.id);
-                const compArgs = node.childForFieldName('arguments');
-                if (compArgs) {
-                  for (let a = 0; a < compArgs.namedChildCount; a++) {
-                    const arg = compArgs.namedChild(a);
-                    if (!arg) continue;
-                    const taintSources = extractTaintSources(arg, ctx);
-                    for (const source of taintSources) {
-                      ctx.addDataFlow(source.nodeId, compN.id, source.name, 'unknown', true);
-                    }
+                if (cur?.type === 'identifier') parts.unshift(cur.text);
+                return parts;
+              })() : [compObj.text]);
+            const compChain = [...objChain, resolvedPropertyName];
+            const compPattern = _lookupCallee(compChain);
+            if (compPattern) {
+              const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
+              const compN = createNode({
+                label,
+                node_type: compPattern.nodeType,
+                node_subtype: compPattern.subtype,
+                language: 'javascript',
+                file: ctx.neuralMap.source_file,
+                line_start: node.startPosition.row + 1,
+                line_end: node.endPosition.row + 1,
+                code_snapshot: node.text.slice(0, 200),
+              });
+              if (compPattern.nodeType === 'EXTERNAL' && compPattern.subtype === 'system_exec') {
+                compN.attack_surface.push('command_injection');
+              }
+              ctx.neuralMap.nodes.push(compN);
+              ctx.lastCreatedNodeId = compN.id;
+              ctx.emitContainsIfNeeded(compN.id);
+              const compArgs = node.childForFieldName('arguments');
+              if (compArgs) {
+                for (let a = 0; a < compArgs.namedChildCount; a++) {
+                  const arg = compArgs.namedChild(a);
+                  if (!arg) continue;
+                  const taintSources = extractTaintSources(arg, ctx);
+                  for (const source of taintSources) {
+                    ctx.addDataFlow(source.nodeId, compN.id, source.name, 'unknown', true);
                   }
                 }
-                break;
               }
+              break;
+            }
+          }
+          // RUNTIME EVAL MARKER — constant folding failed, index is dynamic
+          // This is the handoff point: DST can't resolve this statically.
+          // If the index is tainted (user-controlled), flag it for runtime evaluation.
+          if (!resolvedPropertyName && compObj && compIdx) {
+            const idxTaint = extractTaintSources(compIdx, ctx);
+            if (idxTaint.length > 0) {
+              const dynNode = createNode({
+                label: node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text,
+                node_type: 'EXTERNAL',
+                node_subtype: 'dynamic_dispatch',
+                language: 'javascript',
+                file: ctx.neuralMap.source_file,
+                line_start: node.startPosition.row + 1,
+                line_end: node.endPosition.row + 1,
+                code_snapshot: node.text.slice(0, 200),
+              });
+              dynNode.tags.push('needs_runtime_eval', 'unresolved_callee');
+              dynNode.attack_surface.push('dynamic_dispatch');
+              dynNode.data_out.push({
+                name: 'result',
+                source: dynNode.id,
+                data_type: 'unknown',
+                tainted: true,
+                sensitivity: 'NONE',
+              });
+              ctx.neuralMap.nodes.push(dynNode);
+              ctx.lastCreatedNodeId = dynNode.id;
+              ctx.emitContainsIfNeeded(dynNode.id);
+              for (const source of idxTaint) {
+                ctx.addDataFlow(source.nodeId, dynNode.id, source.name, 'unknown', true);
+              }
+              // Also check arguments for taint
+              const dynArgs = node.childForFieldName('arguments');
+              if (dynArgs) {
+                for (let a = 0; a < dynArgs.namedChildCount; a++) {
+                  const arg = dynArgs.namedChild(a);
+                  if (!arg) continue;
+                  const argTaint = extractTaintSources(arg, ctx);
+                  for (const source of argTaint) {
+                    ctx.addDataFlow(source.nodeId, dynNode.id, source.name, 'unknown', true);
+                  }
+                }
+              }
+              break;
             }
           }
         }

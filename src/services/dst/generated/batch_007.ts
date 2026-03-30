@@ -123,13 +123,113 @@ export const verifyCWE415 = createTransformTransformVerifier(
     'Use RAII/smart pointers to automate lifetime management.',
 );
 
-export const verifyCWE416 = createTransformTransformVerifier(
-  'CWE-416', 'Use After Free', 'critical',
-  memoryTransformNodes, memoryTransformNodes, PTR_VALID_SAFE,
-  'CONTROL (pointer validity check — no dereference after free)',
-  'Nullify pointers after freeing. Check validity before dereference. ' +
-    'Use smart pointers (unique_ptr, shared_ptr) to prevent use-after-free.',
-);
+/**
+ * CWE-416: Use After Free (UPGRADED — hand-written quality)
+ *
+ * Detects patterns where memory is freed and then subsequently accessed.
+ *
+ * Dangerous pattern: a deallocation node (free/delete/close) is followed
+ * by a dereference/access node that uses the same pointer/handle, without
+ * an intervening nullification or validity check.
+ *
+ * Specific free operations:
+ *   - free(ptr), delete ptr, delete[] arr
+ *   - close(fd), fclose(fp)
+ *   - .destroy(), .dispose(), .release()
+ *   - Buffer deallocation, pool.release()
+ *
+ * Specific dangerous accesses after free:
+ *   - Pointer dereference: ptr->field, *ptr
+ *   - Array access: ptr[i]
+ *   - Method call on freed object: obj.method()
+ *   - Passing freed pointer to another function
+ *   - Read/write to fd after close
+ *
+ * Safe patterns:
+ *   - ptr = NULL / ptr = nullptr after free (nullification)
+ *   - if (ptr != NULL) check before access
+ *   - Smart pointers: unique_ptr, shared_ptr, weak_ptr
+ *   - RAII / try-with-resources / using statement
+ *   - Ref-counted pointers with release semantics
+ *   - WeakRef / WeakMap in JS (GC-safe references)
+ */
+export function verifyCWE416(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Find deallocation nodes (the "free" operation)
+  const freeNodes = map.nodes.filter(n =>
+    n.node_type === 'TRANSFORM' &&
+    (n.node_subtype.includes('free') || n.node_subtype.includes('dealloc') ||
+     n.node_subtype.includes('close') || n.node_subtype.includes('destroy') ||
+     n.code_snapshot.match(
+       /\b(free|delete|delete\s*\[\s*\]|fclose|close|destroy|dispose|release)\s*\(/i
+     ) !== null ||
+     n.code_snapshot.match(/\bdelete\s+\w/) !== null)
+  );
+
+  // Find access/dereference nodes (the "use" operation)
+  const accessNodes = map.nodes.filter(n =>
+    n.node_type === 'TRANSFORM' &&
+    (n.node_subtype.includes('memory') || n.node_subtype.includes('pointer') ||
+     n.node_subtype.includes('read') || n.node_subtype.includes('write') ||
+     n.node_subtype.includes('access') || n.node_subtype.includes('deref') ||
+     n.code_snapshot.match(
+       /->|(\*\s*\w+)|\[\s*\w+\s*\]|\.\w+\s*\(|memcpy|memmove|strcpy|read|write|fread|fwrite/i
+     ) !== null)
+  );
+
+  for (const freeNode of freeNodes) {
+    for (const useNode of accessNodes) {
+      if (freeNode.id === useNode.id) continue;
+      // The free must come before the use (check sequence order)
+      if (freeNode.sequence >= useNode.sequence) continue;
+
+      if (hasTaintedPathWithoutControl(map, freeNode.id, useNode.id)) {
+        const freeCode = freeNode.code_snapshot;
+        const useCode = useNode.code_snapshot;
+
+        // Safe: pointer nullified after free
+        const nullifiedAfterFree = /=\s*(NULL|nullptr|0|null)\b/i.test(freeCode) ||
+          /\bptr\s*=\s*(NULL|nullptr|null)\b/i.test(freeCode);
+
+        // Safe: null check before access
+        const nullChecked = /\bif\s*\(\s*\w+\s*[!=]==?\s*(NULL|nullptr|null|0)\b/i.test(useCode) ||
+          /\b\w+\s*[!=]==?\s*(NULL|nullptr|null)\b.*\?/i.test(useCode);
+
+        // Safe: smart pointer wrapping
+        const smartPointer = /\b(unique_ptr|shared_ptr|weak_ptr|auto_ptr|ComPtr|CComPtr|RefPtr)\b/i.test(useCode) ||
+          /\b(unique_ptr|shared_ptr|weak_ptr)\b/i.test(freeCode);
+
+        // Safe: RAII / try-with-resources / using
+        const raiiProtected = /\bRAII\b|\btry.*with.*resource\b|\busing\s*\(/i.test(useCode);
+
+        // Safe: WeakRef / WeakMap in JS
+        const weakRef = /\bWeakRef\b|\bWeakMap\b|\bWeakSet\b/i.test(useCode);
+
+        const isSafe = nullifiedAfterFree || nullChecked || smartPointer || raiiProtected || weakRef;
+
+        if (!isSafe) {
+          findings.push({
+            source: nodeRef(freeNode),
+            sink: nodeRef(useNode),
+            missing: 'CONTROL (pointer validity check — nullify after free, check before dereference, or use smart pointers)',
+            severity: 'critical',
+            description: `Memory freed at ${freeNode.label} (line ${freeNode.line_start}) is subsequently accessed at ` +
+              `${useNode.label} (line ${useNode.line_start}) without validity check. ` +
+              `The freed memory may be reallocated to another object, causing data corruption, ` +
+              `crashes, or exploitable code execution via heap manipulation.`,
+            fix: 'Set the pointer to NULL immediately after freeing: free(ptr); ptr = NULL; ' +
+              'Always check for NULL before dereferencing. Prefer smart pointers (std::unique_ptr, ' +
+              'std::shared_ptr) which enforce ownership semantics and prevent use-after-free. ' +
+              'In managed languages, avoid calling methods on disposed/closed objects.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-416', name: 'Use After Free', holds: findings.length === 0, findings };
+}
 
 export const verifyCWE466 = createTransformTransformVerifier(
   'CWE-466', 'Return of Pointer Value Outside of Expected Range', 'high',

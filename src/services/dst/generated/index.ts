@@ -1,6 +1,10 @@
 /**
  * DST Generated Verifiers — Index
  * Re-exports all generated verifier batches and provides a unified registry.
+ *
+ * All entries are real verifiers (graph-pattern BFS, can detect vulnerabilities).
+ * Stub CWEs (deprecated, categories, views, pillars, SFP clusters) have been
+ * removed — they inflated the count dishonestly.
  */
 
 export * from './_helpers';

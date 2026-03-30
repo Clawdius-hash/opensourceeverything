@@ -78,6 +78,44 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
 
   // RESOURCE — direct calls that consume finite shared capacity
   RegExp:                 { nodeType: 'RESOURCE',   subtype: 'cpu',           tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GraphQL — Apollo Server / GraphQL Yoga / graphql-tools
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // graphql-tag: gql`` template literal parses GraphQL query strings. Injection
+  // vector if template string is dynamically constructed from user input.
+  gql:                    { nodeType: 'TRANSFORM',  subtype: 'graphql_parse', tainted: false },
+
+  // Apollo Server / graphql-tools: composes type definitions + resolvers into a runnable schema.
+  makeExecutableSchema:   { nodeType: 'STRUCTURAL', subtype: 'schema_def',    tainted: false },
+
+  // GraphQL Yoga: createYoga() creates a Yoga server instance — framework entrypoint.
+  createYoga:             { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Next.js — server-side data fetching as phonemes
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // getServerSideProps runs server-side on every request. Its context parameter
+  // exposes context.req, context.query, context.params — all user-controlled.
+  getServerSideProps:     { nodeType: 'INGRESS',    subtype: 'http_request',  tainted: true },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Security middleware — express-session, helmet, cors
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // express-session: server-side session middleware. Security-critical config:
+  // secret (forgeable if weak), cookie.secure, cookie.httpOnly, cookie.sameSite.
+  session:                { nodeType: 'META',       subtype: 'session_config',    tainted: false },
+
+  // helmet(): sets HTTP security headers (CSP, HSTS, X-Frame-Options, etc.).
+  // Its absence is a vulnerability; its config defines transport-layer policy.
+  helmet:                 { nodeType: 'META',       subtype: 'security_headers',  tainted: false },
+
+  // cors(): controls cross-origin access. origin:'*' with credentials:true
+  // leaks credentials to any origin. Regex origin matching is often too permissive.
+  cors:                   { nodeType: 'META',       subtype: 'cors_config',       tainted: false },
 };
 
 // ── Member calls (object.method) ──────────────────────────────────────────
@@ -109,7 +147,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'res.send':             { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'res.json':             { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'res.render':           { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
-  'res.redirect':         { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+  'res.redirect':         { nodeType: 'EGRESS',     subtype: 'redirect',      tainted: false },
   'res.status':           { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'res.end':              { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'res.write':            { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
@@ -184,6 +222,14 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'crypto.pbkdf2':        { nodeType: 'TRANSFORM',  subtype: 'encrypt',       tainted: false },
   'crypto.scrypt':        { nodeType: 'TRANSFORM',  subtype: 'encrypt',       tainted: false },
 
+  // ── crypto.* DEPRECATED → EXTERNAL (no IV, broken key derivation) ──
+  'crypto.createCipher':  { nodeType: 'EXTERNAL',   subtype: 'deprecated_crypto', tainted: false },
+  'crypto.createDecipher':{ nodeType: 'EXTERNAL',   subtype: 'deprecated_crypto', tainted: false },
+
+  // ── crypto.* digital signatures → AUTH ──
+  'crypto.createSign':    { nodeType: 'AUTH',        subtype: 'signature',     tainted: false },
+  'crypto.createVerify':  { nodeType: 'AUTH',        subtype: 'signature',     tainted: false },
+
   // ── bcrypt.* → AUTH ──
   'bcrypt.compare':       { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
   'bcrypt.hash':          { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
@@ -195,6 +241,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'jwt.decode':           { nodeType: 'TRANSFORM',   subtype: 'parse',         tainted: false },
   'jsonwebtoken.sign':    { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
   'jsonwebtoken.verify':  { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
+
+  // ── passport.* → AUTH / STRUCTURAL ──
+  'passport.authenticate': { nodeType: 'AUTH',       subtype: 'authenticate',  tainted: false },
+  'passport.use':          { nodeType: 'STRUCTURAL', subtype: 'auth_config',   tainted: false },
 
   // ── http/https.* → EXTERNAL ──
   'http.request':         { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
@@ -210,10 +260,19 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'axios.patch':          { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
   'axios.request':        { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
 
-  // ── window.* → EXTERNAL / EGRESS ──
+  // ── needle.* → EXTERNAL (Node.js HTTP client — SSRF vector) ──
+  'needle.get':           { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
+  'needle.post':          { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
+  'needle.put':           { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
+  'needle.request':       { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
+
+  // ── window.* → EXTERNAL / EGRESS / INGRESS ──
   'window.fetch':         { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
   'window.open':          { nodeType: 'EXTERNAL',    subtype: 'api_call',      tainted: false },
   'window.alert':         { nodeType: 'EGRESS',      subtype: 'display',       tainted: false },
+  // postMessage LISTENER — the receiving side. event.data is attacker-controlled
+  // unless event.origin is validated. CWE-345.
+  'window.addEventListener': { nodeType: 'INGRESS',  subtype: 'postmessage',   tainted: true },
 
   // ── XML parsing sinks (XXE vectors) ──
   'libxmljs.parseXmlString': { nodeType: 'TRANSFORM', subtype: 'xml_parse',     tainted: false },
@@ -316,7 +375,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'reply.header':         { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'reply.headers':        { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'reply.type':           { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
-  'reply.redirect':       { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+  'reply.redirect':       { nodeType: 'EGRESS',     subtype: 'redirect',      tainted: false },
   'reply.serialize':      { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'reply.raw':            { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'reply.hijack':         { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
@@ -365,7 +424,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'ctx.status':           { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'ctx.type':             { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'ctx.set':              { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
-  'ctx.redirect':         { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+  'ctx.redirect':         { nodeType: 'EGRESS',     subtype: 'redirect',      tainted: false },
   'ctx.attachment':       { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'ctx.throw':            { nodeType: 'CONTROL',    subtype: 'guard',         tainted: false },
   'ctx.assert':           { nodeType: 'CONTROL',    subtype: 'guard',         tainted: false },
@@ -435,7 +494,71 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // NestJS typically uses Express under the hood, so req.*/res.* already work.
   // But NestJS also has its own response patterns:
   'response.status':      { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
-  'response.redirect':    { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+  'response.redirect':    { nodeType: 'EGRESS',     subtype: 'redirect',      tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FRAMEWORK: Hono
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Hono handlers receive a Context `c`. c.req wraps the Request; c.json/c.text/c.html
+  // are response helpers. c.req.query()/c.req.param()/c.req.json() return user-controlled input.
+  // NOTE: c.req.query → caught by existing req.query via last-two fallback.
+  //       c.req.header → caught by existing req.header via last-two fallback.
+
+  // ── Hono c.req.* → INGRESS (patterns not caught by Express req.* fallback) ──
+  'req.param':            { nodeType: 'INGRESS',    subtype: 'http_request',  tainted: true },
+  'req.json':             { nodeType: 'INGRESS',    subtype: 'http_body',     tainted: true },
+  'req.parseBody':        { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+
+  // ── Hono c.* → EGRESS (response helpers) ──
+  'c.json':               { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+  'c.text':               { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+  'c.html':               { nodeType: 'EGRESS',     subtype: 'xss_sink',     tainted: false },
+  'c.redirect':           { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
+
+  // ── Hono app.use → STRUCTURAL ──
+  'hono.use':             { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RUNTIME: Bun
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Bun replaces Node's fs and child_process with built-in APIs.
+
+  'Bun.file':             { nodeType: 'INGRESS',    subtype: 'file_read',     tainted: false },
+  'Bun.spawn':            { nodeType: 'EXTERNAL',   subtype: 'system_exec',   tainted: false },
+  'Bun.write':            { nodeType: 'EGRESS',     subtype: 'file_write',    tainted: false },
+  'Bun.serve':            { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RUNTIME: Deno
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Deno's permission model is defense-in-depth but does NOT prevent misuse
+  // once permissions are granted.
+
+  'Deno.readTextFile':    { nodeType: 'INGRESS',    subtype: 'file_read',     tainted: false },
+  'Deno.Command':         { nodeType: 'EXTERNAL',   subtype: 'system_exec',   tainted: false },
+  'Deno.writeTextFile':   { nodeType: 'EGRESS',     subtype: 'file_write',    tainted: false },
+  'Deno.serve':           { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
+  'Deno.env':             { nodeType: 'INGRESS',    subtype: 'env_read',      tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FRAMEWORK: GraphQL (Apollo Server / GraphQL Yoga)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GraphQL resolvers receive (parent, args, context, info). context.req is the
+  // raw HTTP request — user-controlled headers, cookies, IP.
+
+  'context.req':          { nodeType: 'INGRESS',    subtype: 'http_request',  tainted: true },
+  'graphql.execute':      { nodeType: 'EXTERNAL',   subtype: 'graphql_exec',  tainted: false },
+  'ApolloServer.start':   { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
+  'server.applyMiddleware': { nodeType: 'STRUCTURAL', subtype: 'route_def',   tainted: false },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ORM: Prisma — unsafe raw query variants (explicit member calls)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // $queryRawUnsafe and $executeRawUnsafe accept raw string interpolation
+  // (no tagged template protection) — #1 SQL injection vector in Prisma codebases.
+
+  'prisma.$queryRawUnsafe':   { nodeType: 'STORAGE', subtype: 'db_read',     tainted: false },
+  'prisma.$executeRawUnsafe': { nodeType: 'STORAGE', subtype: 'db_write',    tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RESOURCE — finite shared capacity that data flows compete for
@@ -635,6 +758,12 @@ const NON_DB_OBJECTS = new Set([
   'NextResponse', 'NextRequest', 'nextReq', 'nextRes',
   // NestJS objects
   'controller', 'service', 'guard', 'pipe', 'interceptor', 'module',
+  // Hono objects
+  'c', 'hono',
+  // Bun / Deno runtime objects
+  'Bun', 'Deno',
+  // GraphQL / Apollo objects
+  'graphql', 'ApolloServer', 'yoga',
   // Generic non-DB
   'this', 'self', 'event', 'e',
   // Array-like variable names

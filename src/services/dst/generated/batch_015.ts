@@ -192,7 +192,82 @@ export const verifyCWE308 = v('CWE-308', 'Use of Single-factor Authentication', 
 // ===========================================================================
 
 // TRANSFORM→AUTH without CONTROL (3)
-export const verifyCWE330 = v('CWE-330', 'Use of Insufficiently Random Values', 'high', 'TRANSFORM', 'AUTH', nC, /\bcrypto\.random\b|\brandomBytes\b|\bCSPRNG\b/i, 'CONTROL (CSPRNG for security-critical random values)', 'Use crypto.randomBytes or getRandomValues for tokens and keys. Never use Math.random.');
+/**
+ * CWE-330: Use of Insufficiently Random Values
+ * UPGRADED — hand-written with specific source and sink filters.
+ *
+ * Pattern: A TRANSFORM node uses a weak random function (Math.random,
+ * random.randint, rand(), srand, etc.) and the output flows to an AUTH
+ * node that uses it for security-critical purposes (tokens, session IDs,
+ * passwords, nonces, CSRF tokens, encryption keys).
+ *
+ * The generic version checked ALL TRANSFORM -> ALL AUTH without CONTROL.
+ * The upgraded version:
+ *   - Sources: TRANSFORM nodes whose code uses weak random functions
+ *   - Sinks: AUTH nodes using the value for security purposes
+ *   - Safe patterns: crypto.randomBytes, crypto.getRandomValues, CSPRNG,
+ *     uuid.v4 (which uses crypto internally), secrets module (Python)
+ */
+export const verifyCWE330 = (function() {
+  // Weak random sources — these are NOT cryptographically secure
+  const WEAK_RANDOM = /\bMath\.random\b|\brandom\.randint\b|\brandom\.random\b|\brandom\.choice\b|\brand\(\)|\bsrand\b|\bmt_rand\b|\barray_rand\b|\bRandom\(\)\.next\b|\bRandom\.Next\b|\bjava\.util\.Random\b|\bThreadLocalRandom\b/i;
+
+  // Strong random — if present, this is safe
+  const STRONG_RANDOM = /\bcrypto\.randomBytes\b|\bcrypto\.getRandomValues\b|\brandomBytes\b|\bgetRandomValues\b|\bcrypto\.randomUUID\b|\buuid\.v4\b|\bsecrets\.\b|\bcrypto\.randomInt\b|\bSecureRandom\b|\bRandomNumberGenerator\b|\bos\.urandom\b|\bCSPRNG\b|\bcrypto\/rand\b|\brand\.Read\b/i;
+
+  // Security-critical sinks where randomness matters
+  const SECURITY_SINK = /\btoken\b|\bsession\b|\bnonce\b|\bcsrf\b|\bsalt\b|\bkey\b|\biv\b|\bsecret\b|\bpassword\b|\breset\b.*\blink\b|\bverification\b.*\bcode\b|\botp\b/i;
+
+  return (map: NeuralMap): VerificationResult => {
+    const findings: Finding[] = [];
+
+    // Sources: TRANSFORM nodes using weak random
+    const weakRandomSources = map.nodes.filter(n =>
+      n.node_type === 'TRANSFORM' &&
+      WEAK_RANDOM.test(n.code_snapshot) &&
+      !STRONG_RANDOM.test(n.code_snapshot)
+    );
+
+    // Sinks: AUTH nodes used for security-critical purposes
+    const securitySinks = map.nodes.filter(n =>
+      n.node_type === 'AUTH' &&
+      SECURITY_SINK.test(n.code_snapshot)
+    );
+
+    for (const src of weakRandomSources) {
+      for (const sink of securitySinks) {
+        if (src.id === sink.id) continue;
+        if (nC(map, src.id, sink.id)) {
+          // Double-check: is there a CONTROL node that upgrades the randomness?
+          const hasUpgrade = map.nodes.some(n =>
+            n.node_type === 'CONTROL' &&
+            STRONG_RANDOM.test(n.code_snapshot)
+          );
+
+          if (!hasUpgrade) {
+            const weakFunc = src.code_snapshot.match(WEAK_RANDOM);
+            const weakName = weakFunc ? weakFunc[0] : 'weak random function';
+
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'CONTROL (cryptographically secure random number generator)',
+              severity: 'high',
+              description: `Weak random function "${weakName}" at ${src.label} generates values used ` +
+                `for security at ${sink.label}. ${weakName} is predictable — an attacker can ` +
+                `reproduce the sequence and forge tokens, session IDs, or keys.`,
+              fix: 'Replace Math.random() with crypto.randomBytes() or crypto.getRandomValues(). ' +
+                'In Python, use the secrets module. In Java, use SecureRandom. ' +
+                'In Go, use crypto/rand. Never use Math.random for security-critical values.',
+            });
+          }
+        }
+      }
+    }
+
+    return { cwe: 'CWE-330', name: 'Use of Insufficiently Random Values', holds: findings.length === 0, findings };
+  };
+})();
 export const verifyCWE331 = v('CWE-331', 'Insufficient Entropy', 'high', 'TRANSFORM', 'AUTH', nC, /\bentropy\b|\brandomBytes\b|\bsufficient.*random\b/i, 'CONTROL (sufficient entropy for random values)', 'Ensure sufficient entropy for security-critical random generation.');
 export const verifyCWE334 = v('CWE-334', 'Small Space of Random Values', 'high', 'TRANSFORM', 'AUTH', nC, /\b(128|256)\b.*\bbit\b|\bUUID\b|\blong.*random\b/i, 'CONTROL (sufficient random value space — 128+ bits)', 'Use 128+ bits for random tokens. Small spaces are brute-forceable.');
 

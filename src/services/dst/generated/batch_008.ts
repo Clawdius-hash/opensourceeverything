@@ -95,14 +95,122 @@ export const verifyCWE181 = createGenericVerifier(
     'crafted input to pass validation, then be altered by filtering into a dangerous form.',
 );
 
-export const verifyCWE182 = createGenericVerifier(
-  'CWE-182', 'Collapse of Data into Unsafe Value', 'high',
-  egressNodes,
-  /\bcollapse\b.*\bcheck\b|\bpost.*filter.*valid\b|\bafter.*sanitize.*check\b/i,
-  'CONTROL (post-collapse validation — check value after filtering)',
-  'Re-validate data after filtering/collapsing operations. Removing characters from input ' +
-    'can cause the remaining string to form a dangerous value (e.g., "scr"+"ipt" → "script").',
-);
+/**
+ * CWE-182: Collapse of Data into Unsafe Value (UPGRADED — hand-written quality)
+ *
+ * Detects when user input passes through a filter/sanitizer that removes
+ * characters, but the result is NOT re-validated. Character removal can
+ * cause the remaining string to collapse into a dangerous value.
+ *
+ * Classic examples:
+ *   - Input: "<scr<script>ipt>" → filter removes "<script>" inner tag →
+ *     remaining: "<script>" — XSS
+ *   - Input: "..%2f..%2f" → filter removes "%2f" → remaining: "../../" — path traversal
+ *   - Input: "javajavascript:script:" → filter removes "javascript:" →
+ *     remaining: "javascript:" — XSS via protocol
+ *   - Input: "SESELECTLECT" → filter removes "SELECT" → remaining: "SELECT" — SQLi
+ *
+ * Dangerous pattern: A TRANSFORM (filter/sanitize) that REMOVES characters,
+ * followed by an EGRESS, with no CONTROL node re-validating the output
+ * after the filter.
+ *
+ * Specifically dangerous filter operations:
+ *   - .replace() with empty string (removal, not encoding)
+ *   - .replace(/pattern/g, '') — global removal
+ *   - strip(), stripTags(), removeTags()
+ *   - filter() that drops characters
+ *
+ * Safe patterns:
+ *   - Re-validation AFTER filtering (second pass check)
+ *   - Encoding instead of removal (escapeHtml vs stripTags)
+ *   - Recursive/iterative filtering until no changes
+ *   - Allowlist-based filtering (keep only good chars, not remove bad)
+ *   - DOMPurify (handles recursive sanitization internally)
+ *   - Loop: while (input !== sanitize(input)) input = sanitize(input)
+ */
+export function verifyCWE182(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Find TRANSFORM nodes that REMOVE characters (not encode them)
+  const removalFilters = map.nodes.filter(n =>
+    n.node_type === 'TRANSFORM' &&
+    (n.code_snapshot.match(
+      /\.replace\s*\([^,]+,\s*['"]\s*['"]\s*\)/i  // .replace(pattern, '')
+    ) !== null ||
+    n.code_snapshot.match(
+      /\b(strip|stripTags|removeTags|removeScripts|blacklist|filter)\s*\(/i
+    ) !== null ||
+    n.node_subtype.includes('filter') || n.node_subtype.includes('strip') ||
+    n.node_subtype.includes('remove'))
+  );
+
+  // EGRESS nodes where the collapsed output is sent
+  const egress = egressNodes(map);
+
+  for (const src of ingress) {
+    for (const filter of removalFilters) {
+      // Input must reach the removal filter
+      const inputReachesFilter = hasTaintedPathWithoutControl(map, src.id, filter.id);
+      if (!inputReachesFilter) continue;
+
+      for (const sink of egress) {
+        // Filter output must reach egress
+        const filterReachesOutput = hasTaintedPathWithoutControl(map, filter.id, sink.id);
+        if (!filterReachesOutput) continue;
+
+        const filterCode = filter.code_snapshot;
+        const sinkCode = sink.code_snapshot;
+
+        // Safe: uses encoding instead of removal
+        const usesEncoding = /\b(encode|escape|encodeURI|encodeURIComponent|htmlEncode|escapeHtml|he\.encode)\s*\(/i.test(filterCode);
+
+        // Safe: recursive/iterative filtering (loop until clean)
+        const recursiveFilter = /\bwhile\b.*\breplace\b|\bdo\b.*\breplace\b|\bloop\b.*\bsanitize\b/i.test(filterCode) ||
+          /\brecursive\b|\biterative\b|\brepeat\b/i.test(filterCode);
+
+        // Safe: post-filter validation exists
+        const postFilterValidation = /\bafter.*valid\b|\bpost.*check\b|\bre-?valid/i.test(sinkCode) ||
+          /\bvalidate\b|\bcheck\b|\bassert\b/i.test(sinkCode);
+
+        // Safe: allowlist-based (keeps only good chars, doesn't try to remove bad)
+        const allowlistFilter = /\ballowlist\b|\bwhitelist\b|\b\/\[\^a-z/i.test(filterCode) ||
+          /\.match\s*\(\s*\/\[a-z/i.test(filterCode);
+
+        // Safe: DOMPurify or similar library that handles recursive sanitization
+        const libraryClean = /\bDOMPurify\b|\bsanitize-html\b|\bbleach\b|\bclean\(/i.test(filterCode);
+
+        const isSafe = usesEncoding || recursiveFilter || postFilterValidation ||
+          allowlistFilter || libraryClean;
+
+        if (!isSafe) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (post-collapse re-validation — verify the filtered output is safe after character removal)',
+            severity: 'high',
+            description: `User input from ${src.label} passes through character-removal filter at ${filter.label} ` +
+              `then reaches output at ${sink.label} without re-validation. ` +
+              `Removing characters can cause the remaining string to collapse into a dangerous value ` +
+              `(e.g., "<scr<script>ipt>" → strip inner "<script>" → "<script>").`,
+            fix: 'Prefer encoding over removal: use escapeHtml() instead of stripTags(). ' +
+              'If removal is necessary, apply the filter recursively until no changes occur: ' +
+              'while (input !== sanitize(input)) input = sanitize(input). ' +
+              'Or use an allowlist approach: keep only known-good characters instead of removing known-bad ones. ' +
+              'Libraries like DOMPurify handle this correctly by design.',
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-182',
+    name: 'Collapse of Data into Unsafe Value',
+    holds: findings.length === 0,
+    findings,
+  };
+}
 
 export const verifyCWE326 = createGenericVerifier(
   'CWE-326', 'Inadequate Encryption Strength', 'high',

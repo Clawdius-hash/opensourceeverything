@@ -70,16 +70,69 @@ const nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONT
 // Severity: medium | OWASP A01:2021 | SANS Top 25
 // ===========================================================================
 
-export const verifyCWE601 = v(
-  'CWE-601',
-  'URL Redirection to Untrusted Site (Open Redirect)',
-  'medium',
-  'INGRESS', 'EGRESS',
-  nC,
-  /\ballowlist\b|\bwhitelist\b|\ballowed.*url\b|\bsame.*origin\b|\burl.*valid\b|\bnew URL\(.*\)\.host\b|\bstartsWith\(["']\/\b/i,
-  'CONTROL (URL allowlist validation before redirect)',
-  'Validate redirect URLs against an allowlist of trusted domains. Reject absolute URLs to external sites. Use relative paths where possible.',
-);
+// CWE-601: Open Redirect
+// Hand-written: detects user-controlled URL parameters reaching redirect/location sinks
+// without allowlist validation. Distinguishes relative-path (safe) from absolute URL
+// (dangerous). Knows about res.redirect, Location header, window.location, meta refresh.
+export const verifyCWE601 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+
+  // Sources: user input that could contain URLs
+  const urlInputs = nodesOfType(map, 'INGRESS').filter(n =>
+    n.node_subtype.includes('query') || n.node_subtype.includes('param') ||
+    n.node_subtype.includes('url') || n.node_subtype.includes('header') ||
+    n.attack_surface.includes('user_input') || n.attack_surface.includes('url_input') ||
+    n.code_snapshot.match(
+      /\b(req\.query|req\.params|req\.body|request\.args|request\.form|request\.GET|searchParams|url|redirect|next|return_?to|goto|target|dest|forward|continue|callback)\b/i
+    ) !== null
+  );
+
+  // Sinks: redirect operations
+  const redirectSinks = map.nodes.filter(n =>
+    (n.node_type === 'EGRESS' || n.node_type === 'TRANSFORM') &&
+    (n.node_subtype.includes('redirect') || n.node_subtype.includes('location') ||
+     n.attack_surface.includes('redirect') ||
+     n.code_snapshot.match(
+       /\b(res\.redirect|response\.redirect|redirect|Location\s*[=:]|window\.location|document\.location|meta.*refresh|header\s*\(\s*['"]Location)/i
+     ) !== null)
+  );
+
+  // Safe patterns: allowlist check, relative-path enforcement, same-origin check
+  const safeRedirect = (code: string): boolean =>
+    /\ballowlist\b|\bwhitelist\b|\ballowed[_-]?(?:urls?|domains?|hosts?)\b/i.test(code) ||
+    /\bstartsWith\s*\(\s*['"]\/[^\/]/i.test(code) ||         // starts with / but not //
+    /\bnew URL\b.*\.(?:host|origin|hostname)\b/i.test(code) || // URL parsing + host check
+    /\bsame[_-]?origin\b|\burl\.parse\b.*\bhost\b/i.test(code) ||
+    /\brelative[_-]?path\b|\bpath\.resolve\b/i.test(code);
+
+  for (const src of urlInputs) {
+    for (const sink of redirectSinks) {
+      if (src.id === sink.id) continue;
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        if (!safeRedirect(sink.code_snapshot) && !safeRedirect(src.code_snapshot)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (URL allowlist or relative-path enforcement before redirect)',
+            severity: 'medium',
+            description: `User input from ${src.label} controls redirect destination at ${sink.label}. ` +
+              `Attackers can craft URLs like ?next=https://evil.com to phish users via your domain.`,
+            fix: 'Validate redirect URLs against an allowlist of trusted domains. ' +
+              'Use relative paths only: if (!url.startsWith("/") || url.startsWith("//")) reject. ' +
+              'Parse with new URL() and check .hostname against allowed origins.',
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-601',
+    name: 'URL Redirection to Untrusted Site (Open Redirect)',
+    holds: findings.length === 0,
+    findings,
+  };
+};
 
 // ===========================================================================
 // CWE-613: Insufficient Session Expiration

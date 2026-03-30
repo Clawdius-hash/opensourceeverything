@@ -1,14 +1,14 @@
 {
-  "timestamp": "2026-03-28T16:01:20.311Z",
+  "timestamp": "2026-03-29T22:37:31.446Z",
   "summary": {
-    "totalRegistered": 649,
+    "totalRegistered": 1023,
     "scenariosTested": 176,
-    "cweFired": 629,
-    "pass": 629,
-    "falsePos": 0,
-    "neverFired": 20,
-    "coverage": "96.9%",
-    "passRate": "100.0%"
+    "cweFired": 674,
+    "pass": 654,
+    "falsePos": 20,
+    "neverFired": 349,
+    "coverage": "65.9%",
+    "passRate": "97.0%"
   },
   "results": {
     "CWE-5": {
@@ -60,6 +60,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-13": {
+      "name": "ASP.NET Misconfiguration: Password in Configuration File",
+      "scenario": "storage_storage_no_auth",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-14": {
       "name": "Compiler Removal of Code to Clear Buffers",
       "scenario": "storage_transform_no_control",
@@ -70,6 +77,13 @@
     "CWE-15": {
       "name": "External Control of System or Configuration Setting",
       "scenario": "ingress_meta_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-20": {
+      "name": "Improper Input Validation",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -510,7 +524,7 @@
     },
     "CWE-89": {
       "name": "SQL Injection",
-      "scenario": "sql_injection",
+      "scenario": "storage_no_auth",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -524,7 +538,7 @@
     },
     "CWE-91": {
       "name": "XML Injection",
-      "scenario": "xml_parse",
+      "scenario": "expression_eval",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -566,14 +580,14 @@
     },
     "CWE-98": {
       "name": "PHP Remote File Inclusion",
-      "scenario": "include_file",
+      "scenario": "file_include",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
     },
     "CWE-99": {
-      "name": "Improper Control of Resource Identifiers (Resource Injection)",
-      "scenario": "command_injection_no_transform",
+      "name": "Resource Injection",
+      "scenario": "resource_alloc",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -613,6 +627,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-107": {
+      "name": "Struts: Unused Validation Form",
+      "scenario": "meta_ingress_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
     "CWE-108": {
       "name": "Struts: Unverified Action Form",
       "scenario": "data_parse",
@@ -643,7 +664,7 @@
     },
     "CWE-113": {
       "name": "HTTP Response Splitting",
-      "scenario": "file_read_path_traversal",
+      "scenario": "header_injection",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -662,6 +683,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-116": {
+      "name": "Improper Encoding or Escaping of Output",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-117": {
       "name": "Improper Output Neutralization for Logs",
       "scenario": "log_write",
@@ -672,6 +700,13 @@
     "CWE-118": {
       "name": "Improper Access of Indexable Resource (Range Error)",
       "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-119": {
+      "name": "Improper Restriction of Operations within the Bounds of a Memory Buffer",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -713,21 +748,21 @@
     },
     "CWE-125": {
       "name": "Out-of-bounds Read",
-      "scenario": "transform_buffer",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
     },
     "CWE-126": {
       "name": "Buffer Over-read",
-      "scenario": "transform_buffer",
+      "scenario": "buffer_alloc",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
     },
     "CWE-127": {
       "name": "Buffer Under-read",
-      "scenario": "transform_buffer",
+      "scenario": "buffer_alloc",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -748,7 +783,7 @@
     },
     "CWE-131": {
       "name": "Incorrect Calculation of Buffer Size",
-      "scenario": "transform_memory",
+      "scenario": "memcpy",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -979,7 +1014,7 @@
     },
     "CWE-170": {
       "name": "Improper Null Termination",
-      "scenario": "transform_memory",
+      "scenario": "memcpy",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1014,7 +1049,7 @@
     },
     "CWE-176": {
       "name": "Improper Handling of Unicode Encoding",
-      "scenario": "command_injection_no_transform",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1035,13 +1070,6 @@
     },
     "CWE-181": {
       "name": "Incorrect Behavior Order: Validate Before Filter",
-      "scenario": "file_read_path_traversal",
-      "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
-    },
-    "CWE-182": {
-      "name": "Collapse of Data into Unsafe Value",
       "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
@@ -1203,7 +1231,14 @@
     },
     "CWE-208": {
       "name": "Observable Timing Discrepancy",
-      "scenario": "auth_no_control",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-209": {
+      "name": "Generation of Error Message Containing Sensitive Information",
+      "scenario": "control_egress_no_transform",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1432,6 +1467,20 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-250": {
+      "name": "Execution with Unnecessary Privileges",
+      "scenario": "client_side_enforcement",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-252": {
+      "name": "Unchecked Return Value",
+      "scenario": "external_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
     "CWE-256": {
       "name": "Plaintext Storage of a Password",
       "scenario": "auth_storage_no_transform",
@@ -1498,6 +1547,13 @@
     "CWE-268": {
       "name": "Privilege Chaining",
       "scenario": "auth_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-269": {
+      "name": "Improper Privilege Management",
+      "scenario": "auth_external_no_control",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1579,8 +1635,22 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-284": {
+      "name": "Improper Access Control",
+      "scenario": "global_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-285": {
       "name": "Improper Authorization",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-287": {
+      "name": "Improper Authentication",
       "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
@@ -1595,6 +1665,13 @@
     },
     "CWE-289": {
       "name": "Authentication Bypass by Alternate Name",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-290": {
+      "name": "Authentication Bypass by Spoofing",
       "scenario": "auth_no_control",
       "vulnHolds": false,
       "safeHolds": true,
@@ -1617,6 +1694,13 @@
     "CWE-294": {
       "name": "Authentication Bypass by Capture-replay",
       "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-295": {
+      "name": "Improper Certificate Validation",
+      "scenario": "external_storage_no_control",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1691,9 +1775,16 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-307": {
+      "name": "Improper Restriction of Excessive Authentication Attempts",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-308": {
       "name": "Use of Single-factor Authentication",
-      "scenario": "ingress_auth_no_auth",
+      "scenario": "auth_transform_no_control",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1701,6 +1792,20 @@
     "CWE-309": {
       "name": "Use of Password System for Primary Authentication",
       "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-311": {
+      "name": "Missing Encryption of Sensitive Data",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-312": {
+      "name": "Cleartext Storage of Sensitive Information",
+      "scenario": "credential_store",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -1747,6 +1852,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-319": {
+      "name": "Cleartext Transmission of Sensitive Information",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-321": {
       "name": "Use of Hard-coded Cryptographic Key",
       "scenario": "meta_transform_no_control",
@@ -1789,6 +1901,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-327": {
+      "name": "Use of a Broken or Risky Cryptographic Algorithm",
+      "scenario": "transform_buffer",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-328": {
       "name": "Use of Weak Hash",
       "scenario": "weak_hash",
@@ -1807,8 +1926,8 @@
       "name": "Use of Insufficiently Random Values",
       "scenario": "transform_auth_no_control",
       "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
     },
     "CWE-331": {
       "name": "Insufficient Entropy",
@@ -1922,6 +2041,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-347": {
+      "name": "Improper Verification of Cryptographic Signature",
+      "scenario": "external_transform_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-348": {
       "name": "Use of Less Trusted Source",
       "scenario": "auth_no_control",
@@ -2027,13 +2153,6 @@
       "safeHolds": true,
       "status": "PASS"
     },
-    "CWE-367": {
-      "name": "Time-of-check Time-of-use (TOCTOU) Race Condition",
-      "scenario": "control_transform_toctou",
-      "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
-    },
     "CWE-368": {
       "name": "Context Switching Race Condition",
       "scenario": "auth_control_no_control",
@@ -2055,6 +2174,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-372": {
+      "name": "Incomplete Internal State Distinction",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
     "CWE-374": {
       "name": "Passing Mutable Objects to an Untrusted Method",
       "scenario": "storage_external_no_auth",
@@ -2071,10 +2197,10 @@
     },
     "CWE-377": {
       "name": "Insecure Temporary File",
-      "scenario": "transform_file",
+      "scenario": "transform_coredump",
       "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
     },
     "CWE-378": {
       "name": "Creation of Temporary File With Insecure Permissions",
@@ -2097,6 +2223,20 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-383": {
+      "name": "J2EE Bad Practices: Direct Use of Threads",
+      "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-384": {
+      "name": "Session Fixation",
+      "scenario": "auth_storage_no_transform",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-385": {
       "name": "Covert Timing Channel",
       "scenario": "file_read_path_traversal",
@@ -2114,6 +2254,13 @@
     "CWE-390": {
       "name": "Detection of Error Condition Without Action",
       "scenario": "control_transform_toctou",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-391": {
+      "name": "Unchecked Error Condition",
+      "scenario": "transform_external_no_control",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2155,6 +2302,13 @@
     },
     "CWE-397": {
       "name": "Declaration of Throws for Generic Exception",
+      "scenario": "data_parse",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-400": {
+      "name": "Uncontrolled Resource Consumption",
       "scenario": "data_parse",
       "vulnHolds": false,
       "safeHolds": true,
@@ -2204,7 +2358,7 @@
     },
     "CWE-407": {
       "name": "Inefficient Algorithmic Complexity",
-      "scenario": "regex_user_pattern",
+      "scenario": "eval_exec",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2253,13 +2407,6 @@
     },
     "CWE-415": {
       "name": "Double Free",
-      "scenario": "transform_memory",
-      "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
-    },
-    "CWE-416": {
-      "name": "Use After Free",
       "scenario": "transform_memory",
       "vulnHolds": false,
       "safeHolds": true,
@@ -2351,7 +2498,7 @@
     },
     "CWE-436": {
       "name": "Interpretation Conflict",
-      "scenario": "interpretation_conflict",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2491,7 +2638,7 @@
     },
     "CWE-464": {
       "name": "Addition of Data Structure Sentinel",
-      "scenario": "file_readdir",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2525,8 +2672,8 @@
       "status": "PASS"
     },
     "CWE-470": {
-      "name": "Unsafe Reflection",
-      "scenario": "reflection_load",
+      "name": "Use of Externally-Controlled Input in Unsafe Reflection",
+      "scenario": "new_function",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2562,6 +2709,13 @@
     "CWE-475": {
       "name": "Undefined Behavior for Input to API",
       "scenario": "transform_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-476": {
+      "name": "NULL Pointer Dereference",
+      "scenario": "external_storage_no_control",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2811,6 +2965,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-522": {
+      "name": "Insufficiently Protected Credentials",
+      "scenario": "cleartext_persist",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-523": {
       "name": "Unprotected Transport of Credentials",
       "scenario": "file_read_path_traversal",
@@ -2821,6 +2982,13 @@
     "CWE-524": {
       "name": "Use of Cache Containing Sensitive Information",
       "scenario": "transform_cache_sensitive",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-525": {
+      "name": "Use of Web Browser Cache Containing Sensitive Information",
+      "scenario": "data_parse",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -2863,13 +3031,6 @@
     "CWE-531": {
       "name": "Inclusion of Sensitive Information in Test Code",
       "scenario": "structural_egress_no_transform",
-      "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
-    },
-    "CWE-532": {
-      "name": "Insertion of Sensitive Information into Log File",
-      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3282,7 +3443,7 @@
     },
     "CWE-602": {
       "name": "Client-Side Enforcement of Server-Side Security",
-      "scenario": "client_side_security",
+      "scenario": "file_write_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3331,14 +3492,14 @@
     },
     "CWE-610": {
       "name": "Externally Controlled Reference to a Resource in Another Sphere",
-      "scenario": "command_injection_no_transform",
+      "scenario": "file_include",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
     },
     "CWE-611": {
       "name": "XML External Entity (XXE)",
-      "scenario": "xml_parse",
+      "scenario": "xpath_query",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3346,6 +3507,20 @@
     "CWE-612": {
       "name": "Improper Authorization of Index Containing Sensitive Information",
       "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-613": {
+      "name": "Insufficient Session Expiration",
+      "scenario": "storage_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-614": {
+      "name": "Sensitive Cookie Without 'Secure' Attribute",
+      "scenario": "data_parse",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3385,13 +3560,6 @@
       "safeHolds": true,
       "status": "PASS"
     },
-    "CWE-620": {
-      "name": "Unverified Password Change",
-      "scenario": "auth_no_control",
-      "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
-    },
     "CWE-621": {
       "name": "Variable Extraction Error",
       "scenario": "extract_variable",
@@ -3401,7 +3569,7 @@
     },
     "CWE-622": {
       "name": "Improper Validation of Function Hook Arguments",
-      "scenario": "external_transform_no_control",
+      "scenario": "eval_exec",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3415,7 +3583,7 @@
     },
     "CWE-624": {
       "name": "Executable Regular Expression Error",
-      "scenario": "regex_exec_error",
+      "scenario": "regex_user_pattern",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3456,7 +3624,7 @@
       "status": "PASS"
     },
     "CWE-639": {
-      "name": "Authorization Bypass Through User-Controlled Key (IDOR)",
+      "name": "Authorization Bypass Through User-Controlled Key",
       "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
@@ -3553,6 +3721,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-653": {
+      "name": "Improper Isolation or Compartmentalization",
+      "scenario": "protected_resource",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-654": {
       "name": "Reliance on a Single Factor in a Security Decision",
       "scenario": "file_read_path_traversal",
@@ -3583,7 +3758,7 @@
     },
     "CWE-662": {
       "name": "Improper Synchronization",
-      "scenario": "transform_shared",
+      "scenario": "global_store",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3612,6 +3787,13 @@
     "CWE-667": {
       "name": "Improper Locking",
       "scenario": "transform_shared",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-668": {
+      "name": "Exposure of Resource to Wrong Sphere",
+      "scenario": "file_read_path_traversal",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3756,6 +3938,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-696": {
+      "name": "Incorrect Behavior Order",
+      "scenario": "transform_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
     "CWE-698": {
       "name": "Execution After Redirect",
       "scenario": "control_transform_toctou",
@@ -3787,6 +3976,13 @@
     "CWE-708": {
       "name": "Incorrect Ownership Assignment",
       "scenario": "control_external_no_control",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-732": {
+      "name": "Incorrect Permission Assignment for Critical Resource",
+      "scenario": "transform_buffer",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3842,7 +4038,7 @@
     },
     "CWE-759": {
       "name": "Use of a One-Way Hash without a Salt",
-      "scenario": "credential_store",
+      "scenario": "weak_hash",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3910,6 +4106,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-770": {
+      "name": "Allocation of Resources Without Limits or Throttling",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-771": {
       "name": "Missing Reference to Active Allocated Resource",
       "scenario": "transform_resource",
@@ -3918,8 +4121,8 @@
       "status": "PASS"
     },
     "CWE-772": {
-      "name": "Missing Release of Resource after Effective Lifetime",
-      "scenario": "transform_resource",
+      "name": "Missing Release of Resource After Effective Lifetime",
+      "scenario": "file_stream",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -3958,6 +4161,13 @@
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
+    },
+    "CWE-778": {
+      "name": "Insufficient Logging",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
     },
     "CWE-779": {
       "name": "Logging of Excessive Data",
@@ -4190,13 +4400,6 @@
       "safeHolds": true,
       "status": "PASS"
     },
-    "CWE-829": {
-      "name": "Inclusion of Functionality from Untrusted Control Sphere",
-      "scenario": "structural_external_no_control",
-      "vulnHolds": false,
-      "safeHolds": true,
-      "status": "PASS"
-    },
     "CWE-830": {
       "name": "Inclusion of Web Functionality from an Untrusted Source",
       "scenario": "structural_external_no_control",
@@ -4288,6 +4491,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-862": {
+      "name": "Missing Authorization",
+      "scenario": "file_write_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-863": {
       "name": "Incorrect Authorization",
       "scenario": "protected_resource",
@@ -4344,6 +4554,13 @@
       "safeHolds": true,
       "status": "PASS"
     },
+    "CWE-915": {
+      "name": "Improperly Controlled Modification of Dynamically-Determined Object Attributes",
+      "scenario": "credential_store",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
     "CWE-916": {
       "name": "Use of Password Hash With Insufficient Computational Effort",
       "scenario": "credential_store",
@@ -4381,7 +4598,7 @@
     },
     "CWE-922": {
       "name": "Insecure Storage of Sensitive Information",
-      "scenario": "storage_storage_no_auth",
+      "scenario": "credential_store",
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
@@ -4413,29 +4630,617 @@
       "vulnHolds": false,
       "safeHolds": true,
       "status": "PASS"
+    },
+    "CWE-943": {
+      "name": "Improper Neutralization of Special Elements in Data Query Logic",
+      "scenario": "xpath_query",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-1004": {
+      "name": "Sensitive Cookie Without HttpOnly Flag",
+      "scenario": "cookie_write",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1021": {
+      "name": "Improper Restriction of Rendered UI Layers",
+      "scenario": "protected_resource",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1053": {
+      "name": "Missing Documentation for Design",
+      "scenario": "weak_hash",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1068": {
+      "name": "Inconsistency Between Implementation and Documented Design",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1071": {
+      "name": "Empty Code Block",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1091": {
+      "name": "Use of Object without Invoking Destructor Method",
+      "scenario": "resource_alloc",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1100": {
+      "name": "Insufficient Isolation of System-Dependent Functions",
+      "scenario": "transform_coredump",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1107": {
+      "name": "Insufficient Isolation of Symbolic Constant Definitions",
+      "scenario": "weak_hash",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1113": {
+      "name": "Inappropriate Comment Style",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1115": {
+      "name": "Source Code Element without Standard Prologue",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1123": {
+      "name": "Excessive Use of Self-Modifying Code",
+      "scenario": "eval_exec",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    "CWE-1125": {
+      "name": "Excessive Attack Surface",
+      "scenario": "file_read_path_traversal",
+      "vulnHolds": false,
+      "safeHolds": true,
+      "status": "PASS"
+    },
+    "CWE-1333": {
+      "name": "Inefficient Regular Expression Complexity (ReDoS)",
+      "scenario": "regex_user_pattern",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
     }
   },
   "neverFired": [
+    "CWE-1",
+    "CWE-2",
+    "CWE-3",
+    "CWE-4",
+    "CWE-10",
+    "CWE-16",
+    "CWE-17",
+    "CWE-18",
+    "CWE-19",
+    "CWE-21",
+    "CWE-60",
+    "CWE-63",
+    "CWE-68",
+    "CWE-70",
+    "CWE-71",
+    "CWE-92",
+    "CWE-100",
+    "CWE-101",
+    "CWE-110",
     "CWE-128",
+    "CWE-132",
+    "CWE-133",
+    "CWE-136",
+    "CWE-137",
+    "CWE-139",
+    "CWE-169",
+    "CWE-171",
     "CWE-179",
     "CWE-180",
+    "CWE-182",
+    "CWE-186",
+    "CWE-189",
+    "CWE-199",
+    "CWE-216",
+    "CWE-217",
+    "CWE-218",
+    "CWE-225",
+    "CWE-227",
     "CWE-243",
-    "CWE-252",
+    "CWE-247",
+    "CWE-249",
+    "CWE-251",
     "CWE-253",
+    "CWE-254",
+    "CWE-255",
     "CWE-259",
+    "CWE-264",
+    "CWE-265",
+    "CWE-275",
     "CWE-276",
     "CWE-277",
     "CWE-286",
+    "CWE-292",
+    "CWE-300",
+    "CWE-310",
+    "CWE-320",
+    "CWE-355",
+    "CWE-361",
+    "CWE-362",
+    "CWE-365",
+    "CWE-367",
+    "CWE-371",
+    "CWE-373",
+    "CWE-376",
+    "CWE-380",
+    "CWE-381",
+    "CWE-387",
+    "CWE-388",
+    "CWE-389",
+    "CWE-398",
+    "CWE-399",
+    "CWE-411",
+    "CWE-416",
+    "CWE-417",
+    "CWE-418",
     "CWE-421",
+    "CWE-423",
+    "CWE-429",
+    "CWE-434",
+    "CWE-435",
+    "CWE-438",
+    "CWE-442",
+    "CWE-443",
+    "CWE-445",
+    "CWE-452",
     "CWE-455",
+    "CWE-458",
+    "CWE-461",
+    "CWE-465",
+    "CWE-485",
+    "CWE-490",
+    "CWE-503",
+    "CWE-504",
+    "CWE-505",
+    "CWE-513",
+    "CWE-516",
+    "CWE-517",
+    "CWE-518",
+    "CWE-519",
+    "CWE-532",
+    "CWE-533",
+    "CWE-534",
+    "CWE-542",
+    "CWE-545",
+    "CWE-557",
+    "CWE-559",
+    "CWE-569",
     "CWE-574",
+    "CWE-592",
+    "CWE-596",
+    "CWE-601",
+    "CWE-604",
+    "CWE-620",
     "CWE-628",
+    "CWE-629",
+    "CWE-630",
+    "CWE-631",
+    "CWE-632",
+    "CWE-633",
+    "CWE-634",
+    "CWE-635",
     "CWE-637",
-    "CWE-653",
+    "CWE-658",
+    "CWE-659",
+    "CWE-660",
+    "CWE-661",
+    "CWE-664",
+    "CWE-677",
+    "CWE-678",
+    "CWE-679",
     "CWE-681",
+    "CWE-682",
+    "CWE-691",
+    "CWE-693",
+    "CWE-697",
+    "CWE-699",
+    "CWE-700",
+    "CWE-701",
+    "CWE-702",
+    "CWE-703",
+    "CWE-707",
+    "CWE-709",
+    "CWE-710",
+    "CWE-711",
+    "CWE-712",
+    "CWE-713",
+    "CWE-714",
+    "CWE-715",
+    "CWE-716",
+    "CWE-717",
+    "CWE-718",
+    "CWE-719",
+    "CWE-720",
+    "CWE-721",
+    "CWE-722",
+    "CWE-723",
+    "CWE-724",
+    "CWE-725",
+    "CWE-726",
+    "CWE-727",
+    "CWE-728",
+    "CWE-729",
+    "CWE-730",
+    "CWE-731",
+    "CWE-734",
+    "CWE-735",
+    "CWE-736",
+    "CWE-737",
+    "CWE-738",
+    "CWE-739",
+    "CWE-740",
+    "CWE-741",
+    "CWE-742",
+    "CWE-743",
+    "CWE-744",
+    "CWE-745",
+    "CWE-746",
+    "CWE-747",
+    "CWE-748",
+    "CWE-750",
+    "CWE-751",
+    "CWE-752",
+    "CWE-753",
+    "CWE-769",
+    "CWE-800",
+    "CWE-801",
+    "CWE-802",
+    "CWE-803",
+    "CWE-808",
+    "CWE-809",
+    "CWE-810",
+    "CWE-811",
+    "CWE-812",
+    "CWE-813",
+    "CWE-814",
+    "CWE-815",
+    "CWE-816",
+    "CWE-817",
+    "CWE-818",
+    "CWE-819",
     "CWE-824",
+    "CWE-829",
+    "CWE-840",
+    "CWE-844",
+    "CWE-845",
+    "CWE-846",
+    "CWE-847",
+    "CWE-848",
+    "CWE-849",
+    "CWE-850",
+    "CWE-851",
+    "CWE-852",
+    "CWE-853",
+    "CWE-854",
+    "CWE-855",
+    "CWE-856",
+    "CWE-857",
+    "CWE-858",
+    "CWE-859",
+    "CWE-860",
+    "CWE-861",
+    "CWE-864",
+    "CWE-865",
+    "CWE-866",
+    "CWE-867",
+    "CWE-868",
+    "CWE-869",
+    "CWE-870",
+    "CWE-871",
+    "CWE-872",
+    "CWE-873",
+    "CWE-874",
+    "CWE-875",
+    "CWE-876",
+    "CWE-877",
+    "CWE-878",
+    "CWE-879",
+    "CWE-880",
+    "CWE-881",
+    "CWE-882",
+    "CWE-883",
+    "CWE-884",
+    "CWE-885",
+    "CWE-886",
+    "CWE-887",
+    "CWE-888",
+    "CWE-889",
+    "CWE-890",
+    "CWE-891",
+    "CWE-892",
+    "CWE-893",
+    "CWE-894",
+    "CWE-895",
+    "CWE-896",
+    "CWE-897",
+    "CWE-898",
+    "CWE-899",
+    "CWE-900",
+    "CWE-901",
+    "CWE-902",
+    "CWE-903",
+    "CWE-904",
+    "CWE-905",
+    "CWE-906",
+    "CWE-907",
+    "CWE-919",
     "CWE-926",
+    "CWE-928",
+    "CWE-929",
+    "CWE-930",
+    "CWE-931",
+    "CWE-932",
+    "CWE-933",
+    "CWE-939",
+    "CWE-940",
+    "CWE-941",
+    "CWE-942",
+    "CWE-1007",
+    "CWE-1022",
+    "CWE-1023",
+    "CWE-1024",
+    "CWE-1025",
+    "CWE-1036",
+    "CWE-1044",
+    "CWE-1045",
+    "CWE-1046",
+    "CWE-1047",
+    "CWE-1048",
+    "CWE-1050",
+    "CWE-1051",
+    "CWE-1052",
+    "CWE-1054",
+    "CWE-1055",
+    "CWE-1056",
+    "CWE-1057",
+    "CWE-1058",
+    "CWE-1059",
+    "CWE-1060",
+    "CWE-1061",
+    "CWE-1062",
+    "CWE-1063",
+    "CWE-1064",
+    "CWE-1065",
+    "CWE-1066",
+    "CWE-1067",
+    "CWE-1069",
+    "CWE-1070",
+    "CWE-1073",
+    "CWE-1074",
+    "CWE-1075",
+    "CWE-1076",
+    "CWE-1078",
+    "CWE-1079",
+    "CWE-1080",
+    "CWE-1082",
+    "CWE-1083",
+    "CWE-1084",
+    "CWE-1085",
+    "CWE-1086",
+    "CWE-1087",
+    "CWE-1089",
+    "CWE-1090",
+    "CWE-1092",
+    "CWE-1094",
+    "CWE-1095",
+    "CWE-1097",
+    "CWE-1098",
+    "CWE-1099",
+    "CWE-1101",
+    "CWE-1102",
+    "CWE-1104",
+    "CWE-1106",
+    "CWE-1108",
+    "CWE-1109",
+    "CWE-1110",
+    "CWE-1111",
+    "CWE-1112",
+    "CWE-1114",
+    "CWE-1116",
+    "CWE-1117",
+    "CWE-1118",
+    "CWE-1119",
+    "CWE-1120",
+    "CWE-1121",
+    "CWE-1122",
+    "CWE-1124",
+    "CWE-1126",
+    "CWE-1127",
     "CWE-1321"
   ],
-  "falsePositives": []
+  "falsePositives": [
+    {
+      "cwe": "CWE-107",
+      "name": "Struts: Unused Validation Form",
+      "scenario": "meta_ingress_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-250",
+      "name": "Execution with Unnecessary Privileges",
+      "scenario": "client_side_enforcement",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-252",
+      "name": "Unchecked Return Value",
+      "scenario": "external_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-330",
+      "name": "Use of Insufficiently Random Values",
+      "scenario": "transform_auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-372",
+      "name": "Incomplete Internal State Distinction",
+      "scenario": "control_storage_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-377",
+      "name": "Insecure Temporary File",
+      "scenario": "transform_coredump",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-696",
+      "name": "Incorrect Behavior Order",
+      "scenario": "transform_control_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-778",
+      "name": "Insufficient Logging",
+      "scenario": "auth_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1004",
+      "name": "Sensitive Cookie Without HttpOnly Flag",
+      "scenario": "cookie_write",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1021",
+      "name": "Improper Restriction of Rendered UI Layers",
+      "scenario": "protected_resource",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1053",
+      "name": "Missing Documentation for Design",
+      "scenario": "weak_hash",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1068",
+      "name": "Inconsistency Between Implementation and Documented Design",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1071",
+      "name": "Empty Code Block",
+      "scenario": "control_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1091",
+      "name": "Use of Object without Invoking Destructor Method",
+      "scenario": "resource_alloc",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1100",
+      "name": "Insufficient Isolation of System-Dependent Functions",
+      "scenario": "transform_coredump",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1107",
+      "name": "Insufficient Isolation of Symbolic Constant Definitions",
+      "scenario": "weak_hash",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1113",
+      "name": "Inappropriate Comment Style",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1115",
+      "name": "Source Code Element without Standard Prologue",
+      "scenario": "meta_structural_no_control",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1123",
+      "name": "Excessive Use of Self-Modifying Code",
+      "scenario": "eval_exec",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    },
+    {
+      "cwe": "CWE-1333",
+      "name": "Inefficient Regular Expression Complexity (ReDoS)",
+      "scenario": "regex_user_pattern",
+      "vulnHolds": false,
+      "safeHolds": false,
+      "status": "FALSE_POSITIVE"
+    }
+  ]
 }

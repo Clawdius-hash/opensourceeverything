@@ -42,6 +42,9 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   pp:               { nodeType: 'EGRESS',    subtype: 'display',       tainted: false },
   warn:             { nodeType: 'EGRESS',    subtype: 'display',       tainted: false },
 
+  // TRANSFORM -- unsafe HTML (XSS vectors — disable Rails auto-escaping)
+  raw:              { nodeType: 'TRANSFORM', subtype: 'unsafe_html',   tainted: false },
+
   // INGRESS -- user input
   gets:             { nodeType: 'INGRESS',   subtype: 'user_input',    tainted: true },
   readline:         { nodeType: 'INGRESS',   subtype: 'user_input',    tainted: true },
@@ -58,7 +61,7 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
 
   // CONTROL -- flow
   exit:             { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
-  exit!:            { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
+  'exit!':          { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
   abort:            { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
   raise:            { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
   fail:             { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
@@ -100,6 +103,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Sinatra --
   'request.params':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- Rack internals --
+  'Rack::Request.new':        { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'Rack::Utils.parse_nested_query': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
 
   // -- Cookies / Session --
   'cookies.signed':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
@@ -146,7 +153,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'YAML.unsafe_load':         { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true },
   'YAML.safe_load':           { nodeType: 'INGRESS', subtype: 'deserialize', tainted: false },
   'YAML.load_file':           { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true },
-  'Marshal.load':             { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true },
+  'Marshal.load':             { nodeType: 'EXTERNAL', subtype: 'deserialize', tainted: true },
   'Marshal.restore':          { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true },
 
   // -- Net socket --
@@ -160,7 +167,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Rails controller responses --
   'render':                   { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
-  'redirect_to':              { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'redirect_to':              { nodeType: 'EGRESS', subtype: 'redirect',      tainted: false },
   'send_file':                { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'send_data':                { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'head':                     { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -176,6 +183,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'json':                     { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'content_type':             { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'status':                   { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- XSS sinks (auto-escape bypass) --
+  'String.html_safe':         { nodeType: 'TRANSFORM', subtype: 'unsafe_html', tainted: false },
 
   // -- ActionController headers/cookies --
   'response.headers':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -202,7 +212,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'JSON.dump':                { nodeType: 'EGRESS', subtype: 'serialize',    tainted: false },
   'JSON.pretty_generate':     { nodeType: 'EGRESS', subtype: 'serialize',    tainted: false },
   'YAML.dump':                { nodeType: 'EGRESS', subtype: 'serialize',    tainted: false },
-  'Marshal.dump':             { nodeType: 'EGRESS', subtype: 'serialize',    tainted: false },
+  'Marshal.dump':             { nodeType: 'STORAGE', subtype: 'serialize',   tainted: false },
   'CSV.generate':             { nodeType: 'EGRESS', subtype: 'serialize',    tainted: false },
 
   // -- Email (ActionMailer) --
@@ -283,6 +293,13 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- ERB template (potential SSTI) --
   'ERB.new':                  { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
 
+  // -- Dynamic dispatch / metaprogramming (CWE-470) --
+  'Object.send':              { nodeType: 'EXTERNAL', subtype: 'dynamic_dispatch', tainted: false },
+  'Object.public_send':       { nodeType: 'EXTERNAL', subtype: 'dynamic_dispatch', tainted: false },
+  'Object.const_get':         { nodeType: 'EXTERNAL', subtype: 'dynamic_dispatch', tainted: false },
+  'String.constantize':       { nodeType: 'EXTERNAL', subtype: 'reflection',       tainted: false },
+  'PTY.spawn':                { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+
   // =========================================================================
   // STORAGE -- persistent state
   // =========================================================================
@@ -331,12 +348,20 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'ActiveRecord.establish_connection': { nodeType: 'STORAGE', subtype: 'db_connect', tainted: false },
 
   // -- Raw SQL --
+  'ActiveRecord.find_by_sql': { nodeType: 'STORAGE', subtype: 'sql_raw',    tainted: false },
+  'ActiveRecord.count_by_sql':{ nodeType: 'STORAGE', subtype: 'sql_raw',    tainted: false },
+  'ActiveRecord.update_columns': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+  'connection.exec_query':    { nodeType: 'STORAGE', subtype: 'sql_raw',    tainted: false },
   'connection.execute':       { nodeType: 'STORAGE', subtype: 'db_write',    tainted: false },
   'connection.select_all':    { nodeType: 'STORAGE', subtype: 'db_read',     tainted: false },
   'connection.select_one':    { nodeType: 'STORAGE', subtype: 'db_read',     tainted: false },
   'connection.select_values': { nodeType: 'STORAGE', subtype: 'db_read',     tainted: false },
 
+  // -- Arel --
+  'Arel.sql':                 { nodeType: 'STORAGE', subtype: 'sql_raw',     tainted: false },
+
   // -- Sequel --
+  'Sequel.lit':               { nodeType: 'STORAGE', subtype: 'sql_raw',     tainted: false },
   'DB.fetch':                 { nodeType: 'STORAGE', subtype: 'db_read',     tainted: false },
   'DB.run':                   { nodeType: 'STORAGE', subtype: 'db_write',    tainted: false },
   'DB.execute':               { nodeType: 'STORAGE', subtype: 'db_write',    tainted: false },
@@ -509,12 +534,23 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'JWT.decode':               { nodeType: 'AUTH', subtype: 'authenticate',    tainted: false },
 
   // -- Pundit / CanCanCan --
+  'policy_scope':             { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'authorize':                { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'authorize!':               { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'policy':                   { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'can?':                     { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'cannot?':                  { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
   'load_and_authorize_resource':{ nodeType: 'AUTH', subtype: 'authorize',     tainted: false },
+
+  // =========================================================================
+  // STRUCTURAL -- routing, app structure
+  // =========================================================================
+
+  // -- Sinatra route DSL --
+  'Sinatra::Base.get':        { nodeType: 'STRUCTURAL', subtype: 'route_def', tainted: false },
+
+  // -- Devise route generation --
+  'devise_for':               { nodeType: 'STRUCTURAL', subtype: 'route_def', tainted: false },
 
   // =========================================================================
   // META -- config, debug

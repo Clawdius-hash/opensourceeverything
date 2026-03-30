@@ -1,13 +1,12 @@
 /**
  * DST Generated Verifiers — Batch 018
- * CWEs 200-399 gap fill: 47 CWEs not yet covered.
+ * CWEs 200-399 gap fill — real verifiers only (16 CWEs).
  *
  * Sub-groups:
  *   A. Information exposure & error handling  (3 CWEs)  — factory-driven
  *   B. Authentication & auth bypass           (5 CWEs)  — factory-driven
- *   C. Cryptography & data protection         (4 CWEs)  — factory-driven
- *   D. Concurrency & state                    (3 CWEs)  — factory-driven
- *   E. Deprecated / Category stubs            (32 CWEs) — always-pass stubs
+ *   C. Cryptography & data protection         (4 CWEs)  — factory-driven (+ 2 hand-written)
+ *   D. Concurrency & state                    (3 CWEs)  — factory-driven (+ 1 hand-written)
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
@@ -52,19 +51,6 @@ function v(
     }
     return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
   };
-}
-
-/**
- * Stub for deprecated or category CWEs.
- * Always holds — these are organizational groupings, not concrete weaknesses.
- */
-function stub(cweId: string, cweName: string): (map: NeuralMap) => VerificationResult {
-  return (_map: NeuralMap): VerificationResult => ({
-    cwe: cweId,
-    name: cweName,
-    holds: true,
-    findings: [],
-  });
 }
 
 // BFS shortcuts
@@ -125,14 +111,63 @@ export const verifyCWE269 = v(
   'Verify privileges before each privileged operation. Apply least privilege principle. Drop privileges when no longer needed.',
 );
 
-// CWE-287: Improper authentication — identity not verified
-export const verifyCWE287 = v(
-  'CWE-287', 'Improper Authentication', 'critical',
-  'INGRESS', 'STORAGE', nA,
-  /\bauthenticat\b|\bverif.*identity\b|\btoken.*valid\b|\bcredential\b/i,
-  'AUTH (identity verification before accessing protected resources)',
-  'Authenticate all identity claims before granting access. Verify tokens, credentials, and certificates.',
-);
+// CWE-287: Improper Authentication — identity not verified before protected resource access
+// Hand-written: specific sink detection for protected resources and specific safe patterns
+// for real authentication mechanisms (JWT, session, passport, bcrypt, OAuth).
+export const verifyCWE287 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+
+  // Sources: any user-facing ingress
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Sinks: protected resources — database access, admin endpoints, sensitive operations
+  const protectedSinks = map.nodes.filter(n =>
+    (n.node_type === 'STORAGE' &&
+      (n.node_subtype.includes('sql') || n.node_subtype.includes('query') ||
+       n.node_subtype.includes('database') || n.node_subtype.includes('file') ||
+       n.attack_surface.includes('protected_resource') ||
+       n.code_snapshot.match(
+         /\b(query|exec|execute|find|findOne|findById|update|delete|remove|insertOne|aggregate|save)\s*\(/i
+       ) !== null)) ||
+    (n.node_type === 'EXTERNAL' &&
+      (n.node_subtype.includes('admin') || n.node_subtype.includes('privileged') ||
+       n.attack_surface.includes('admin') ||
+       n.code_snapshot.match(
+         /\b(admin|sudo|privilege|secret|internal)\b/i
+       ) !== null))
+  );
+
+  // Safe patterns: real authentication mechanisms
+  const hasAuth = (code: string): boolean =>
+    /\bjwt\.verify\b|\bpassport\.authenticate\b|\breq\.isAuthenticated\b|\bsession\.user\b/i.test(code) ||
+    /\bbcrypt\.compare\b|\bverifyToken\b|\bcheckAuth\b|\bauthMiddleware\b|\brequireAuth\b/i.test(code) ||
+    /\boauth\b|\bopenid\b|\bsaml\b|\bbearer\b.*\btoken\b|\bAuthorization\b.*\bheader\b/i.test(code) ||
+    /\bisLoggedIn\b|\bisAuthenticated\b|\bensureAuthenticated\b|\bguard\b.*\bauth\b/i.test(code);
+
+  for (const src of ingress) {
+    for (const sink of protectedSinks) {
+      if (src.id === sink.id) continue;
+      if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'AUTH')) {
+        // Check if the sink or source code contains real auth mechanisms
+        if (!hasAuth(sink.code_snapshot) && !hasAuth(src.code_snapshot)) {
+          const sinkDesc = sink.node_type === 'EXTERNAL' ? 'privileged operation' : 'database query';
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'AUTH (identity verification — JWT, session check, or auth middleware)',
+            severity: 'critical',
+            description: `Unauthenticated request from ${src.label} reaches ${sinkDesc} at ${sink.label} ` +
+              `without identity verification. Attackers can access protected resources directly.`,
+            fix: 'Add authentication middleware before protected routes. Use JWT verification, session validation, ' +
+              'or passport.authenticate(). Example: router.get("/admin", requireAuth, handler)',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-287', name: 'Improper Authentication', holds: findings.length === 0, findings };
+};
 
 // CWE-290: Auth bypass by spoofing — trusting spoofable attributes
 export const verifyCWE290 = v(
@@ -174,14 +209,88 @@ export const verifyCWE311 = v(
   'Encrypt sensitive data before storage and during transmission. Use CWE-312 (storage) and CWE-319 (transmission) for specifics.',
 );
 
-// CWE-312: Cleartext storage of sensitive information
-export const verifyCWE312 = v(
-  'CWE-312', 'Cleartext Storage of Sensitive Information', 'high',
-  'INGRESS', 'STORAGE', nT,
-  /\bencrypt\b|\bhash\b|\bbcrypt\b|\bargon2\b|\bscrypt\b|\baes\b|\bcipher\b/i,
-  'TRANSFORM (encryption or hashing before storing sensitive data)',
-  'Encrypt or hash sensitive data before storage. Use bcrypt/argon2 for passwords, AES for data at rest.',
-);
+// CWE-312: Cleartext Storage of Sensitive Information
+// Hand-written: detects sensitive data (passwords, SSNs, credit cards, API keys, tokens)
+// flowing to storage without cryptographic transformation. Distinguishes password storage
+// (needs one-way hash) from data-at-rest (needs encryption).
+export const verifyCWE312 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+
+  // Sources: nodes that handle sensitive data — identified by subtype, surface, or code patterns
+  const sensitiveNodes = map.nodes.filter(n =>
+    (n.node_type === 'INGRESS' || n.node_type === 'TRANSFORM') &&
+    (n.node_subtype.includes('password') || n.node_subtype.includes('credential') ||
+     n.node_subtype.includes('secret') || n.node_subtype.includes('pii') ||
+     n.attack_surface.includes('credentials') || n.attack_surface.includes('pii') ||
+     n.data_out.some(d => d.sensitivity === 'SECRET' || d.sensitivity === 'PII' || d.sensitivity === 'FINANCIAL') ||
+     n.code_snapshot.match(
+       /\b(password|passwd|secret|api[_-]?key|token|ssn|social_security|credit[_-]?card|cvv|private[_-]?key|access[_-]?token)\b/i
+     ) !== null)
+  );
+
+  // Sinks: storage nodes — database writes, file writes, localStorage, etc.
+  const storageSinks = nodesOfType(map, 'STORAGE').filter(n =>
+    n.code_snapshot.match(
+      /\b(save|insert|create|write|set|put|store|update|push|append|localStorage|sessionStorage|cookie)\b/i
+    ) !== null ||
+    n.node_subtype.includes('sql') || n.node_subtype.includes('database') ||
+    n.node_subtype.includes('file') || n.node_subtype.includes('cache') ||
+    n.node_subtype.includes('cookie') || n.node_subtype.includes('storage')
+  );
+
+  // Safe patterns by category
+  const isPasswordHashed = (code: string): boolean =>
+    /\bbcrypt\b|\bargon2\b|\bscrypt\b|\bpbkdf2\b|\bcrypto\.hash\b|\bsha256\b|\bsha512\b/i.test(code);
+
+  const isEncrypted = (code: string): boolean =>
+    /\baes\b|\bcipher\b|\bencrypt\b|\bcryptoJS\b|\bgpg\b|\brsa\b|\bpublic[_-]?key\b/i.test(code) ||
+    /\bcreatecipher\b|\bcreateEncrypt\b|\bsecretbox\b|\bnacl\b/i.test(code);
+
+  for (const src of sensitiveNodes) {
+    for (const sink of storageSinks) {
+      if (src.id === sink.id) continue;
+      // Use hasPathWithoutIntermediateType so that the source node itself (which
+      // may be TRANSFORM, e.g. generateApiKey()) is not counted as a transform.
+      if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'TRANSFORM')) {
+        const srcCode = src.code_snapshot;
+        const sinkCode = sink.code_snapshot;
+
+        // Determine if this is a password (needs hash) or general data (needs encryption)
+        const isPassword = /\bpassword\b|\bpasswd\b/i.test(srcCode);
+
+        if (isPassword) {
+          if (!isPasswordHashed(sinkCode) && !isPasswordHashed(srcCode)) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'TRANSFORM (one-way hash — bcrypt, Argon2, scrypt)',
+              severity: 'critical',
+              description: `Password from ${src.label} is stored in cleartext at ${sink.label}. ` +
+                `Plaintext passwords are exposed if the database is compromised.`,
+              fix: 'Hash passwords with bcrypt, Argon2, or scrypt before storage. Never store plaintext passwords. ' +
+                'Example: const hash = await bcrypt.hash(password, 12); await db.save({ passwordHash: hash })',
+            });
+          }
+        } else {
+          if (!isEncrypted(sinkCode) && !isEncrypted(srcCode)) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'TRANSFORM (encryption — AES, RSA, or equivalent)',
+              severity: 'high',
+              description: `Sensitive data from ${src.label} is stored in cleartext at ${sink.label}. ` +
+                `Data-at-rest exposure enables mass data theft if storage is compromised.`,
+              fix: 'Encrypt sensitive data before storage using AES-256-GCM or equivalent. ' +
+                'Use envelope encryption for database fields. Example: const encrypted = crypto.encrypt(data, key)',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-312', name: 'Cleartext Storage of Sensitive Information', holds: findings.length === 0, findings };
+};
 
 // CWE-319: Cleartext transmission of sensitive information
 export const verifyCWE319 = v(
@@ -214,14 +323,100 @@ export const verifyCWE347 = v(
 // D. CONCURRENCY & STATE (3 CWEs)
 // ===========================================================================
 
-// CWE-362: Race condition — concurrent access without synchronization
-export const verifyCWE362 = v(
-  'CWE-362', 'Concurrent Execution using Shared Resource with Improper Synchronization', 'high',
-  'TRANSFORM', 'STORAGE', nCi,
-  L,
-  'CONTROL (synchronization — lock, mutex, atomic, transaction)',
-  'Use locks, mutexes, or atomic operations when accessing shared resources concurrently.',
-);
+// CWE-362: Race Condition / TOCTOU — concurrent access without synchronization
+// Hand-written: detects check-then-act patterns (TOCTOU), shared file access,
+// shared memory operations, and database read-then-write without transactions.
+// Distinguishes file TOCTOU, memory races, and database races with targeted fixes.
+export const verifyCWE362 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+
+  // Pattern 1: TOCTOU — CONTROL(check) followed by STORAGE(act) without atomic operation
+  // e.g., if (fs.existsSync(path)) { fs.writeFileSync(path, data) }
+  const checks = nodesOfType(map, 'CONTROL').filter(n =>
+    n.code_snapshot.match(
+      /\b(exists|existsSync|access|accessSync|stat|statSync|lstat)\b/i
+    ) !== null ||
+    n.code_snapshot.match(
+      /\bif\s*\(\s*\w+\b.*\)\s*\{?\s*$|\.then\s*\(/i
+    ) !== null
+  );
+
+  const fileOps = nodesOfType(map, 'STORAGE').filter(n =>
+    n.code_snapshot.match(
+      /\b(writeFile|writeFileSync|unlink|unlinkSync|rename|renameSync|open|openSync|mkdir|mkdirSync|chmod)\b/i
+    ) !== null ||
+    n.node_subtype.includes('file') || n.node_subtype.includes('fs')
+  );
+
+  const safeSyncPattern = /\bO_CREAT\b.*\bO_EXCL\b|\block\b|\bmutex\b|\btransaction\b|\batomic\b|\bflock\b|\blockfile\b/i;
+
+  for (const check of checks) {
+    for (const op of fileOps) {
+      if (check.id === op.id) continue;
+      if (hasPathWithoutIntermediateType(map, check.id, op.id, 'CONTROL')) {
+        if (!safeSyncPattern.test(op.code_snapshot) && !safeSyncPattern.test(check.code_snapshot)) {
+          findings.push({
+            source: nodeRef(check),
+            sink: nodeRef(op),
+            missing: 'CONTROL (atomic operation — O_CREAT|O_EXCL, lock, or atomic rename)',
+            severity: 'high',
+            description: `Time-of-check-time-of-use (TOCTOU) race: ${check.label} checks a condition, ` +
+              `then ${op.label} acts on it. The state can change between the check and the action.`,
+            fix: 'Use atomic operations: open() with O_CREAT|O_EXCL instead of exists()+write(). ' +
+              'Use file locks (flock) or atomic rename patterns. Never check-then-act on filesystem state.',
+          });
+        }
+      }
+    }
+  }
+
+  // Pattern 2: Shared resource access — TRANSFORM touching STORAGE without synchronization
+  const transforms = nodesOfType(map, 'TRANSFORM').filter(n =>
+    n.code_snapshot.match(
+      /\b(increment|decrement|balance|counter|count|total|stock|inventory|read.*write|get.*set)\b/i
+    ) !== null ||
+    n.node_subtype.includes('concurrent') || n.node_subtype.includes('shared') ||
+    n.attack_surface.includes('shared_resource')
+  );
+
+  const sharedStorage = nodesOfType(map, 'STORAGE').filter(n =>
+    n.code_snapshot.match(
+      /\b(update|set|write|increment|decrement|push|pop|splice)\b/i
+    ) !== null ||
+    n.node_subtype.includes('shared') || n.node_subtype.includes('global') ||
+    n.attack_surface.includes('shared_state')
+  );
+
+  const safeConcurrency = /\block\b|\bmutex\b|\bsynchronized\b|\batomic\b|\btransaction\b|\bserializ\b|\bBEGIN\b|\bCOMMIT\b|\bFOR UPDATE\b/i;
+
+  for (const src of transforms) {
+    for (const sink of sharedStorage) {
+      if (src.id === sink.id) continue;
+      if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'CONTROL')) {
+        if (!safeConcurrency.test(sink.code_snapshot) && !safeConcurrency.test(src.code_snapshot)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (lock, mutex, transaction, or atomic operation)',
+            severity: 'high',
+            description: `Shared resource at ${sink.label} is modified by ${src.label} without synchronization. ` +
+              `Concurrent access can corrupt state, cause lost updates, or enable double-spend attacks.`,
+            fix: 'Use database transactions (BEGIN/COMMIT) with FOR UPDATE locks for DB state. ' +
+              'Use mutexes or atomic operations for in-memory shared state. ' +
+              'Use optimistic concurrency (version checks) for distributed systems.',
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-362',
+    name: 'Concurrent Execution using Shared Resource with Improper Synchronization',
+    holds: findings.length === 0,
+    findings,
+  };
+};
 
 // CWE-383: J2EE direct thread management
 export const verifyCWE383 = v(
@@ -240,44 +435,6 @@ export const verifyCWE384 = v(
   'CONTROL (session ID regeneration after authentication)',
   'Regenerate session ID after successful authentication. Invalidate old session before issuing new one.',
 );
-
-// ===========================================================================
-// E. DEPRECATED / CATEGORY STUBS (32 CWEs)
-// Always hold — these are organizational groupings, not concrete weaknesses.
-// ===========================================================================
-
-export const verifyCWE216 = stub('CWE-216', 'DEPRECATED: Containment Errors (Container Errors)');
-export const verifyCWE217 = stub('CWE-217', 'DEPRECATED: Failure to Protect Stored Data from Modification');
-export const verifyCWE218 = stub('CWE-218', 'DEPRECATED: Failure to Provide Confidentiality for Stored Data');
-export const verifyCWE225 = stub('CWE-225', 'DEPRECATED: General Information Management Problems');
-export const verifyCWE227 = stub('CWE-227', 'Category: Improper Fulfillment of API Contract');
-export const verifyCWE247 = stub('CWE-247', 'DEPRECATED: Reliance on DNS Lookups in a Security Decision');
-export const verifyCWE249 = stub('CWE-249', 'DEPRECATED: Often Misused: Path Manipulation');
-export const verifyCWE250 = stub('CWE-250', 'Execution with Unnecessary Privileges');
-export const verifyCWE251 = stub('CWE-251', 'Category: Often Misused: String Management');
-export const verifyCWE254 = stub('CWE-254', 'Category: 7PK - Security Features');
-export const verifyCWE255 = stub('CWE-255', 'Category: Credentials Management Errors');
-export const verifyCWE264 = stub('CWE-264', 'Category: Permissions, Privileges, and Access Controls');
-export const verifyCWE265 = stub('CWE-265', 'Category: Privilege Issues');
-export const verifyCWE275 = stub('CWE-275', 'Category: Permission Issues');
-export const verifyCWE284 = stub('CWE-284', 'Pillar: Improper Access Control');
-export const verifyCWE292 = stub('CWE-292', 'DEPRECATED: Trusting Self-reported DNS Name');
-export const verifyCWE300 = stub('CWE-300', 'Channel Accessible by Non-Endpoint');
-export const verifyCWE310 = stub('CWE-310', 'Category: Cryptographic Issues');
-export const verifyCWE320 = stub('CWE-320', 'Category: Key Management Errors');
-export const verifyCWE355 = stub('CWE-355', 'Category: User Interface Security Issues');
-export const verifyCWE361 = stub('CWE-361', 'Category: 7PK - Time and State');
-export const verifyCWE365 = stub('CWE-365', 'DEPRECATED: Race Condition in Switch');
-export const verifyCWE371 = stub('CWE-371', 'Category: State Issues');
-export const verifyCWE373 = stub('CWE-373', 'DEPRECATED: State Synchronization Error');
-export const verifyCWE376 = stub('CWE-376', 'DEPRECATED: Temporary File Issues');
-export const verifyCWE380 = stub('CWE-380', 'DEPRECATED: Technology-Specific Time and State Issues');
-export const verifyCWE381 = stub('CWE-381', 'DEPRECATED: J2EE Time and State Issues');
-export const verifyCWE387 = stub('CWE-387', 'Category: Signal Errors');
-export const verifyCWE388 = stub('CWE-388', 'Category: 7PK - Errors');
-export const verifyCWE389 = stub('CWE-389', 'Category: Error Conditions, Return Values, Status Codes');
-export const verifyCWE398 = stub('CWE-398', 'Category: 7PK - Code Quality');
-export const verifyCWE399 = stub('CWE-399', 'Category: Resource Management Errors');
 
 // ===========================================================================
 // REGISTRY
@@ -304,37 +461,4 @@ export const BATCH_018_REGISTRY: Record<string, (map: NeuralMap) => Verification
   'CWE-362': verifyCWE362,
   'CWE-383': verifyCWE383,
   'CWE-384': verifyCWE384,
-  // E. Deprecated / Category stubs
-  'CWE-216': verifyCWE216,
-  'CWE-217': verifyCWE217,
-  'CWE-218': verifyCWE218,
-  'CWE-225': verifyCWE225,
-  'CWE-227': verifyCWE227,
-  'CWE-247': verifyCWE247,
-  'CWE-249': verifyCWE249,
-  'CWE-250': verifyCWE250,
-  'CWE-251': verifyCWE251,
-  'CWE-254': verifyCWE254,
-  'CWE-255': verifyCWE255,
-  'CWE-264': verifyCWE264,
-  'CWE-265': verifyCWE265,
-  'CWE-275': verifyCWE275,
-  'CWE-284': verifyCWE284,
-  'CWE-292': verifyCWE292,
-  'CWE-300': verifyCWE300,
-  'CWE-310': verifyCWE310,
-  'CWE-320': verifyCWE320,
-  'CWE-355': verifyCWE355,
-  'CWE-361': verifyCWE361,
-  'CWE-365': verifyCWE365,
-  'CWE-371': verifyCWE371,
-  'CWE-373': verifyCWE373,
-  'CWE-376': verifyCWE376,
-  'CWE-380': verifyCWE380,
-  'CWE-381': verifyCWE381,
-  'CWE-387': verifyCWE387,
-  'CWE-388': verifyCWE388,
-  'CWE-389': verifyCWE389,
-  'CWE-398': verifyCWE398,
-  'CWE-399': verifyCWE399,
 };

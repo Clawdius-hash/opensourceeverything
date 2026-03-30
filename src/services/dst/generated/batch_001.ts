@@ -306,7 +306,76 @@ export const verifyCWE122 = createBufferVerifier('CWE-122', 'Heap-based Buffer O
 export const verifyCWE123 = createBufferVerifier('CWE-123', 'Write-what-where Condition', 'critical');
 export const verifyCWE129 = createBufferVerifier('CWE-129', 'Improper Validation of Array Index', 'high', /\bindex\b.*[<>]=?\s*\d|\bindex\b.*\blength\b|\bisNaN\b|\bparseInt\b.*[<>]/i);
 export const verifyCWE130 = createBufferVerifier('CWE-130', 'Improper Handling of Length Parameter Inconsistency', 'high', /\blength\b.*===?\s*\blength\b|\bsize.*match\b|\bconsistent.*length\b/i);
-export const verifyCWE787 = createBufferVerifier('CWE-787', 'Out-of-bounds Write', 'critical');
+/**
+ * CWE-787: Out-of-bounds Write
+ * Pattern: INGRESS → STORAGE(buffer/array write) without CONTROL(bounds check)
+ *
+ * UPGRADED from factory: specific write-operation sinks, specific bounds-check
+ * safe patterns. The generic buffer factory flags ANY buffer node; this version
+ * only flags nodes performing WRITE operations (Buffer.write, memcpy, strcpy,
+ * array index assignment, TypedArray.set) without explicit length/bounds guards.
+ *
+ * Dangerous sinks: Buffer.write(), memcpy(), strcpy(), sprintf(), gets(),
+ *   array[userIdx] = val, TypedArray.set(), memmove().
+ * Safe mitigations: Math.min(offset, buf.length), if (idx < arr.length),
+ *   Buffer.alloc (safe alloc), clamp(), strncpy(), snprintf().
+ */
+export function verifyCWE787(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Only STORAGE nodes performing WRITE operations — not reads, not allocations
+  const writeSinks = map.nodes.filter(n =>
+    n.node_type === 'STORAGE' &&
+    (n.node_subtype.includes('buffer') || n.node_subtype.includes('array') ||
+     n.node_subtype.includes('memory') || n.node_subtype.includes('heap') ||
+     n.node_subtype.includes('stack') || n.attack_surface.includes('buffer_write') ||
+     n.attack_surface.includes('array_access') ||
+     n.code_snapshot.match(
+       /\b(Buffer\.(write|copy|fill)|memcpy|memmove|strcpy|strncpy|sprintf|gets|write\s*\(|set\s*\()\b|\[\s*\w+\s*\]\s*=/i
+     ) !== null)
+  );
+
+  for (const src of ingress) {
+    for (const sink of writeSinks) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        // Specific bounds-check patterns that actually prevent OOB writes
+        const hasBoundsCheck = sink.code_snapshot.match(
+          // Explicit comparison: offset < buf.length, idx < arr.length
+          /\b\w+\s*[<>]=?\s*\w*\.?length\b/i
+        ) !== null;
+
+        const hasSafeMath = sink.code_snapshot.match(
+          // Math.min to clamp, Buffer.alloc (safe), clamp(), strncpy, snprintf
+          /\bMath\.min\b|\bclamp\b|\bBuffer\.alloc\b(?!Unsafe)|\bstrncpy\b|\bsnprintf\b|\bstrlcpy\b|\bbounds.*check\b|\bvalidate.*index\b|\bcheck.*range\b/i
+        ) !== null;
+
+        const hasConditionalGuard = sink.code_snapshot.match(
+          // if (offset + data.length <= buf.length)
+          /if\s*\(.*\+.*<=?\s*.*\.length/i
+        ) !== null;
+
+        if (!hasBoundsCheck && !hasSafeMath && !hasConditionalGuard) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (bounds check before write — validate offset + length <= buffer.length)',
+            severity: 'critical',
+            description: `User input from ${src.label} controls a write operation at ${sink.label} without bounds validation. ` +
+              `An attacker can write past buffer boundaries, corrupting adjacent memory. ` +
+              `This enables code execution, crash, or data corruption.`,
+            fix: 'Validate offset + length <= buffer.length before every write. ' +
+              'Use Math.min(offset, buf.length - data.length) to clamp. ' +
+              'In C: use strncpy/snprintf instead of strcpy/sprintf. ' +
+              'In Node.js: Buffer.alloc() (not allocUnsafe) + explicit length checks.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-787', name: 'Out-of-bounds Write', holds: findings.length === 0, findings };
+}
 export const verifyCWE822 = createBufferVerifier('CWE-822', 'Untrusted Pointer Dereference', 'critical', /\bnull.*check\b|\bpointer.*valid\b|\btypeof.*===\b|\binstanceof\b/i);
 export const verifyCWE823 = createBufferVerifier('CWE-823', 'Use of Out-of-range Pointer Offset', 'critical', /\boffset\b.*[<>]=?|\boffset\b.*\blength\b|\bbounds\b/i);
 export const verifyCWE839 = createBufferVerifier('CWE-839', 'Numeric Range Comparison Without Minimum Check', 'medium', /\b>=?\s*0\b|\bMin\b|\bminimum\b|\blower.*bound\b/i);

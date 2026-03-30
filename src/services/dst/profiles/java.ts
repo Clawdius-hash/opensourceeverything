@@ -43,6 +43,238 @@ import { createNode } from '../types.js';
 import { lookupCallee as _lookupJavaCallee } from '../languages/java.js';
 
 // ---------------------------------------------------------------------------
+// Anti-evasion: constant folding for Java
+// Attackers split dangerous strings across concatenation, StringBuilder,
+// new String(byte[]), Character.toString, String.format to dodge static analysis.
+// We fold them back.
+// ---------------------------------------------------------------------------
+
+function resolveJavaEscapes(s: string): string {
+  return s
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\');
+}
+
+function tryFoldConstant(n: SyntaxNode): string | null {
+  // String literals: "eval" → eval
+  if (n.type === 'string_literal') {
+    const raw = n.text.replace(/^"|"$/g, '');
+    return resolveJavaEscapes(raw);
+  }
+  // Character literals: 'e' → e
+  if (n.type === 'character_literal') {
+    const raw = n.text.replace(/^'|'$/g, '');
+    return resolveJavaEscapes(raw);
+  }
+  // Numeric literals (for byte array / charcode patterns)
+  if (n.type === 'decimal_integer_literal' || n.type === 'integer_literal') {
+    return n.text;
+  }
+  // Hex integer literal
+  if (n.type === 'hex_integer_literal') {
+    return String(parseInt(n.text, 16));
+  }
+  // Binary expression: "ev" + "al" → "eval"
+  if (n.type === 'binary_expression') {
+    const op = n.childForFieldName('operator')?.text;
+    if (op === '+') {
+      const left = n.childForFieldName('left');
+      const right = n.childForFieldName('right');
+      if (left && right) {
+        const lv = tryFoldConstant(left);
+        const rv = tryFoldConstant(right);
+        if (lv !== null && rv !== null) return lv + rv;
+      }
+    }
+  }
+  // Parenthesized: ("ev" + "al") → "eval"
+  if (n.type === 'parenthesized_expression') {
+    const inner = n.namedChild(0);
+    return inner ? tryFoldConstant(inner) : null;
+  }
+  // Ternary constant folding: cond ? "a" : "a" → "a"
+  if (n.type === 'ternary_expression') {
+    const consequence = n.childForFieldName('consequence');
+    const alternative = n.childForFieldName('alternative');
+    if (consequence && alternative) {
+      const cv = tryFoldConstant(consequence);
+      const av = tryFoldConstant(alternative);
+      if (cv !== null && av !== null && cv === av) return cv;
+    }
+  }
+  // Cast expression: (char)101 → skip the cast and fold inner
+  if (n.type === 'cast_expression') {
+    const value = n.childForFieldName('value');
+    return value ? tryFoldConstant(value) : null;
+  }
+  // ── METHOD INVOCATIONS that produce constant strings ──
+  if (n.type === 'method_invocation') {
+    const obj = n.childForFieldName('object');
+    const name = n.childForFieldName('name');
+    const args = n.childForFieldName('arguments');
+    if (obj && name && args) {
+      // StringBuilder: new StringBuilder().append("ev").append("al").toString()
+      // Detected when .toString() is called on a chain of .append() calls
+      if (name.text === 'toString' && obj.type === 'method_invocation') {
+        const folded = tryFoldStringBuilderChain(obj);
+        if (folded !== null) return folded;
+      }
+      // String.format("%s%s", "ev", "al") → "eval"
+      if (name.text === 'format' && obj.text === 'String') {
+        return tryFoldStringFormat(args);
+      }
+      // String.valueOf(char) / String.valueOf(int)
+      if (name.text === 'valueOf' && obj.text === 'String') {
+        const firstArg = args.namedChild(0);
+        if (firstArg) {
+          const v = tryFoldConstant(firstArg);
+          if (v !== null) {
+            // If it's a number, treat as charcode
+            const num = parseInt(v, 10);
+            if (!isNaN(num) && num >= 0 && num < 0x110000) {
+              return String.fromCharCode(num);
+            }
+            return v;
+          }
+        }
+      }
+      // Character.toString((char)101)
+      if (name.text === 'toString' && obj.text === 'Character') {
+        const firstArg = args.namedChild(0);
+        if (firstArg) {
+          const v = tryFoldConstant(firstArg);
+          if (v !== null) {
+            const num = parseInt(v, 10);
+            if (!isNaN(num) && num >= 0 && num < 0x110000) {
+              return String.fromCharCode(num);
+            }
+            return v;
+          }
+        }
+      }
+    }
+  }
+  // new String(new byte[]{101,118,97,108}) → "eval"
+  if (n.type === 'object_creation_expression') {
+    const typeNode = n.childForFieldName('type');
+    const args = n.childForFieldName('arguments');
+    if (typeNode?.text === 'String' && args) {
+      const firstArg = args.namedChild(0);
+      if (firstArg?.type === 'array_creation_expression') {
+        const init = firstArg.childForFieldName('value');
+        if (init?.type === 'array_initializer') {
+          return tryFoldByteArray(init);
+        }
+      }
+      // new String(new byte[]{...}) where the array is an array_initializer directly
+      if (firstArg?.type === 'object_creation_expression') {
+        // nested: new String(new byte[]{101,...})
+        for (let i = 0; i < firstArg.namedChildCount; i++) {
+          const child = firstArg.namedChild(i);
+          if (child?.type === 'array_initializer') {
+            return tryFoldByteArray(child);
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Fold StringBuilder chain: .append("ev").append("al") → "eval" */
+function tryFoldStringBuilderChain(node: SyntaxNode): string | null {
+  // Walk the chain from right to left collecting append arguments
+  const parts: string[] = [];
+  let current: SyntaxNode | null = node;
+
+  while (current?.type === 'method_invocation') {
+    const name = current.childForFieldName('name');
+    const args = current.childForFieldName('arguments');
+    const obj = current.childForFieldName('object');
+
+    if (name?.text === 'append' && args) {
+      const firstArg = args.namedChild(0);
+      if (firstArg) {
+        const v = tryFoldConstant(firstArg);
+        if (v !== null) {
+          parts.unshift(v);
+        } else {
+          return null; // non-constant arg, bail
+        }
+      }
+      current = obj ?? null;
+    } else {
+      break;
+    }
+  }
+
+  // Current should now be the StringBuilder constructor (new StringBuilder())
+  if (current?.type === 'object_creation_expression') {
+    const typeNode = current.childForFieldName('type');
+    if (typeNode?.text === 'StringBuilder' || typeNode?.text === 'StringBuffer') {
+      // Check if constructor has an initial string argument
+      const ctorArgs = current.childForFieldName('arguments');
+      if (ctorArgs && ctorArgs.namedChildCount > 0) {
+        const initArg = ctorArgs.namedChild(0);
+        if (initArg) {
+          const initVal = tryFoldConstant(initArg);
+          if (initVal !== null) parts.unshift(initVal);
+          else return null;
+        }
+      }
+      return parts.join('');
+    }
+  }
+  return null;
+}
+
+/** Fold String.format("%s%s", "ev", "al") → "eval" */
+function tryFoldStringFormat(args: SyntaxNode): string | null {
+  if (args.namedChildCount < 2) return null;
+  const fmtArg = args.namedChild(0);
+  if (!fmtArg) return null;
+  const fmt = tryFoldConstant(fmtArg);
+  if (fmt === null) return null;
+
+  // Only handle simple %s patterns
+  const placeholders = fmt.match(/%s/g);
+  if (!placeholders) return null;
+  if (placeholders.length !== args.namedChildCount - 1) return null;
+
+  const values: string[] = [];
+  for (let i = 1; i < args.namedChildCount; i++) {
+    const arg = args.namedChild(i);
+    if (!arg) return null;
+    const v = tryFoldConstant(arg);
+    if (v === null) return null;
+    values.push(v);
+  }
+
+  let result = fmt;
+  for (const v of values) {
+    result = result.replace('%s', v);
+  }
+  return result;
+}
+
+/** Fold byte array initializer: {101, 118, 97, 108} → "eval" */
+function tryFoldByteArray(init: SyntaxNode): string | null {
+  const codes: number[] = [];
+  for (let i = 0; i < init.namedChildCount; i++) {
+    const el = init.namedChild(i);
+    if (!el) return null;
+    const v = tryFoldConstant(el);
+    if (v === null) return null;
+    const num = parseInt(v, 10);
+    if (isNaN(num)) return null;
+    codes.push(num);
+  }
+  if (codes.length === 0) return null;
+  return String.fromCharCode(...codes);
+}
+
+// ---------------------------------------------------------------------------
 // AST Node Type Sets (tree-sitter-java)
 // ---------------------------------------------------------------------------
 
@@ -241,6 +473,41 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
         };
       }
     }
+
+    // ── Anti-evasion: Class.forName with constant-folded argument ──
+    // Class.forName("ev" + "al") or Class.forName(constructed) → reflection
+    if (obj && name?.text === 'forName' && obj.text === 'Class') {
+      const args = node.childForFieldName('arguments');
+      const firstArg = args?.namedChild(0);
+      if (firstArg) {
+        const folded = tryFoldConstant(firstArg);
+        // Whether we can fold or not, Class.forName is always reflection
+        return {
+          nodeType: 'EXTERNAL',
+          subtype: 'reflection',
+          tainted: folded === null, // tainted if we can't resolve the constant
+          chain: ['Class', 'forName'],
+        };
+      }
+    }
+
+    // ── Anti-evasion: Method.invoke — reflective invocation ──
+    if (name?.text === 'invoke' && obj) {
+      const objChain = extractCalleeChain(obj);
+      const last = objChain[objChain.length - 1];
+      // .getMethod(...).invoke(...) or variable.invoke(...)
+      if (last === 'invoke' || objChain.some(p => p === 'getMethod' || p === 'getDeclaredMethod')) {
+        return {
+          nodeType: 'EXTERNAL',
+          subtype: 'reflection',
+          tainted: true,
+          chain: [...objChain, 'invoke'],
+        };
+      }
+      // Fallback: any .invoke() call on an unknown receiver could be reflective
+      // Only flag if the receiver comes from getMethod/getDeclaredMethod chain
+    }
+
     return null;
   }
 
@@ -714,10 +981,18 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         }
       }
 
+      // Constant folding: String action = "quer" + "y" -> constantValue = "query"
+      let constantValue: string | undefined;
+      if (valueNode) {
+        const folded = tryFoldConstant(valueNode);
+        if (folded !== null) constantValue = folded;
+      }
+
       ctx.declareVariable(varName, kind, null, tainted, producingNodeId);
-      if (aliasChain) {
-        const v = ctx.resolveVariable(varName);
-        if (v) v.aliasChain = aliasChain;
+      const v = ctx.resolveVariable(varName);
+      if (v) {
+        if (aliasChain) v.aliasChain = aliasChain;
+        if (constantValue) v.constantValue = constantValue;
       }
     }
     return;
@@ -1061,6 +1336,22 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         if (resolution.nodeType === 'EXTERNAL' && resolution.subtype === 'system_exec') {
           n.attack_surface.push('command_injection');
         }
+        // Anti-evasion: tag Class.forName and reflection calls, resolve variable constants
+        if (resolution.nodeType === 'EXTERNAL' && resolution.subtype === 'reflection') {
+          n.tags.push('anti_evasion', 'reflection');
+          // Try to resolve the first argument from variable constantValue
+          const reflArgs = node.childForFieldName('arguments');
+          const reflFirstArg = reflArgs?.namedChild(0);
+          if (reflFirstArg?.type === 'identifier') {
+            const argVar = ctx.resolveVariable(reflFirstArg.text);
+            if (argVar?.constantValue) {
+              n.label = `Class.forName("${argVar.constantValue}")`;
+              n.tags.push(`resolved:${argVar.constantValue}`);
+              // Not tainted since we resolved it to a constant
+              n.data_out = n.data_out.filter((d: any) => !d.tainted);
+            }
+          }
+        }
         ctx.neuralMap.nodes.push(n);
         ctx.lastCreatedNodeId = n.id;
         ctx.emitContainsIfNeeded(n.id);
@@ -1175,6 +1466,65 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
               break;
             }
           }
+        }
+
+        // -- Anti-evasion: Class.forName(variable) with constant-folded variable --
+        // Detects: String name = "ev" + "al"; Class.forName(name)
+        if (aliasObj?.text === 'Class' && aliasName?.text === 'forName') {
+          const argsNode = node.childForFieldName('arguments');
+          const firstArg = argsNode?.namedChild(0);
+          let resolved = false;
+          if (firstArg) {
+            // Try direct constant folding first
+            let foldedClassName = tryFoldConstant(firstArg);
+            // Fall back to variable constantValue lookup
+            if (!foldedClassName && firstArg.type === 'identifier') {
+              const argVar = ctx.resolveVariable(firstArg.text);
+              if (argVar?.constantValue) foldedClassName = argVar.constantValue;
+            }
+            const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
+            const reflectNode = createNode({
+              label: foldedClassName ? `Class.forName("${foldedClassName}")` : label,
+              node_type: 'EXTERNAL',
+              node_subtype: 'reflection',
+              language: 'java',
+              file: ctx.neuralMap.source_file,
+              line_start: node.startPosition.row + 1,
+              line_end: node.endPosition.row + 1,
+              code_snapshot: node.text.slice(0, 200),
+            });
+            reflectNode.tags.push('anti_evasion', 'reflection');
+            if (foldedClassName) {
+              reflectNode.tags.push(`resolved:${foldedClassName}`);
+            }
+            // If we couldn't fold, the argument might be tainted
+            if (!foldedClassName) {
+              reflectNode.data_out.push({
+                name: 'result', source: reflectNode.id,
+                data_type: 'unknown', tainted: true, sensitivity: 'NONE',
+              });
+            }
+            // Check for tainted args flowing in
+            if (argsNode) {
+              for (let a = 0; a < argsNode.namedChildCount; a++) {
+                const arg = argsNode.namedChild(a);
+                if (!arg) continue;
+                const taintSources = extractTaintSources(arg, ctx);
+                for (const source of taintSources) {
+                  ctx.addDataFlow(source.nodeId, reflectNode.id, source.name, 'unknown', true);
+                  reflectNode.data_out.push({
+                    name: 'result', source: reflectNode.id,
+                    data_type: 'unknown', tainted: true, sensitivity: 'NONE',
+                  });
+                }
+              }
+            }
+            ctx.neuralMap.nodes.push(reflectNode);
+            ctx.lastCreatedNodeId = reflectNode.id;
+            ctx.emitContainsIfNeeded(reflectNode.id);
+            resolved = true;
+          }
+          if (resolved) break;
         }
 
         // -- Unresolved call -- check if it's a locally-defined method --

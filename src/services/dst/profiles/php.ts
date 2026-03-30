@@ -235,6 +235,201 @@ function isParameterizedQuery(callNode: SyntaxNode): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// tryFoldConstant -- PHP constant folding for anti-evasion
+// ---------------------------------------------------------------------------
+// PHP attackers construct dangerous function names at runtime to dodge static
+// analysis. This folds them back:
+//   chr(101).chr(118).chr(97).chr(108)  → "eval"
+//   'ev'.'al'                            → "eval"
+//   base64_decode('ZXZhbA==')            → "eval"
+//   hex2bin('6576616c')                  → "eval"
+//   pack('C*', 101, 118, 97, 108)       → "eval"
+//   str_rot13('riny')                    → "eval"
+
+function resolvePhpEscapes(s: string): string {
+  return s
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\')
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    .replace(/\\\$/g, '$');
+}
+
+function tryFoldConstant(n: SyntaxNode): string | null {
+  // Literal strings -- strip enclosing quotes, resolve escape sequences
+  if (n.type === 'string') {
+    const raw = n.text.replace(/^['"`]|['"`]$/g, '');
+    return resolvePhpEscapes(raw);
+  }
+  if (n.type === 'string_content' || n.type === 'string_value') {
+    return resolvePhpEscapes(n.text);
+  }
+  // Integer literals -- return as string for chr() operations
+  if (n.type === 'integer') {
+    return n.text;
+  }
+  // Float literals
+  if (n.type === 'float') {
+    return n.text;
+  }
+  // Binary expression: 'ev'.'al' → "eval" (PHP uses . for concat)
+  // Also handles arithmetic for obfuscated integer values
+  if (n.type === 'binary_expression') {
+    const left = n.childForFieldName('left');
+    const right = n.childForFieldName('right');
+    if (left && right) {
+      // Determine operator -- PHP tree-sitter uses child nodes for operator
+      const opNode = n.children.find(c => c.type === '.' || c.type === '+' || c.type === '-' || c.type === '*');
+      const op = opNode?.type ?? null;
+      if (op === '.') {
+        // String concatenation
+        const lv = tryFoldConstant(left);
+        const rv = tryFoldConstant(right);
+        if (lv !== null && rv !== null) return lv + rv;
+      }
+      if (op === '+') {
+        const lv = tryFoldConstant(left);
+        const rv = tryFoldConstant(right);
+        if (lv !== null && rv !== null) {
+          const ln = Number(lv), rn = Number(rv);
+          if (!isNaN(ln) && !isNaN(rn)) return String(ln + rn);
+          // String concat fallback
+          return lv + rv;
+        }
+      }
+    }
+  }
+  // Parenthesized expression: ('ev'.'al') → "eval"
+  if (n.type === 'parenthesized_expression') {
+    const inner = n.namedChild(0);
+    return inner ? tryFoldConstant(inner) : null;
+  }
+  // ── PHP function-based evasion patterns ──
+  if (n.type === 'function_call_expression') {
+    const func = n.childForFieldName('function');
+    const args = n.childForFieldName('arguments');
+    if (func && args) {
+      const funcName = func.type === 'name' ? func.text : null;
+
+      // chr(N) → single character
+      if (funcName === 'chr') {
+        const firstArg = args.namedChild(0);
+        // Handle argument wrapper node
+        const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (argExpr) {
+          const val = tryFoldConstant(argExpr);
+          if (val !== null) {
+            const code = parseInt(val, 10);
+            if (!isNaN(code) && code >= 0 && code <= 127) {
+              return String.fromCharCode(code);
+            }
+          }
+        }
+      }
+
+      // base64_decode('ZXZhbA==') → "eval"
+      if (funcName === 'base64_decode') {
+        const firstArg = args.namedChild(0);
+        const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (argExpr) {
+          const b64 = tryFoldConstant(argExpr);
+          if (b64 !== null) {
+            try {
+              return Buffer.from(b64, 'base64').toString('utf-8');
+            } catch { /* not valid base64 */ }
+          }
+        }
+      }
+
+      // hex2bin('6576616c') → "eval"
+      if (funcName === 'hex2bin') {
+        const firstArg = args.namedChild(0);
+        const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (argExpr) {
+          const hex = tryFoldConstant(argExpr);
+          if (hex !== null) {
+            try {
+              return Buffer.from(hex, 'hex').toString('utf-8');
+            } catch { /* not valid hex */ }
+          }
+        }
+      }
+
+      // pack('C*', 101, 118, 97, 108) → "eval"
+      if (funcName === 'pack') {
+        const firstArg = args.namedChild(0);
+        const fmtExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (fmtExpr) {
+          const fmt = tryFoldConstant(fmtExpr);
+          // Only handle C* (unsigned char) format -- the most common evasion
+          if (fmt === 'C*') {
+            const codes: number[] = [];
+            let allLiteral = true;
+            for (let i = 1; i < args.namedChildCount; i++) {
+              const arg = args.namedChild(i);
+              const expr = arg?.type === 'argument' ? arg.namedChild(0) : arg;
+              if (expr) {
+                const val = tryFoldConstant(expr);
+                if (val !== null) {
+                  const num = parseInt(val, 10);
+                  if (!isNaN(num)) {
+                    codes.push(num);
+                    continue;
+                  }
+                }
+              }
+              allLiteral = false;
+              break;
+            }
+            if (allLiteral && codes.length > 0) {
+              return String.fromCharCode(...codes);
+            }
+          }
+        }
+      }
+
+      // str_rot13('riny') → "eval"
+      if (funcName === 'str_rot13') {
+        const firstArg = args.namedChild(0);
+        const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (argExpr) {
+          const input = tryFoldConstant(argExpr);
+          if (input !== null) {
+            return input.replace(/[a-zA-Z]/g, (c) => {
+              const base = c <= 'Z' ? 65 : 97;
+              return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+            });
+          }
+        }
+      }
+
+      // strtolower / strtoupper -- common wrapping to further obscure
+      if (funcName === 'strtolower') {
+        const firstArg = args.namedChild(0);
+        const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (argExpr) {
+          const val = tryFoldConstant(argExpr);
+          if (val !== null) return val.toLowerCase();
+        }
+      }
+      if (funcName === 'strtoupper') {
+        const firstArg = args.namedChild(0);
+        const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+        if (argExpr) {
+          const val = tryFoldConstant(argExpr);
+          if (val !== null) return val.toUpperCase();
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // resolveCallee -- resolve a PHP call node to a NeuralMap node type
 // ---------------------------------------------------------------------------
 
@@ -269,6 +464,29 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
         };
       }
     }
+
+    // ── CONSTANT FOLDING for constructed callee names ──
+    // Patterns: $fn = chr(101).chr(118).chr(97).chr(108); $fn($input);
+    //           (base64_decode('ZXZhbA=='))($input);
+    //           ('ev'.'al')($input);
+    // The callee node is a parenthesized_expression, binary_expression,
+    // or another function_call_expression (e.g., base64_decode(...)).
+    if (callee.type !== 'name' && callee.type !== 'qualified_name') {
+      const folded = tryFoldConstant(callee);
+      if (folded) {
+        const chain = [folded];
+        const pattern = _lookupCallee(chain);
+        if (pattern) {
+          return {
+            nodeType: pattern.nodeType,
+            subtype: pattern.subtype,
+            tainted: pattern.tainted,
+            chain,
+          };
+        }
+      }
+    }
+
     return null;
   }
 
@@ -685,10 +903,15 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
 
 function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): void {
   // PHP assignments are expression_statement > assignment_expression
+  // Also handles augmented_assignment_expression (.= += etc.)
   if (node.type !== 'expression_statement') return;
 
-  const assignExpr = node.namedChildren.find(c => c.type === 'assignment_expression');
+  const assignExpr = node.namedChildren.find(c =>
+    c.type === 'assignment_expression' || c.type === 'augmented_assignment_expression'
+  );
   if (!assignExpr) return;
+
+  const isAugmented = assignExpr.type === 'augmented_assignment_expression';
 
   const kind: VariableInfo['kind'] = 'let'; // PHP variables are all mutable
 
@@ -764,6 +987,18 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
     }
   }
 
+  // Constant folding: $fn = 'ev'.'al' → constantValue = "eval"
+  // $fn = chr(101).chr(118).chr(97).chr(108) → constantValue = "eval"
+  // $fn = base64_decode('ZXZhbA==') → constantValue = "eval"
+  let constantValue: string | undefined;
+  {
+    const valueNode = assignExpr.childForFieldName('right');
+    if (valueNode) {
+      const folded = tryFoldConstant(valueNode);
+      if (folded !== null) constantValue = folded;
+    }
+  }
+
   // Preserve existing taint
   const preserveTaint = (varName: string, newTainted: boolean, newProducing: string | null) => {
     if (!newTainted) {
@@ -776,6 +1011,7 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
     const v = ctx.resolveVariable(varName);
     if (v) {
       if (aliasChain) v.aliasChain = aliasChain;
+      if (constantValue) v.constantValue = constantValue;
     }
   };
 
@@ -1136,6 +1372,66 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
       }
 
+      // Constant-folded variable callee: $fn = 'ev'.'al'; $fn($input)
+      if (!resolution) {
+        const calleeNode = node.childForFieldName('function');
+        if (calleeNode?.type === 'variable_name') {
+          const varName = getVarName(calleeNode);
+          const varInfo = ctx.resolveVariable(varName);
+          if (varInfo?.constantValue) {
+            const chain = [varInfo.constantValue];
+            const pattern = _lookupCallee(chain);
+            if (pattern) {
+              resolution = {
+                nodeType: pattern.nodeType,
+                subtype: pattern.subtype,
+                tainted: pattern.tainted,
+                chain,
+              };
+            }
+          }
+        }
+      }
+
+      // call_user_func / call_user_func_array: first arg is the callee name
+      if (!resolution) {
+        const calleeNode = node.childForFieldName('function');
+        if (calleeNode?.type === 'name' && (calleeNode.text === 'call_user_func' || calleeNode.text === 'call_user_func_array')) {
+          const argsNode = node.childForFieldName('arguments');
+          const firstArg = argsNode?.namedChild(0);
+          const argExpr = firstArg?.type === 'argument' ? firstArg.namedChild(0) : firstArg;
+          if (argExpr) {
+            // Try constant folding on the first arg (the callee name)
+            let resolvedName: string | null = null;
+            // Direct string: call_user_func('eval', ...)
+            if (argExpr.type === 'string') {
+              resolvedName = argExpr.text.replace(/^['"`]|['"`]$/g, '');
+            }
+            // Constructed: call_user_func('ev'.'al', ...)
+            if (!resolvedName) {
+              resolvedName = tryFoldConstant(argExpr);
+            }
+            // Variable with constantValue: $fn = 'eval'; call_user_func($fn, ...)
+            if (!resolvedName && argExpr.type === 'variable_name') {
+              const argVarInfo = ctx.resolveVariable(getVarName(argExpr));
+              if (argVarInfo?.constantValue) resolvedName = argVarInfo.constantValue;
+            }
+            if (resolvedName) {
+              const chain = [resolvedName];
+              const pattern = _lookupCallee(chain);
+              if (pattern) {
+                resolution = {
+                  nodeType: pattern.nodeType,
+                  subtype: pattern.subtype,
+                  tainted: pattern.tainted,
+                  chain,
+                };
+              }
+            }
+          }
+        }
+      }
+
       if (resolution) {
         const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
         const n = createNode({
@@ -1237,6 +1533,60 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
 
           for (const source of taintSources) {
             ctx.addDataFlow(source.nodeId, callNode.id, source.name, 'unknown', true);
+          }
+        } else {
+          // ── RUNTIME EVAL MARKER ──
+          // The callee is a variable_name ($fn(...)) or dynamic_variable_name ($$fn(...))
+          // and we couldn't resolve it via constant folding, alias chains, or the function registry.
+          // Flag it for runtime evaluation -- this is a potential evasion vector.
+          const unresolvedCallee = node.childForFieldName('function');
+          if (unresolvedCallee && (
+            unresolvedCallee.type === 'variable_name' ||
+            unresolvedCallee.type === 'dynamic_variable_name' ||
+            // call_user_func with unresolvable first arg
+            (unresolvedCallee.type === 'name' && (unresolvedCallee.text === 'call_user_func' || unresolvedCallee.text === 'call_user_func_array'))
+          )) {
+            const dynNode = createNode({
+              label: node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text,
+              node_type: 'EXTERNAL',
+              node_subtype: 'dynamic_dispatch',
+              language: 'php',
+              file: ctx.neuralMap.source_file,
+              line_start: node.startPosition.row + 1,
+              line_end: node.endPosition.row + 1,
+              code_snapshot: node.text.slice(0, 200),
+            });
+            dynNode.tags.push('needs_runtime_eval', 'unresolved_callee');
+            dynNode.attack_surface.push('dynamic_dispatch');
+            dynNode.data_out.push({
+              name: 'result',
+              source: dynNode.id,
+              data_type: 'unknown',
+              tainted: true,
+              sensitivity: 'NONE',
+            });
+            ctx.neuralMap.nodes.push(dynNode);
+            ctx.lastCreatedNodeId = dynNode.id;
+            ctx.emitContainsIfNeeded(dynNode.id);
+            // Wire tainted arguments
+            const dynArgs = node.childForFieldName('arguments');
+            if (dynArgs) {
+              for (let a = 0; a < dynArgs.namedChildCount; a++) {
+                const arg = dynArgs.namedChild(a);
+                if (!arg) continue;
+                const argTaint = extractTaintSources(arg, ctx);
+                for (const source of argTaint) {
+                  ctx.addDataFlow(source.nodeId, dynNode.id, source.name, 'unknown', true);
+                }
+              }
+            }
+            // Wire tainted callee variable
+            if (unresolvedCallee.type === 'variable_name') {
+              const calleeTaint = extractTaintSources(unresolvedCallee, ctx);
+              for (const source of calleeTaint) {
+                ctx.addDataFlow(source.nodeId, dynNode.id, source.name, 'unknown', true);
+              }
+            }
           }
         }
       }
@@ -1424,11 +1774,21 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'include_once_expression':
     case 'require_expression':
     case 'require_once_expression': {
-      const keyword = node.type.replace('_expression', '').replace('_once', '_once');
+      // First check if the included path is tainted (pre-scan)
+      let inclTainted = false;
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (child) {
+          const ts = extractTaintSources(child, ctx);
+          if (ts.length > 0) { inclTainted = true; break; }
+        }
+      }
+
       const inclNode = createNode({
         label: node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text,
-        node_type: 'STRUCTURAL',
-        node_subtype: 'dependency',
+        // Tainted path = EXTERNAL/file_include (security-relevant); static = STRUCTURAL/dependency
+        node_type: inclTainted ? 'EXTERNAL' : 'STRUCTURAL',
+        node_subtype: inclTainted ? 'file_include' : 'dependency',
         language: 'php',
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
@@ -1439,24 +1799,24 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       ctx.lastCreatedNodeId = inclNode.id;
       ctx.emitContainsIfNeeded(inclNode.id);
 
-      // If the included path is tainted, this is a file inclusion vulnerability
-      for (let i = 0; i < node.namedChildCount; i++) {
-        const child = node.namedChild(i);
-        if (!child) continue;
-        const taintSources = extractTaintSources(child, ctx);
-        for (const source of taintSources) {
-          ctx.addDataFlow(source.nodeId, inclNode.id, source.name, 'unknown', true);
+      // If the included path is tainted, wire up data flow and mark attack surface
+      if (inclTainted) {
+        for (let i = 0; i < node.namedChildCount; i++) {
+          const child = node.namedChild(i);
+          if (!child) continue;
+          const taintSources = extractTaintSources(child, ctx);
+          for (const source of taintSources) {
+            ctx.addDataFlow(source.nodeId, inclNode.id, source.name, 'unknown', true);
+          }
         }
-        if (taintSources.length > 0) {
-          inclNode.attack_surface.push('file_inclusion');
-          inclNode.data_out.push({
-            name: 'result',
-            source: inclNode.id,
-            data_type: 'unknown',
-            tainted: true,
-            sensitivity: 'NONE',
-          });
-        }
+        inclNode.attack_surface.push('file_inclusion');
+        inclNode.data_out.push({
+          name: 'result',
+          source: inclNode.id,
+          data_type: 'unknown',
+          tainted: true,
+          sensitivity: 'NONE',
+        });
       }
       break;
     }
@@ -1582,6 +1942,61 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'yield_expression': {
       const yieldN = createNode({ label: 'yield', node_type: 'CONTROL', node_subtype: 'yield', language: 'php', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
       ctx.neuralMap.nodes.push(yieldN); ctx.lastCreatedNodeId = yieldN.id; ctx.emitContainsIfNeeded(yieldN.id);
+      break;
+    }
+
+    // -- AUGMENTED ASSIGNMENT: $html .= $tainted --
+    case 'augmented_assignment_expression': {
+      const augOp = node.children.find(c => c.type?.endsWith('=') && c.type !== 'variable_name')?.text ?? '.=';
+      const augLeftNode = node.childForFieldName('left');
+      const augLeft = augLeftNode?.text?.slice(0, 40) ?? '?';
+      const augRight = node.childForFieldName('right');
+
+      // Pre-scan: check if the RHS is tainted and contains HTML tags
+      // Pattern: $html .= '<pre>' . $_GET['name'] . '</pre>' is XSS (HTML output building)
+      const augTaintSources = augRight ? extractTaintSources(augRight, ctx) : [];
+      const augCodeSnap = node.text.slice(0, 200);
+      const isHtmlConcat = augOp === '.=' && /<[a-z][a-z0-9]*[\s>\/]/i.test(augCodeSnap);
+      const isEgressLike = augTaintSources.length > 0 && isHtmlConcat;
+
+      const augN = createNode({
+        label: `${augLeft} ${augOp}`,
+        // When tainted data is concatenated into HTML, treat as EGRESS/display
+        // This catches the common PHP pattern: $html .= '<tag>' . $userInput . '</tag>'
+        node_type: isEgressLike ? 'EGRESS' : 'TRANSFORM',
+        node_subtype: isEgressLike ? 'display' : 'assignment',
+        language: 'php',
+        file: ctx.neuralMap.source_file,
+        line_start: node.startPosition.row + 1,
+        line_end: node.endPosition.row + 1,
+        code_snapshot: augCodeSnap,
+      });
+      if (isEgressLike) {
+        augN.attack_surface.push('html_output');
+      }
+      ctx.neuralMap.nodes.push(augN);
+      ctx.lastCreatedNodeId = augN.id;
+      ctx.emitContainsIfNeeded(augN.id);
+
+      if (augTaintSources.length > 0) {
+        for (const source of augTaintSources) {
+          ctx.addDataFlow(source.nodeId, augN.id, source.name, 'unknown', true);
+        }
+        if (augLeftNode?.type === 'variable_name') {
+          const varInfo = ctx.resolveVariable(getVarName(augLeftNode));
+          if (varInfo) {
+            varInfo.tainted = true;
+            varInfo.producingNodeId = augN.id;
+          }
+        }
+        augN.data_out.push({
+          name: 'result',
+          source: augN.id,
+          data_type: 'unknown',
+          tainted: true,
+          sensitivity: 'NONE',
+        });
+      }
       break;
     }
 

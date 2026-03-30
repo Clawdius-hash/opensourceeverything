@@ -45,6 +45,12 @@ const LANGUAGE_MAP: Record<string, LanguageConfig> = {
   '.java': { grammarPackage: 'tree-sitter-java',      profileImport: 'java' },
   '.php':  { grammarPackage: 'tree-sitter-php',       profileImport: 'php' },
   '.phtml': { grammarPackage: 'tree-sitter-php',      profileImport: 'php' },
+  '.rb':   { grammarPackage: 'tree-sitter-ruby',      profileImport: 'ruby' },
+  '.rake': { grammarPackage: 'tree-sitter-ruby',      profileImport: 'ruby' },
+  '.cs':  { grammarPackage: 'tree-sitter-c-sharp',    profileImport: 'csharp' },
+  '.kt':  { grammarPackage: '@tree-sitter-grammars/tree-sitter-kotlin', profileImport: 'kotlin' },
+  '.kts': { grammarPackage: '@tree-sitter-grammars/tree-sitter-kotlin', profileImport: 'kotlin' },
+  '.swift': { grammarPackage: 'tree-sitter-swift', profileImport: 'swift' },
 };
 
 const SCANNABLE_EXTENSIONS = new Set(Object.keys(LANGUAGE_MAP));
@@ -64,10 +70,34 @@ async function getParser(grammarPackage: string): Promise<InstanceType<typeof Pa
   await Parser.init();
   const parser = new Parser();
 
-  const wasmPath = path.resolve(
+  let wasmPath = path.resolve(
     __dirname,
     `../../../node_modules/${grammarPackage}/${grammarPackage}.wasm`
   );
+
+  // Some grammars use underscores in the WASM filename (e.g. tree-sitter-c_sharp.wasm)
+  if (!fs.existsSync(wasmPath)) {
+    const underscoreName = grammarPackage.replace(/-/g, '_');
+    const altPath = path.resolve(
+      __dirname,
+      `../../../node_modules/${grammarPackage}/${underscoreName}.wasm`
+    );
+    if (fs.existsSync(altPath)) {
+      wasmPath = altPath;
+    }
+  }
+
+  // Scoped packages: @org/tree-sitter-foo -> tree-sitter-foo.wasm inside the scoped dir
+  if (!fs.existsSync(wasmPath) && grammarPackage.startsWith('@')) {
+    const baseName = grammarPackage.split('/').pop()!;
+    const scopedPath = path.resolve(
+      __dirname,
+      `../../../node_modules/${grammarPackage}/${baseName}.wasm`
+    );
+    if (fs.existsSync(scopedPath)) {
+      wasmPath = scopedPath;
+    }
+  }
 
   if (!fs.existsSync(wasmPath)) {
     console.error(
@@ -580,8 +610,14 @@ async function main(): Promise<void> {
           }
         }
 
-        // Run verifiers on the merged map
-        const mergedResults = verifyAll(crossFileResult.mergedMap, 'javascript');
+        // Run verifiers on the merged map — use dominant language from scanned files
+        const langCounts = new Map<string, number>();
+        for (const fr of allResults) {
+          const lang = detectLanguage(path.resolve(target!, fr.filename)).profileImport;
+          langCounts.set(lang, (langCounts.get(lang) ?? 0) + 1);
+        }
+        const dominantLang = [...langCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'javascript';
+        const mergedResults = verifyAll(crossFileResult.mergedMap, dominantLang);
         const mergedFindings = mergedResults.filter(r => !r.holds).reduce((s, r) => s + r.findings.length, 0);
 
         crossFileFindings = {

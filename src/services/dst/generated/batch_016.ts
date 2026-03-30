@@ -108,7 +108,80 @@ export const verifyCWE688 = v('CWE-688', 'Function Call With Incorrect Variable 
 // AUTH→EGRESS without TRANSFORM (3)
 export const verifyCWE204 = v('CWE-204', 'Observable Response Discrepancy', 'medium', 'AUTH', 'EGRESS', nT, /\bgeneric.*error\b|\bsame.*response\b|\buniform\b/i, 'TRANSFORM (uniform responses for auth success/failure)', 'Return identical response shape for valid/invalid credentials to prevent user enumeration.');
 export const verifyCWE206 = v('CWE-206', 'Observable Internal Behavioral Discrepancy', 'medium', 'AUTH', 'EGRESS', nT, /\bconstant.*time\b|\buniform\b|\bsame.*behavior\b/i, 'TRANSFORM (uniform internal behavior regardless of input validity)', 'Ensure consistent timing and behavior regardless of auth input validity.');
-export const verifyCWE208 = v('CWE-208', 'Observable Timing Discrepancy', 'medium', 'AUTH', 'EGRESS', nT, /\btimingSafe\b|\bconstant.*time\b|\bcrypto\.timingSafeEqual\b/i, 'TRANSFORM (constant-time comparison for auth)', 'Use crypto.timingSafeEqual for secret comparison. Timing differences leak information.');
+// CWE-208: Observable Timing Discrepancy
+// Hand-written: detects secret comparison using non-constant-time operations (===, ==, strcmp).
+// Timing side channels leak information about secrets byte-by-byte. Must use constant-time
+// comparison (crypto.timingSafeEqual, hmac.compare, secure_compare) for tokens, passwords, HMACs.
+export const verifyCWE208 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+
+  // Sources: AUTH nodes that handle secret comparison (password check, token validation, HMAC)
+  const authComparisons = map.nodes.filter(n =>
+    (n.node_type === 'AUTH' || n.node_type === 'CONTROL') &&
+    (n.node_subtype.includes('comparison') || n.node_subtype.includes('verify') ||
+     n.node_subtype.includes('hmac') || n.node_subtype.includes('token') ||
+     n.attack_surface.includes('secret_comparison') ||
+     n.code_snapshot.match(
+       /\b(password|token|secret|hmac|signature|api[_-]?key|hash|digest)\b/i
+     ) !== null)
+  );
+
+  // Unsafe: direct string comparison operators on secrets
+  const unsafeCompare = /===?\s*['"`]|['"`]\s*===?|strcmp\b|\.equals\s*\(|===?\s*\w*(token|secret|password|key|hash|hmac|signature)\b|\b(token|secret|password|key|hash|hmac|signature)\w*\s*===?/i;
+
+  // Safe: constant-time comparison functions
+  const safeCompare = /\btimingSafeEqual\b|\bconstant[_-]?time\b|\bsecure[_-]?compare\b|\bhmac\.verify\b|\bcrypto\.subtle\.verify\b|\bbcrypt\.compare\b|\bargon2\.verify\b|\bscrypt\.verify\b/i;
+
+  for (const node of authComparisons) {
+    const code = node.code_snapshot;
+    // Only flag if code uses direct comparison AND doesn't use safe comparison
+    if (unsafeCompare.test(code) && !safeCompare.test(code)) {
+      // Find where this comparison result flows (to EGRESS)
+      const egressTargets = node.edges
+        .map(e => map.nodes.find(n => n.id === e.target))
+        .filter(n => n && (n.node_type === 'EGRESS' || n.node_type === 'TRANSFORM'));
+
+      const sink = egressTargets[0] || node;
+      findings.push({
+        source: nodeRef(node),
+        sink: nodeRef(sink),
+        missing: 'TRANSFORM (constant-time comparison for secret values)',
+        severity: 'medium',
+        description: `Secret comparison at ${node.label} uses a non-constant-time operator (=== or strcmp). ` +
+          `Timing differences reveal how many bytes of the secret matched, enabling byte-by-byte extraction.`,
+        fix: 'Use crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) for all secret comparisons. ' +
+          'For passwords, use bcrypt.compare() which is inherently constant-time. ' +
+          'Never use === or == to compare tokens, HMACs, or API keys.',
+      });
+    }
+  }
+
+  // Also check: any node with secret comparison that flows to EGRESS without TRANSFORM
+  const egress = nodesOfType(map, 'EGRESS');
+  for (const src of authComparisons) {
+    if (safeCompare.test(src.code_snapshot)) continue; // already using safe comparison
+    for (const sink of egress) {
+      if (src.id === sink.id) continue;
+      if (hasPathWithoutTransform(map, src.id, sink.id)) {
+        // Only add if we haven't already flagged this source
+        if (!findings.some(f => f.source.id === src.id)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'TRANSFORM (constant-time comparison before auth response)',
+            severity: 'medium',
+            description: `Auth comparison at ${src.label} reaches response at ${sink.label} without ` +
+              `constant-time protection. Response timing leaks secret information.`,
+            fix: 'Wrap secret comparisons in crypto.timingSafeEqual. Ensure consistent response timing ' +
+              'regardless of comparison result. Add artificial delay to normalize timing.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-208', name: 'Observable Timing Discrepancy', holds: findings.length === 0, findings };
+};
 
 // STRUCTURAL→EGRESS without TRANSFORM (3)
 export const verifyCWE207 = v('CWE-207', 'Observable Behavioral Discrepancy With Equivalent Error', 'low', 'STRUCTURAL', 'EGRESS', nT, /\bgeneric.*error\b|\buniform\b/i, 'TRANSFORM (uniform error responses)', 'Return consistent error responses regardless of failure reason.');
@@ -220,7 +293,21 @@ export const verifyCWE584 = v('CWE-584', 'Return Inside Finally Block', 'medium'
 export const verifyCWE698 = v('CWE-698', 'Execution After Redirect', 'medium', 'CONTROL', 'EGRESS', nCi, /\breturn\b.*\bredirect\b|\bexit\b|\bdie\b/i, 'CONTROL (return/exit after redirect)', 'Always return/exit after sending a redirect. Code after redirect still executes.');
 
 // STRUCTURAL→STRUCTURAL without CONTROL (2)
-export const verifyCWE628 = v('CWE-628', 'Function Call with Incorrectly Specified Arguments', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\btypescript\b|\btype.*check\b|\blint\b/i, 'CONTROL (type-safe function calls)', 'Use TypeScript or linting to catch incorrect arguments at compile time.');
+// CWE-628: Only meaningful for statically typed languages where argument types/counts
+// are enforced. Dynamic languages (JS, Python, Ruby, PHP) have no compile-time argument
+// checking, so STRUCTURAL→STRUCTURAL paths are normal, not a vulnerability.
+export const verifyCWE628 = (map: NeuralMap): VerificationResult => {
+  const DYNAMIC_LANGS = new Set(['javascript', 'typescript', 'python', 'ruby', 'php']);
+  // Infer language from nodes or source file extension
+  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
+  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
+  const extLang: Record<string, string> = { js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php' };
+  const effectiveLang = lang || extLang[ext] || '';
+  if (DYNAMIC_LANGS.has(effectiveLang)) {
+    return { cwe: 'CWE-628', name: 'Function Call with Incorrectly Specified Arguments', holds: true, findings: [] };
+  }
+  return v('CWE-628', 'Function Call with Incorrectly Specified Arguments', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\btypescript\b|\btype.*check\b|\blint\b/i, 'CONTROL (type-safe function calls)', 'Use TypeScript or linting to catch incorrect arguments at compile time.')(map);
+};
 export const verifyCWE653 = v('CWE-653', 'Improper Isolation or Compartmentalization', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\bisolat\b|\bsandbox\b|\bcompartment\b|\bmodule\b/i, 'CONTROL (proper isolation between components)', 'Isolate security domains. Use separate processes or sandboxes for untrusted code.');
 
 // TRANSFORM→TRANSFORM without TRANSFORM (2)

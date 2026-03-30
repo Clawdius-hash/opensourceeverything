@@ -49,20 +49,27 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   readline:          { nodeType: 'INGRESS',   subtype: 'user_input',    tainted: true },
 
   // Procedural mysqli (these are direct function calls, not OOP method calls)
-  mysqli_query:        { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
-  mysqli_real_query:   { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
-  mysqli_prepare:      { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
+  mysqli_query:        { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
+  mysqli_real_query:   { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
+  mysqli_prepare:      { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
   mysqli_real_escape_string: { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
-  mysqli_multi_query:  { nodeType: 'STORAGE',   subtype: 'db_write',     tainted: false },
+  mysqli_multi_query:  { nodeType: 'STORAGE',   subtype: 'sql_write',    tainted: false },
   mysqli_fetch_assoc:  { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysqli_fetch_array:  { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysqli_fetch_row:    { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysqli_fetch_all:    { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysqli_num_rows:     { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
-  mysqli_connect:      { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
-  mysqli_close:        { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
+  mysqli_connect:      { nodeType: 'STORAGE',   subtype: 'db_connect',   tainted: false },
+  mysqli_close:        { nodeType: 'STORAGE',   subtype: 'db_connect',   tainted: false },
+  // WordPress options API
+  get_option:          { nodeType: 'STORAGE',   subtype: 'config_read',  tainted: true },
+  update_option:       { nodeType: 'STORAGE',   subtype: 'config_write', tainted: false },
+
+  // Drupal database API
+  db_query:            { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
+
   // Deprecated mysql_* (still found in legacy code)
-  mysql_query:         { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
+  mysql_query:         { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
   mysql_real_escape_string: { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
   mysql_fetch_assoc:   { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysql_fetch_array:   { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
@@ -102,6 +109,9 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   serialize:         { nodeType: 'EGRESS',    subtype: 'serialize',     tainted: false },
   yaml_emit:         { nodeType: 'EGRESS',    subtype: 'serialize',     tainted: false },
 
+  // Drupal render
+  drupal_render:     { nodeType: 'EGRESS',    subtype: 'display',       tainted: false },
+
   // Email
   mail:              { nodeType: 'EGRESS',    subtype: 'email',         tainted: false },
 
@@ -135,6 +145,15 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   escapeshellcmd:    { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
   htmlspecialchars:  { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
   htmlentities:      { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
+
+  // WordPress output escaping
+  esc_html:          { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
+  esc_attr:          { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
+  esc_url:           { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
+
+  // WordPress input sanitization
+  sanitize_text_field: { nodeType: 'TRANSFORM', subtype: 'sanitize',    tainted: false },
+  wp_kses:           { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
   htmlspecialchars_decode: { nodeType: 'TRANSFORM', subtype: 'encode',  tainted: false },
   html_entity_decode:{ nodeType: 'TRANSFORM', subtype: 'encode',        tainted: false },
   strip_tags:        { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
@@ -230,7 +249,7 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   array_diff:        { nodeType: 'TRANSFORM', subtype: 'calculate',     tainted: false },
   array_intersect:   { nodeType: 'TRANSFORM', subtype: 'calculate',     tainted: false },
   compact:           { nodeType: 'TRANSFORM', subtype: 'calculate',     tainted: false },
-  extract:           { nodeType: 'TRANSFORM', subtype: 'calculate',     tainted: false },
+  extract:           { nodeType: 'INGRESS',   subtype: 'mass_assign',    tainted: true },
 
   // URL parsing
   parse_url:         { nodeType: 'TRANSFORM', subtype: 'parse',         tainted: false },
@@ -264,6 +283,11 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   ctype_digit:       { nodeType: 'CONTROL',   subtype: 'validation',    tainted: false },
   ctype_alnum:       { nodeType: 'CONTROL',   subtype: 'validation',    tainted: false },
 
+  // PHP 8.0 string validation (replaced strpos() !== false idiom)
+  str_contains:      { nodeType: 'CONTROL',   subtype: 'validation',    tainted: false },
+  str_starts_with:   { nodeType: 'CONTROL',   subtype: 'validation',    tainted: false },
+  str_ends_with:     { nodeType: 'CONTROL',   subtype: 'validation',    tainted: false },
+
   // Flow control
   exit:              { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
   die:               { nodeType: 'CONTROL',   subtype: 'guard',         tainted: false },
@@ -278,6 +302,10 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   pcntl_wait:        { nodeType: 'CONTROL',   subtype: 'event_handler', tainted: false },
 
   // == AUTH ==
+  // WordPress authorization
+  current_user_can:  { nodeType: 'AUTH',      subtype: 'authorize',     tainted: false },
+  wp_verify_nonce:   { nodeType: 'AUTH',      subtype: 'csrf_check',    tainted: false },
+
   password_hash:     { nodeType: 'AUTH',      subtype: 'authenticate',  tainted: false },
   password_verify:   { nodeType: 'AUTH',      subtype: 'authenticate',  tainted: false },
   password_needs_rehash: { nodeType: 'AUTH',  subtype: 'authenticate',  tainted: false },
@@ -286,6 +314,10 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   session_regenerate_id: { nodeType: 'AUTH',  subtype: 'authenticate',  tainted: false },
 
   // == STRUCTURAL ==
+  // WordPress hook system
+  add_action:        { nodeType: 'STRUCTURAL', subtype: 'event_handler', tainted: false },
+  add_filter:        { nodeType: 'STRUCTURAL', subtype: 'event_handler', tainted: false },
+
   require:           { nodeType: 'STRUCTURAL', subtype: 'dependency',   tainted: false },
   require_once:      { nodeType: 'STRUCTURAL', subtype: 'dependency',   tainted: false },
   include:           { nodeType: 'STRUCTURAL', subtype: 'dependency',   tainted: false },
@@ -343,6 +375,14 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Request.files':          { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'Request.server':         { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
 
+  // -- Symfony Form Component --
+  'form.handleRequest':     { nodeType: 'INGRESS', subtype: 'form_input',    tainted: true },
+  'form.getData':           { nodeType: 'INGRESS', subtype: 'form_input',    tainted: true },
+
+  // -- Slim / PSR-7 Request --
+  'request.getParam':       { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'request.getParsedBody':  { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
   // == EGRESS ==
 
   // -- Laravel Response --
@@ -352,6 +392,9 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'response.file':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.redirect':      { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.view':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- Slim / PSR-7 Response --
+  'response.write':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
 
   // -- Laravel helpers --
   'view':                   { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -365,6 +408,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'RedirectResponse':       { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'BinaryFileResponse':     { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'StreamedResponse':       { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- Symfony Twig --
+  'Environment.render':     { nodeType: 'TRANSFORM', subtype: 'template_render', tainted: false },
+  'Environment.display':    { nodeType: 'EGRESS',    subtype: 'display',          tainted: false },
 
   // -- Laravel Mail --
   'Mail.send':              { nodeType: 'EGRESS', subtype: 'email',         tainted: false },
@@ -402,16 +449,27 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'client.request':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'GuzzleHttp.Client':      { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
 
+  // -- Symfony HttpClient --
+  'HttpClient.request':     { nodeType: 'EXTERNAL', subtype: 'api_call',      tainted: false },
+
+  // -- Symfony Messenger --
+  'MessageBusInterface.dispatch': { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
+
   // -- Laravel Queue --
   'Queue.push':             { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
   'dispatch':               { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
 
   // == STORAGE ==
 
+  // -- WordPress $wpdb --
+  'wpdb.query':             { nodeType: 'STORAGE', subtype: 'sql_write',    tainted: false },
+  'wpdb.prepare':           { nodeType: 'CONTROL', subtype: 'sql_sanitize', tainted: false },
+  'wpdb.get_results':       { nodeType: 'STORAGE', subtype: 'sql_query',    tainted: true },
+
   // -- PDO --
-  'pdo.query':              { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
-  'pdo.exec':               { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
-  'pdo.prepare':            { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
+  'pdo.query':              { nodeType: 'STORAGE', subtype: 'sql_query',    tainted: false },
+  'pdo.exec':               { nodeType: 'STORAGE', subtype: 'sql_write',    tainted: false },
+  'pdo.prepare':            { nodeType: 'STORAGE', subtype: 'sql_query',    tainted: false },
   'pdo.beginTransaction':   { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'pdo.commit':             { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'pdo.rollBack':           { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
@@ -420,11 +478,15 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'stmt.fetchAll':          { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
   'stmt.fetchColumn':       { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
 
+  // -- Doctrine ORM / DBAL --
+  'EntityManager.createQuery': { nodeType: 'STORAGE', subtype: 'dql_query',  tainted: false },
+  'connection.executeQuery':   { nodeType: 'STORAGE', subtype: 'sql_query',   tainted: false },
+
   // -- mysqli --
-  'mysqli.query':           { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
-  'mysqli.prepare':         { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
-  'mysqli.real_escape_string': { nodeType: 'STORAGE', subtype: 'db_read',   tainted: false },
-  'mysqli.multi_query':     { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
+  'mysqli.query':           { nodeType: 'STORAGE', subtype: 'sql_query',    tainted: false },
+  'mysqli.prepare':         { nodeType: 'STORAGE', subtype: 'sql_query',    tainted: false },
+  'mysqli.real_escape_string': { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
+  'mysqli.multi_query':     { nodeType: 'STORAGE', subtype: 'sql_write',    tainted: false },
   'mysqli.begin_transaction': { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
   'mysqli.commit':          { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
 
@@ -435,11 +497,19 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'DB.update':              { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'DB.delete':              { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'DB.statement':           { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
-  'DB.raw':                 { nodeType: 'STORAGE', subtype: 'db_read',      tainted: false },
+  'DB.raw':                 { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
+  'DB.unprepared':          { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
   'DB.transaction':         { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'DB.beginTransaction':    { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'DB.commit':              { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
   'DB.rollBack':            { nodeType: 'STORAGE', subtype: 'db_write',     tainted: false },
+
+  // -- Laravel Eloquent raw expression methods (bypass parameterization) --
+  'query.whereRaw':         { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
+  'query.selectRaw':        { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
+  'query.orderByRaw':       { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
+  'query.havingRaw':        { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
+  'query.groupByRaw':       { nodeType: 'EXTERNAL', subtype: 'raw_sql',     tainted: false },
 
   // -- Laravel Cache --
   'Cache.get':              { nodeType: 'STORAGE', subtype: 'cache_read',   tainted: false },
@@ -482,6 +552,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- Symfony Security --
   'Security.getUser':       { nodeType: 'AUTH', subtype: 'authenticate',    tainted: false },
   'Security.isGranted':     { nodeType: 'AUTH', subtype: 'authorize',       tainted: false },
+  'AccessDecisionManager.decide': { nodeType: 'AUTH', subtype: 'authorize', tainted: false },
 
   // -- JWT --
   'JWT.encode':             { nodeType: 'AUTH', subtype: 'authenticate',    tainted: false },
@@ -503,6 +574,22 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Config.set':             { nodeType: 'META', subtype: 'config',          tainted: false },
   'config':                 { nodeType: 'META', subtype: 'config',          tainted: false },
   'App.environment':        { nodeType: 'META', subtype: 'config',          tainted: false },
+
+  // -- PHP 8.1 Enums (backed enum validation) --
+  'Enum.from':              { nodeType: 'CONTROL', subtype: 'validation',     tainted: false },
+  'Enum.tryFrom':           { nodeType: 'CONTROL', subtype: 'validation',     tainted: false },
+
+  // -- PHP 8.1 Fibers (cooperative concurrency) --
+  'Fiber.start':            { nodeType: 'CONTROL', subtype: 'concurrency',    tainted: false },
+  'Fiber.resume':           { nodeType: 'CONTROL', subtype: 'concurrency',    tainted: false },
+  'Fiber.suspend':          { nodeType: 'CONTROL', subtype: 'concurrency',    tainted: false },
+
+  // -- PHP 8.0 Attributes / Reflection --
+  'ReflectionAttribute.newInstance': { nodeType: 'META', subtype: 'reflection', tainted: false },
+
+  // -- PHP 8.0 WeakMap (GC-friendly object caching) --
+  'WeakMap.offsetSet':      { nodeType: 'STORAGE', subtype: 'cache_write',    tainted: false },
+  'WeakMap.offsetGet':      { nodeType: 'STORAGE', subtype: 'cache_read',     tainted: false },
 };
 
 // -- Wildcard member calls ---------------------------------------------------
@@ -528,6 +615,12 @@ const STORAGE_WRITE_METHODS = new Set([
   'attach', 'detach', 'sync', 'syncWithoutDetaching', 'toggle',
   'associate', 'dissociate',
   'execute', 'exec',
+]);
+
+// Eloquent raw expression methods — bypass query builder parameterization.
+// These are wildcard-matched against ANY object (Model::whereRaw, $query->whereRaw, etc.)
+const RAW_SQL_METHODS = new Set([
+  'whereRaw', 'selectRaw', 'orderByRaw', 'havingRaw', 'groupByRaw',
 ]);
 
 // -- Lookup function ----------------------------------------------------------
@@ -563,7 +656,12 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
     if (deepMember) return { ...deepMember };
   }
 
-  // Wildcard
+  // Wildcard: raw SQL methods (any object)
+  if (RAW_SQL_METHODS.has(methodName)) {
+    return { nodeType: 'EXTERNAL', subtype: 'raw_sql', tainted: false };
+  }
+
+  // Wildcard: storage methods
   if (STORAGE_READ_METHODS.has(methodName)) {
     if (!NON_DB_OBJECTS.has(objectName)) {
       return { nodeType: 'STORAGE', subtype: 'db_read', tainted: false };
@@ -585,6 +683,8 @@ const NON_DB_OBJECTS = new Set([
   'app', 'config', 'env',
   'Auth', 'Gate', 'Log', 'Mail', 'Http', 'Route', 'Config',
   'Validator', 'Queue', 'Cache', 'Redis', 'Session',
+  'form', 'Environment', 'HttpClient', 'MessageBusInterface', 'AccessDecisionManager',
+  'Fiber', 'WeakMap', 'Enum', 'ReflectionAttribute',
   'arr', 'array', 'list', 'items', 'data', 'result', 'results',
   'str', 'string', 'text', 'path', 'url',
 ]);
@@ -600,6 +700,24 @@ export const sinkPatterns: Record<string, RegExp> = {
   'CWE-916': /\bmd5\s*\(\s*\$.*pass/,
   'CWE-918': /file_get_contents\s*\(\s*\$/,
   'CWE-22':  /(?:include|require|fopen|file_get_contents)\s*\(\s*\$_(?:GET|POST|REQUEST)/,
+  // Laravel raw SQL injection: whereRaw/selectRaw/etc. with variable interpolation
+  'CWE-89-RAW': /->(?:whereRaw|selectRaw|orderByRaw|havingRaw|groupByRaw)\s*\(\s*["'][^"']*\$\w+/,
+  // DB::unprepared() with variable — always dangerous
+  'CWE-89-UNPREP': /DB\s*::\s*unprepared\s*\(\s*["'][^"']*\$\w+/,
+  // extract() on superglobal — mass assignment (CWE-915)
+  'CWE-915': /\bextract\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/,
+  // header() with user input — HTTP response splitting (CWE-113)
+  'CWE-113': /\bheader\s*\(\s*["'][^"']*["']\s*\.\s*\$/,
+  // mail() with user-controlled additional headers — CRLF injection (CWE-93)
+  'CWE-93':  /\bmail\s*\([^)]*,[^)]*,[^)]*,[^)]*,\s*\$/,
+  // Doctrine DQL injection: createQuery() with string concatenation
+  'CWE-89-DQL': /->createQuery\s*\(\s*["'][^"']*(?:\$\w+|["']\s*\.)/,
+  // Doctrine DBAL raw executeQuery with concatenation
+  'CWE-89-DBAL': /->executeQuery\s*\(\s*["'][^"']*\$\w+/,
+  // Twig |raw filter on variable — XSS when variable is user input
+  'CWE-79-TWIG-RAW': /\{\{\s*\w+\s*\|\s*raw\s*\}\}/,
+  // Twig autoescape false block — all output in this block is unescaped
+  'CWE-79-TWIG-AUTOESCAPE': /\{%\s*autoescape\s+false\s*%\}/,
 };
 
 // -- Safe patterns -----------------------------------------------------------
@@ -612,6 +730,20 @@ export const safePatterns: Record<string, RegExp> = {
   'CWE-916': /(?:password_hash|password_verify|sodium_crypto_pwhash)\s*\(/,
   'CWE-918': /(?:filter_var\s*\([^)]*FILTER_VALIDATE_URL|parse_url\s*\()/,
   'CWE-22':  /(?:realpath\s*\(|basename\s*\()/,
+  // Raw methods with binding arrays (second argument)
+  'CWE-89-RAW': /->(?:whereRaw|selectRaw|orderByRaw|havingRaw|groupByRaw)\s*\(\s*["'][^"']*\?\s*["']\s*,\s*\[/,
+  // extract() with safe flags
+  'CWE-915': /\bextract\s*\([^)]*(?:EXTR_IF_EXISTS|EXTR_SKIP)/,
+  // header() with hardcoded safe headers
+  'CWE-113': /\bheader\s*\(\s*["'](?:Location|Content-Type|X-Frame-Options)\s*:/,
+  // mail() via framework mailer instead of raw mail()
+  'CWE-93':  /(?:Mail\s*::\s*(?:send|to)|new\s+PHPMailer|Swift_Message)/,
+  // Doctrine parameterized DQL: createQuery() followed by setParameter
+  'CWE-89-DQL': /->createQuery\s*\([^)]+\)\s*->\s*setParameter/,
+  // Doctrine DBAL with binding array
+  'CWE-89-DBAL': /->executeQuery\s*\(\s*["'][^"']*\?\s*["']\s*,\s*\[/,
+  // Twig |escape or |e filter (explicit escaping)
+  'CWE-79-TWIG-RAW': /\{\{\s*\w+\s*\|\s*(?:escape|e)\s*\}\}/,
 };
 
 // -- Pattern count -----------------------------------------------------------

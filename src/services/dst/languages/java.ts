@@ -13,6 +13,18 @@
 
 import type { NodeType } from '../types.js';
 
+// -- Import all phoneme expansion files -----------------------------------------
+import { PHONEMES_JAVA_JDBC_HIBERNATE } from '../phoneme-expansion/java_jdbc_hibernate.js';
+import { PHONEMES_JAVA_SERVLET_JSP } from '../phoneme-expansion/java_servlet_jsp.js';
+import { PHONEMES_JAVA_SPRING_MVC } from '../phoneme-expansion/java_spring_mvc.js';
+import { JAVA_SPRING_ADVANCED_PHONEMES } from '../phoneme-expansion/java_spring_advanced.js';
+import { PHONEMES_JAVA_SPRING_SECURITY } from '../phoneme-expansion/java_spring_security.js';
+import { PHONEMES_JAVA_COMMONS_CRYPTO } from '../phoneme-expansion/java_commons_crypto.js';
+import { PHONEMES_JAVA_DESERIALIZATION } from '../phoneme-expansion/java_deserialization.js';
+import { PHONEMES_JAVA_STRUTS_VERTX } from '../phoneme-expansion/java_struts_vertx.js';
+import { PHONEMES_JAVA_ANDROID_SDK } from '../phoneme-expansion/java_android_sdk.js';
+import { JAKARTA_EE_ENTRIES } from '../phoneme-expansion/java_jakarta_ee.js';
+
 export interface CalleePattern {
   nodeType: NodeType;
   subtype: string;
@@ -91,6 +103,15 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'ObjectMapper.readTree':      { nodeType: 'TRANSFORM', subtype: 'parse',      tainted: false },
   'Gson.fromJson':              { nodeType: 'TRANSFORM', subtype: 'parse',      tainted: false },
   'JAXBContext.createUnmarshaller': { nodeType: 'TRANSFORM', subtype: 'parse',  tainted: false },
+
+  // -- JSF (JavaServer Faces) — Jakarta EE --
+  'FacesContext.getExternalContext': { nodeType: 'INGRESS', subtype: 'jsf_request', tainted: true },
+  'ExternalContext.getRequestParameterMap': { nodeType: 'INGRESS', subtype: 'jsf_request', tainted: true },
+
+  // -- JMS message receive (Jakarta EE) --
+  'MessageListener.onMessage':  { nodeType: 'INGRESS', subtype: 'jms_receive',  tainted: true },
+  'TextMessage.getText':        { nodeType: 'INGRESS', subtype: 'jms_receive',  tainted: true },
+  'JMSConsumer.receive':        { nodeType: 'INGRESS', subtype: 'jms_receive',  tainted: true },
 
   // =========================================================================
   // EGRESS
@@ -193,10 +214,17 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Runtime.exec':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'ProcessBuilder.start':       { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
 
+  // -- EJB / JNDI (Jakarta EE) --
+  'EJBContext.lookup':          { nodeType: 'EXTERNAL', subtype: 'jndi_lookup',    tainted: true },
+  'SessionContext.getBusinessObject': { nodeType: 'EXTERNAL', subtype: 'ejb_remote', tainted: false },
+
   // -- JMS / Kafka --
   'JmsTemplate.send':           { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
   'JmsTemplate.convertAndSend': { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
   'KafkaTemplate.send':         { nodeType: 'EXTERNAL', subtype: 'message_queue', tainted: false },
+
+  // -- JMS send (Jakarta EE 2.0+ API) --
+  'JMSProducer.send':           { nodeType: 'EGRESS', subtype: 'jms_send',      tainted: false },
 
   // =========================================================================
   // STORAGE
@@ -371,6 +399,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- Spring Bean DI --
   'ApplicationContext.getBean':   { nodeType: 'STRUCTURAL', subtype: 'dependency', tainted: false },
 
+  // -- CDI (Jakarta EE) --
+  'Instance.select':            { nodeType: 'STRUCTURAL', subtype: 'cdi_injection', tainted: false },
+  'BeanManager.getReference':   { nodeType: 'STRUCTURAL', subtype: 'cdi_injection', tainted: false },
+
   // -- Spring routing annotations (mapped) --
   'RequestMapping':               { nodeType: 'STRUCTURAL', subtype: 'route',   tainted: false },
   'GetMapping':                   { nodeType: 'STRUCTURAL', subtype: 'route',   tainted: false },
@@ -385,6 +417,26 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   'Environment.getActiveProfiles': { nodeType: 'META', subtype: 'config',      tainted: false },
   'SpringApplication.run':        { nodeType: 'META', subtype: 'config',       tainted: false },
+};
+
+// =========================================================================
+// MERGED PHONEME DICTIONARY — all expansion entries in one lookup table
+// =========================================================================
+// The phoneme expansion agents wrote standalone files but never wired them
+// into the lookup path. This merged dictionary combines ALL expansion entries
+// so lookupCallee() can find them.
+
+const EXPANSION_ENTRIES: Record<string, CalleePattern> = {
+  ...PHONEMES_JAVA_JDBC_HIBERNATE,
+  ...PHONEMES_JAVA_SERVLET_JSP,
+  ...PHONEMES_JAVA_SPRING_MVC,
+  ...JAVA_SPRING_ADVANCED_PHONEMES,
+  ...PHONEMES_JAVA_SPRING_SECURITY,
+  ...PHONEMES_JAVA_COMMONS_CRYPTO,
+  ...PHONEMES_JAVA_DESERIALIZATION,
+  ...PHONEMES_JAVA_STRUTS_VERTX,
+  ...PHONEMES_JAVA_ANDROID_SDK,
+  ...JAKARTA_EE_ENTRIES,
 };
 
 // -- Wildcard --
@@ -409,7 +461,71 @@ const NON_DB_OBJECTS = new Set([
   'String', 'Integer', 'Long', 'Double', 'Boolean',
   'list', 'map', 'set', 'array', 'data', 'items', 'result',
   'Thread', 'CompletableFuture', 'ExecutorService',
+  'FacesContext', 'ExternalContext', 'MessageListener', 'TextMessage',
+  'JMSConsumer', 'JMSProducer', 'Instance', 'BeanManager',
+  'EJBContext', 'SessionContext',
 ]);
+
+// =========================================================================
+// Variable-to-class name resolution
+// =========================================================================
+// In Java, variables are lowercase (connection, statement, cipher, md)
+// but the phoneme dictionary uses PascalCase class names (Connection,
+// Statement, Cipher, MessageDigest). This map resolves common variable
+// names to their class names so lookupCallee can match them.
+
+const VARIABLE_TO_CLASS: Record<string, string> = {
+  // JDBC
+  'connection': 'Connection', 'conn': 'Connection', 'con': 'Connection',
+  'statement': 'Statement', 'stmt': 'Statement',
+  'preparedStatement': 'PreparedStatement', 'pstmt': 'PreparedStatement', 'ps': 'PreparedStatement',
+  'callableStatement': 'CallableStatement', 'cs': 'CallableStatement', 'cstmt': 'CallableStatement',
+  'resultSet': 'ResultSet', 'rs': 'ResultSet', 'rset': 'ResultSet',
+  // Crypto
+  'cipher': 'Cipher', 'c': 'Cipher',
+  'messageDigest': 'MessageDigest', 'md': 'MessageDigest', 'digest': 'MessageDigest',
+  'mac': 'Mac',
+  'signature': 'Signature', 'sig': 'Signature',
+  'secureRandom': 'SecureRandom', 'random': 'SecureRandom', 'sr': 'SecureRandom',
+  'keyGenerator': 'KeyGenerator', 'keyGen': 'KeyGenerator', 'kg': 'KeyGenerator',
+  'keyPairGenerator': 'KeyPairGenerator', 'kpg': 'KeyPairGenerator',
+  // Hibernate
+  'session': 'Session', 'hibernateSession': 'Session',
+  'sessionFactory': 'SessionFactory',
+  'entityManager': 'EntityManager', 'em': 'EntityManager',
+  'criteriaBuilder': 'CriteriaBuilder', 'cb': 'CriteriaBuilder',
+  // Spring
+  'restTemplate': 'RestTemplate',
+  'webClient': 'WebClient',
+  'jdbcTemplate': 'JdbcTemplate',
+  'namedParameterJdbcTemplate': 'NamedParameterJdbcTemplate',
+  'kafkaTemplate': 'KafkaTemplate',
+  'jmsTemplate': 'JmsTemplate',
+  'redisTemplate': 'RedisTemplate',
+  // JNDI
+  'initialContext': 'InitialContext', 'ctx': 'InitialContext',
+  // Process
+  'runtime': 'Runtime',
+  'processBuilder': 'ProcessBuilder', 'pb': 'ProcessBuilder',
+  // IO
+  'scanner': 'Scanner',
+  'bufferedReader': 'BufferedReader', 'br': 'BufferedReader', 'reader': 'BufferedReader',
+  // HttpClient
+  'httpClient': 'HttpClient', 'client': 'HttpClient',
+  // ORM
+  'sqlSession': 'SqlSession',
+  // Deserialization
+  'objectInputStream': 'ObjectInputStream', 'ois': 'ObjectInputStream',
+  'objectMapper': 'ObjectMapper', 'mapper': 'ObjectMapper',
+  // DataSource / pools
+  'dataSource': 'DataSource', 'ds': 'DataSource',
+  'hikariDataSource': 'HikariDataSource',
+};
+
+// Helper: try to resolve a key across MEMBER_CALLS + EXPANSION_ENTRIES
+function lookupInAllDicts(key: string): CalleePattern | undefined {
+  return MEMBER_CALLS[key] ?? EXPANSION_ENTRIES[key];
+}
 
 export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   if (calleeChain.length === 0) return null;
@@ -417,7 +533,7 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   if (calleeChain.length === 1) {
     const direct = DIRECT_CALLS[calleeChain[0]!];
     if (direct) return { ...direct };
-    const single = MEMBER_CALLS[calleeChain[0]!];
+    const single = lookupInAllDicts(calleeChain[0]!);
     if (single) return { ...single };
     return null;
   }
@@ -426,18 +542,54 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   const methodName = calleeChain[calleeChain.length - 1]!;
   const exactKey = `${objectName}.${methodName}`;
 
-  const member = MEMBER_CALLS[exactKey];
+  // Try exact match in both dictionaries
+  const member = lookupInAllDicts(exactKey);
   if (member) return { ...member };
+
+  // Variable-to-class resolution: try PascalCase class name
+  // e.g., connection.prepareCall -> Connection.prepareCall
+  const className = VARIABLE_TO_CLASS[objectName];
+  if (className) {
+    const classKey = `${className}.${methodName}`;
+    const classMatch = lookupInAllDicts(classKey);
+    if (classMatch) return { ...classMatch };
+  }
+
+  // Auto-PascalCase: if objectName starts lowercase, try uppercasing first char
+  // This catches patterns like cipher.doFinal -> Cipher.doFinal
+  if (objectName.length > 0 && objectName[0] === objectName[0].toLowerCase() && objectName[0] !== objectName[0].toUpperCase()) {
+    const pascalName = objectName[0].toUpperCase() + objectName.slice(1);
+    const pascalKey = `${pascalName}.${methodName}`;
+    const pascalMatch = lookupInAllDicts(pascalKey);
+    if (pascalMatch) return { ...pascalMatch };
+  }
 
   if (calleeChain.length > 2) {
     const fullPath = calleeChain.join('.');
-    const fullMember = MEMBER_CALLS[fullPath];
+    const fullMember = lookupInAllDicts(fullPath);
     if (fullMember) return { ...fullMember };
     const lastTwo = `${calleeChain[calleeChain.length - 2]}.${methodName}`;
-    const deepMember = MEMBER_CALLS[lastTwo];
+    const deepMember = lookupInAllDicts(lastTwo);
     if (deepMember) return { ...deepMember };
+
+    // Also try variable-to-class on the second-to-last element
+    const secondToLast = calleeChain[calleeChain.length - 2]!;
+    const secondClassName = VARIABLE_TO_CLASS[secondToLast];
+    if (secondClassName) {
+      const deepClassKey = `${secondClassName}.${methodName}`;
+      const deepClassMatch = lookupInAllDicts(deepClassKey);
+      if (deepClassMatch) return { ...deepClassMatch };
+    }
+    // Auto-PascalCase on second-to-last
+    if (secondToLast.length > 0 && secondToLast[0] === secondToLast[0].toLowerCase() && secondToLast[0] !== secondToLast[0].toUpperCase()) {
+      const pascal2 = secondToLast[0].toUpperCase() + secondToLast.slice(1);
+      const pascal2Key = `${pascal2}.${methodName}`;
+      const pascal2Match = lookupInAllDicts(pascal2Key);
+      if (pascal2Match) return { ...pascal2Match };
+    }
   }
 
+  // Wildcard: known storage methods on unknown objects
   if (STORAGE_READ_METHODS.has(methodName) && !NON_DB_OBJECTS.has(objectName)) {
     return { nodeType: 'STORAGE', subtype: 'db_read', tainted: false };
   }
@@ -445,13 +597,35 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
     return { nodeType: 'STORAGE', subtype: 'db_write', tainted: false };
   }
 
+  // Method-name-only fallback for dangerous methods on any receiver
+  // This catches patterns like: someObj.executeQuery(sql) where someObj
+  // is a local variable that we can't resolve to a class name
+  const DANGEROUS_METHOD_PATTERNS: Record<string, CalleePattern> = {
+    'executeQuery':  { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
+    'executeUpdate': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+    'prepareCall':   { nodeType: 'STORAGE', subtype: 'db_stored_proc', tainted: false },
+    'prepareStatement': { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
+    'createStatement': { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
+    'exec':          { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+    'lookup':        { nodeType: 'EXTERNAL', subtype: 'jndi_lookup', tainted: true },
+  };
+  if (!NON_DB_OBJECTS.has(objectName)) {
+    const dangerousMatch = DANGEROUS_METHOD_PATTERNS[methodName];
+    if (dangerousMatch) return { ...dangerousMatch };
+  }
+
   return null;
 }
 
 export const sinkPatterns: Record<string, RegExp> = {
   'CWE-78':  /Runtime\.(?:getRuntime\(\)\.)?exec\s*\(\s*[^"]/,
-  'CWE-89':  /"(?:SELECT|INSERT|UPDATE|DELETE)\s+.*"\s*\+\s*\w+|Statement\.execute(?:Query|Update)?\s*\(\s*[^"]/,
-  'CWE-79':  /(?:response\.getWriter\(\)\.(?:print|write)\s*\(\s*request|PrintWriter\.(?:print|write)\s*\(\s*request)/,
+  'CWE-89':  /"(?:SELECT|INSERT|UPDATE|DELETE)\s+.*"\s*\+\s*\w+|(?:Statement|statement|stmt)\.execute(?:Query|Update)?\s*\(\s*[^")]/,
+  'CWE-79':  /(?:response\.getWriter\(\)\.(?:print|write)\s*\(\s*(?:request|param|input|query|user|data|name|value)|PrintWriter\.(?:print|write)\s*\(\s*(?:request|param|input))/,
+  'CWE-22':  /new\s+(?:java\.io\.)?File\s*\([^)]*(?:param|input|request|user|path|fileName|filePath|name)|new\s+(?:java\.io\.)?FileInputStream\s*\([^)]*(?:param|input|request|user|path|fileName|name)/,
+  'CWE-90':  /(?:search|lookup)\s*\(\s*[^"]*(?:param|input|request|user|query|filter|dn|name)|(?:DirContext|LdapContext|InitialDirContext).*search\s*\(/,
+  'CWE-327': /Cipher\.getInstance\s*\(\s*"(?:DES|RC2|RC4|Blowfish|DESede|AES\/ECB)|MessageDigest\.getInstance\s*\(\s*"(?:MD5|MD2|SHA-1|SHA1)"/,
+  'CWE-328': /MessageDigest\.getInstance\s*\(\s*"(?:MD5|MD2|MD4|SHA-1|SHA1)"/,
+  'CWE-501': /(?:request\.getSession\(\)|session)\.setAttribute\s*\([^)]*(?:param|input|request\.get|user)/,
   'CWE-502': /ObjectInputStream\s*\(\s*(?:request|socket|input)/,
   'CWE-611': /SAXParserFactory\.newInstance\(\)(?![^\n]*setFeature)/,
   'CWE-798': /(?:apiKey|secret|password|token)\s*=\s*"[^"]{4,}"/,
@@ -460,8 +634,13 @@ export const sinkPatterns: Record<string, RegExp> = {
 
 export const safePatterns: Record<string, RegExp> = {
   'CWE-78':  /ProcessBuilder\s*\(\s*(?:Arrays\.asList|List\.of)\s*\(/,
-  'CWE-89':  /(?:PreparedStatement|JdbcTemplate\.query|createQuery\s*\(\s*"[^"]*:\w+|@Query)/,
-  'CWE-79':  /(?:HtmlUtils\.htmlEscape|StringEscapeUtils\.escapeHtml|Jsoup\.clean|ESAPI)/,
+  'CWE-89':  /(?:PreparedStatement|preparedStatement|pstmt|JdbcTemplate\.query|createQuery\s*\(\s*"[^"]*:\w+|@Query|setString|setInt|setLong)/,
+  'CWE-79':  /(?:HtmlUtils\.htmlEscape|StringEscapeUtils\.escapeHtml|Jsoup\.clean|ESAPI|encodeForHTML)/,
+  'CWE-22':  /(?:FilenameUtils\.getName|Paths\.get\s*\([^)]*\)\.normalize|\.getCanonicalPath|SecurityManager|TESTFILES_DIR)/,
+  'CWE-90':  /(?:escapeLDAPSearchFilter|LdapEncoder\.filterEncode|FilterEncoder)/,
+  'CWE-327': /Cipher\.getInstance\s*\(\s*"(?:AES\/(?:GCM|CBC|CTR)|RSA\/ECB\/OAEPWith|ChaCha20)"/,
+  'CWE-328': /MessageDigest\.getInstance\s*\(\s*"(?:SHA-256|SHA-384|SHA-512|SHA3-)"/,
+  'CWE-501': /(?:session\.invalidate|request\.getSession\(false\))/,
   'CWE-502': /(?:ObjectInputFilter|allowedClasses|SerializationUtils)/,
   'CWE-611': /(?:setFeature\s*\(\s*"http:\/\/.*disallow-doctype|XMLConstants\.FEATURE_SECURE_PROCESSING)/,
 };
@@ -469,6 +648,7 @@ export const safePatterns: Record<string, RegExp> = {
 export function getPatternCount(): number {
   return Object.keys(DIRECT_CALLS).length
     + Object.keys(MEMBER_CALLS).length
+    + Object.keys(EXPANSION_ENTRIES).length
     + STORAGE_READ_METHODS.size
     + STORAGE_WRITE_METHODS.size;
 }

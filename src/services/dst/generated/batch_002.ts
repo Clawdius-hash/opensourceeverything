@@ -300,25 +300,62 @@ export const verifyCWE240 = createInputValidationVerifier('CWE-240', 'Improper H
 // B. CODE INJECTION / DANGEROUS EVALUATION (7 CWEs)
 // ===========================================================================
 
-/** CWE-95: Eval Injection — user input in eval/Function/setTimeout(string) */
+/**
+ * CWE-95: Eval Injection
+ * Pattern: INGRESS → TRANSFORM(eval/Function/setTimeout-string) without CONTROL
+ *
+ * UPGRADED from factory: specific dangerous-eval sink detection, excludes
+ * safe parsers (JSON.parse), recognizes sandbox mitigations (vm2, isolated-vm).
+ *
+ * Dangerous sinks: eval(), new Function(), setTimeout/setInterval with string,
+ *   vm.runInNewContext/runInThisContext with user data, unserialize().
+ * NOT dangerous: JSON.parse(), parseInt(), parseFloat(), DOMParser().
+ * Safe mitigations: vm2/VM2 sandbox, isolated-vm, safeEval libraries,
+ *   allowlist-gated evaluation, CONTROL node in path.
+ */
 export function verifyCWE95(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
-  const sinks = evalTransformNodes(map);
+
+  // Specific dangerous-eval sinks — NOT generic "any TRANSFORM"
+  const evalSinks = map.nodes.filter(n =>
+    n.node_type === 'TRANSFORM' &&
+    (n.node_subtype.includes('eval') || n.node_subtype.includes('exec') ||
+     n.node_subtype.includes('dynamic') || n.attack_surface.includes('code_execution') ||
+     n.code_snapshot.match(
+       /\beval\s*\(|\bFunction\s*\(|\bsetTimeout\s*\(\s*['"`]|\bsetInterval\s*\(\s*['"`]|\bnew\s+Function\b|\bvm\.runIn|\bexecScript\b|\bunserialize\s*\(/i
+     ) !== null) &&
+    // Exclude safe parsers — these accept user input but do NOT execute code
+    !n.code_snapshot.match(
+      /\bJSON\.parse\b|\bparseInt\b|\bparseFloat\b|\bDOMParser\b|\bNumber\s*\(|\bBoolean\s*\(/i
+    )
+  );
 
   for (const src of ingress) {
-    for (const sink of sinks) {
+    for (const sink of evalSinks) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (!EVAL_SAFE.test(sink.code_snapshot)) {
+        // Check for sandbox/isolation mitigations in the sink code itself
+        const isSandboxed = sink.code_snapshot.match(
+          /\bvm2\b|\bVM2\b|\bisolated-?vm\b|\bisolatedVM\b|\bsafeEval\b|\bnew\s+VM\s*\(\s*\{?\s*sandbox\b|\bQuickJSContext\b|\bWebAssembly\b/i
+        ) !== null;
+
+        // Check for allowlist gating (an allowlist check on the VALUE before eval)
+        const isAllowlisted = sink.code_snapshot.match(
+          /\ballowlist\b|\bwhitelist\b|\ballowedExpressions\b|\bpermitted\b|\bincludes\s*\(/i
+        ) !== null;
+
+        if (!isSandboxed && !isAllowlisted) {
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
-            missing: 'CONTROL (code sanitization / safe evaluation)',
+            missing: 'CONTROL (eval removal, sandboxed execution, or strict allowlist)',
             severity: 'critical',
-            description: `User input from ${src.label} is dynamically evaluated at ${sink.label}. ` +
-              `An attacker can inject and execute arbitrary code.`,
-            fix: 'Never use eval() or new Function() with user input. Use JSON.parse for data. ' +
-              'Use vm2 or isolated-vm for sandboxed execution if dynamic evaluation is unavoidable.',
+            description: `User input from ${src.label} reaches eval/Function at ${sink.label} without isolation. ` +
+              `An attacker can inject arbitrary JavaScript: eval("process.exit()"), ` +
+              `new Function("return require('child_process').execSync('rm -rf /')").`,
+            fix: 'BEST: Remove eval entirely — use JSON.parse() for data, a Map for dynamic dispatch. ' +
+              'If eval is truly needed: use vm2 or isolated-vm sandbox with no access to require/process. ' +
+              'NEVER: sanitize input and pass to eval — sanitization cannot make eval safe.',
           });
         }
       }

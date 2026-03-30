@@ -1,14 +1,11 @@
 /**
  * DST Generated Verifiers — Batch 019
- * Fills remaining CWE gaps in the 400–599 range (37 CWEs).
- *
- * Sub-groups:
- *   A. Real verifiers (5 CWEs) — CWE-400, CWE-434, CWE-476, CWE-522, CWE-525
- *   B. Deprecated / Category / Pillar stubs (32 CWEs) — always pass (no real weakness)
- *
- * The deprecated/category entries are included so the registry count
- * reflects full 400–599 coverage. Each stub documents WHY it is a
- * pass-through (deprecated, category, or pillar — mapping prohibited).
+ * CWEs 400-599 gap fill — real verifiers only (5 CWEs).
+ *   CWE-400  Uncontrolled Resource Consumption
+ *   CWE-434  Unrestricted Upload of File with Dangerous Type
+ *   CWE-476  NULL Pointer Dereference
+ *   CWE-522  Insufficiently Protected Credentials
+ *   CWE-525  Use of Web Browser Cache Containing Sensitive Information
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
@@ -61,22 +58,8 @@ const nT: BfsCheck = hasPathWithoutTransform;
 const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRANSFORM');
 const nA: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'AUTH');
 
-// ---------------------------------------------------------------------------
-// Stub factory for deprecated / category / pillar CWEs
-// These always hold (no findings) because mapping to them is prohibited.
-// ---------------------------------------------------------------------------
-
-function stub(cweId: string, cweName: string, reason: string): (map: NeuralMap) => VerificationResult {
-  return (_map: NeuralMap): VerificationResult => ({
-    cwe: cweId,
-    name: `${cweName} [${reason}]`,
-    holds: true,
-    findings: [],
-  });
-}
-
 // ===========================================================================
-// A. REAL VERIFIERS (5 CWEs)
+// REAL VERIFIERS (5 CWEs)
 // ===========================================================================
 
 /**
@@ -242,94 +225,13 @@ export const verifyCWE525 = v(
 );
 
 // ===========================================================================
-// B. DEPRECATED / CATEGORY / PILLAR STUBS (32 CWEs)
-// Each documents the reason it is a pass-through.
-// ===========================================================================
-
-// Category-level CWEs (mapping prohibited)
-export const verifyCWE411 = stub('CWE-411', 'Resource Locking Problems', 'category — use CWE-412/413/414/833');
-export const verifyCWE417 = stub('CWE-417', 'Communication Channel Errors', 'category — use CWE-419/420/425/918');
-export const verifyCWE429 = stub('CWE-429', 'Handler Errors', 'category — mapping prohibited');
-export const verifyCWE438 = stub('CWE-438', 'Behavioral Problems', 'category — mapping prohibited');
-export const verifyCWE452 = stub('CWE-452', 'Initialization and Cleanup Errors', 'category — use CWE-454/455/459');
-export const verifyCWE465 = stub('CWE-465', 'Pointer Issues', 'category — use CWE-476/468');
-export const verifyCWE485 = stub('CWE-485', '7PK - Encapsulation', 'category — mapping prohibited');
-export const verifyCWE557 = stub('CWE-557', 'Concurrency Issues', 'category — use CWE-362/366/367');
-export const verifyCWE569 = stub('CWE-569', 'Expression Issues', 'category — use CWE-480/481/483');
-
-// Pillar-level CWE (mapping discouraged)
-export const verifyCWE435 = stub('CWE-435', 'Improper Interaction Between Multiple Correctly-Behaving Entities', 'pillar — use specific descendants');
-
-// Deprecated CWEs (duplicates, removed, or superseded)
-export const verifyCWE418 = stub('CWE-418', 'DEPRECATED: Channel Errors', 'deprecated — duplicate of CWE-417');
-export const verifyCWE423 = stub('CWE-423', 'DEPRECATED: Proxied Trusted Channel', 'deprecated — duplicate of CWE-441');
-export const verifyCWE442 = stub('CWE-442', 'DEPRECATED: Web Problems', 'deprecated — removed');
-export const verifyCWE443 = stub('CWE-443', 'DEPRECATED: HTTP Response Splitting', 'deprecated — duplicate of CWE-113');
-export const verifyCWE445 = stub('CWE-445', 'DEPRECATED: User Interface Errors', 'deprecated — duplicate of CWE-355');
-export const verifyCWE458 = stub('CWE-458', 'DEPRECATED: Incorrect Initialization', 'deprecated — use CWE-665');
-export const verifyCWE461 = stub('CWE-461', 'DEPRECATED: Data Structure Issues', 'deprecated — removed');
-export const verifyCWE490 = stub('CWE-490', 'DEPRECATED: Mobile Code Issues', 'deprecated — removed');
-export const verifyCWE503 = stub('CWE-503', 'DEPRECATED: Byte/Object Code', 'deprecated — removed');
-export const verifyCWE504 = stub('CWE-504', 'DEPRECATED: Motivation/Intent', 'deprecated — removed');
-export const verifyCWE505 = stub('CWE-505', 'DEPRECATED: Intentionally Introduced Weakness', 'deprecated — removed');
-export const verifyCWE513 = stub('CWE-513', 'DEPRECATED: Intentionally Introduced Nonmalicious Weakness', 'deprecated — removed');
-export const verifyCWE516 = stub('CWE-516', 'DEPRECATED: Covert Timing Channel', 'deprecated — use CWE-385');
-export const verifyCWE517 = stub('CWE-517', 'DEPRECATED: Other Intentional Nonmalicious Weakness', 'deprecated — removed');
-export const verifyCWE518 = stub('CWE-518', 'DEPRECATED: Inadvertently Introduced Weakness', 'deprecated — removed');
-export const verifyCWE519 = stub('CWE-519', 'DEPRECATED: .NET Environment Issues', 'deprecated — removed');
-export const verifyCWE533 = stub('CWE-533', 'DEPRECATED: Information Exposure Through Server Log Files', 'deprecated — use CWE-532');
-export const verifyCWE534 = stub('CWE-534', 'DEPRECATED: Information Exposure Through Debug Log Files', 'deprecated — use CWE-532');
-export const verifyCWE542 = stub('CWE-542', 'DEPRECATED: Information Exposure Through Cleanup Log Files', 'deprecated — use CWE-532');
-export const verifyCWE545 = stub('CWE-545', 'DEPRECATED: Use of Dynamic Class Loading', 'deprecated — use CWE-470');
-export const verifyCWE559 = stub('CWE-559', 'DEPRECATED: Often Misused: Arguments and Parameters', 'deprecated — removed');
-export const verifyCWE592 = stub('CWE-592', 'DEPRECATED: Authentication Bypass Issues', 'deprecated — use CWE-287');
-export const verifyCWE596 = stub('CWE-596', 'DEPRECATED: Incorrect Semantic Object Comparison', 'deprecated — use CWE-1023');
-
-// ===========================================================================
 // REGISTRY
 // ===========================================================================
 
 export const BATCH_019_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
-  // Real verifiers
   'CWE-400': verifyCWE400,
   'CWE-434': verifyCWE434,
   'CWE-476': verifyCWE476,
   'CWE-522': verifyCWE522,
   'CWE-525': verifyCWE525,
-  // Category stubs
-  'CWE-411': verifyCWE411,
-  'CWE-417': verifyCWE417,
-  'CWE-429': verifyCWE429,
-  'CWE-438': verifyCWE438,
-  'CWE-452': verifyCWE452,
-  'CWE-465': verifyCWE465,
-  'CWE-485': verifyCWE485,
-  'CWE-557': verifyCWE557,
-  'CWE-569': verifyCWE569,
-  // Pillar stub
-  'CWE-435': verifyCWE435,
-  // Deprecated stubs
-  'CWE-418': verifyCWE418,
-  'CWE-423': verifyCWE423,
-  'CWE-442': verifyCWE442,
-  'CWE-443': verifyCWE443,
-  'CWE-445': verifyCWE445,
-  'CWE-458': verifyCWE458,
-  'CWE-461': verifyCWE461,
-  'CWE-490': verifyCWE490,
-  'CWE-503': verifyCWE503,
-  'CWE-504': verifyCWE504,
-  'CWE-505': verifyCWE505,
-  'CWE-513': verifyCWE513,
-  'CWE-516': verifyCWE516,
-  'CWE-517': verifyCWE517,
-  'CWE-518': verifyCWE518,
-  'CWE-519': verifyCWE519,
-  'CWE-533': verifyCWE533,
-  'CWE-534': verifyCWE534,
-  'CWE-542': verifyCWE542,
-  'CWE-545': verifyCWE545,
-  'CWE-559': verifyCWE559,
-  'CWE-592': verifyCWE592,
-  'CWE-596': verifyCWE596,
 };

@@ -706,4 +706,101 @@ public class Vuln {
     expect(javaProfile.isStatementContainer('class_body')).toBe(true);
     expect(javaProfile.isStatementContainer('identifier')).toBe(false);
   });
+
+  // =========================================================================
+  // Constant Folding Anti-Evasion
+  // =========================================================================
+
+  it('folds string concatenation: "ev" + "al" in variable declaration', () => {
+    const code = `
+public class Evasion {
+    public void exploit() {
+        String name = "ev" + "al";
+        System.out.println(name);
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'Evasion.java', javaProfile);
+
+    // The variable should have a folded constant value stored
+    // The EGRESS node for println should still be detected
+    const egressNodes = map.nodes.filter(n => n.node_type === 'EGRESS');
+    expect(egressNodes.length).toBeGreaterThan(0);
+  });
+
+  it('detects Class.forName with concatenated string as reflection', () => {
+    const code = `
+public class ReflectionEvasion {
+    public void exploit() throws Exception {
+        Class<?> clazz = Class.forName("java.lang." + "Runtime");
+        Object obj = clazz.getMethod("exec", String.class).invoke(null, "whoami");
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'ReflectionEvasion.java', javaProfile);
+
+    // Should detect Class.forName as EXTERNAL/reflection
+    const reflectionNodes = map.nodes.filter(
+      n => n.node_type === 'EXTERNAL' && n.node_subtype === 'reflection'
+    );
+    expect(reflectionNodes.length).toBeGreaterThan(0);
+  });
+
+  it('detects Class.forName with variable holding folded constant', () => {
+    const code = `
+public class IndirectEvasion {
+    public void exploit() throws Exception {
+        String cls = "java.lang." + "Runtime";
+        Class.forName(cls);
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'IndirectEvasion.java', javaProfile);
+
+    const reflectionNodes = map.nodes.filter(
+      n => n.node_type === 'EXTERNAL' && n.node_subtype === 'reflection'
+    );
+    expect(reflectionNodes.length).toBeGreaterThan(0);
+    // Should have the anti_evasion tag
+    const tagged = reflectionNodes.filter(n => n.tags.includes('anti_evasion'));
+    expect(tagged.length).toBeGreaterThan(0);
+  });
+
+  it('detects StringBuilder evasion pattern', () => {
+    const code = `
+public class StringBuilderEvasion {
+    public void exploit() {
+        String cmd = new StringBuilder().append("ev").append("al").toString();
+        System.out.println(cmd);
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'StringBuilderEvasion.java', javaProfile);
+
+    // The println should still be detected as EGRESS
+    const egressNodes = map.nodes.filter(n => n.node_type === 'EGRESS');
+    expect(egressNodes.length).toBeGreaterThan(0);
+  });
+
+  it('detects String.format evasion pattern', () => {
+    const code = `
+public class FormatEvasion {
+    public void exploit() throws Exception {
+        String name = String.format("%s%s", "java.lang.", "Runtime");
+        Class.forName(name);
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'FormatEvasion.java', javaProfile);
+
+    const reflectionNodes = map.nodes.filter(
+      n => n.node_type === 'EXTERNAL' && n.node_subtype === 'reflection'
+    );
+    expect(reflectionNodes.length).toBeGreaterThan(0);
+  });
 });

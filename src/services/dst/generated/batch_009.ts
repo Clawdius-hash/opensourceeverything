@@ -100,13 +100,98 @@ function createExternalNoTransformVerifier(
 // COMMAND/QUERY INJECTION (3 CWEs)
 // ===========================================================================
 
-export const verifyCWE77 = createExternalNoTransformVerifier(
-  'CWE-77', 'Command Injection', 'critical',
-  commandExternalNodes, CMD_NEUTRALIZE_SAFE,
-  'TRANSFORM (command neutralization / parameterization)',
-  'Never pass user input to shell commands. Use execFile/spawn with argument arrays. ' +
-    'If shell is unavoidable, use strict allowlisting of permitted values.',
-);
+/**
+ * CWE-77: Command Injection (UPGRADED — hand-written quality)
+ *
+ * Detects user input flowing to OS command execution without neutralization.
+ *
+ * Dangerous sinks (shell interpretation):
+ *   - exec(), execSync() — runs through shell, metacharacters interpreted
+ *   - child_process.exec — same
+ *   - system(), popen(), shell_exec() — C/PHP shell execution
+ *   - os.system(), subprocess.call(shell=True) — Python shell execution
+ *   - Runtime.exec() with string arg — Java shell execution
+ *
+ * Safe patterns (NO shell interpretation):
+ *   - execFile() / execFileSync() — no shell, args as array
+ *   - spawn() with array args and NO {shell:true}
+ *   - subprocess.run([...]) without shell=True
+ *   - Allowlist validation: input checked against known-good values before exec
+ *   - shellEscape() / escapeShellArg() — explicit escaping
+ *
+ * Key distinction: exec("ls " + input) is dangerous because the shell
+ * interprets metacharacters (;, |, &&, $(), ``) in the input.
+ * execFile("ls", [input]) is safe because args are passed directly to
+ * the process without shell interpretation.
+ */
+export function verifyCWE77(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Specific dangerous sinks: nodes that execute OS commands through a shell
+  const shellSinks = map.nodes.filter(n =>
+    n.node_type === 'EXTERNAL' &&
+    (n.node_subtype.includes('command') || n.node_subtype.includes('shell') ||
+     n.node_subtype.includes('exec') || n.attack_surface.includes('shell_exec') ||
+     n.code_snapshot.match(
+       /\b(exec|execSync|system|popen|shell_exec|child_process\.exec|os\.system|subprocess\.call|Runtime\.exec)\s*\(/i
+     ) !== null)
+  );
+
+  for (const src of ingress) {
+    for (const sink of shellSinks) {
+      if (hasPathWithoutTransform(map, src.id, sink.id)) {
+        const code = sink.code_snapshot;
+
+        // Safe: execFile / execFileSync (no shell interpretation)
+        const usesExecFile = /\b(execFile|execFileSync)\s*\(/i.test(code);
+
+        // Safe: spawn with array args and no shell:true
+        const usesSpawnArray = /\bspawn\s*\(\s*['"][^'"]+['"]\s*,\s*\[/i.test(code) &&
+          !/shell\s*:\s*true/i.test(code);
+
+        // Safe: Python subprocess with list args and no shell=True
+        const usesPythonSafeSubprocess = /\bsubprocess\.(run|Popen|call)\s*\(\s*\[/i.test(code) &&
+          !/shell\s*=\s*True/i.test(code);
+
+        // Safe: explicit shell escaping
+        const usesShellEscape = /\b(shellEscape|escapeShell|escapeShellArg|shlex\.quote|shellescape)\s*\(/i.test(code);
+
+        // Safe: allowlist validation (input checked against known values)
+        const usesAllowlist = /\b(allowlist|whitelist|allowedCommands|validCommands)\b/i.test(code) ||
+          /\b(includes|indexOf|has)\s*\([^)]*\)\s*[!><=]/i.test(code);
+
+        const isSafe = usesExecFile || usesSpawnArray || usesPythonSafeSubprocess ||
+          usesShellEscape || usesAllowlist;
+
+        if (!isSafe) {
+          // Determine the specific dangerous pattern for targeted advice
+          const usesExec = /\bexec\s*\(/i.test(code);
+          const usesTemplate = /`[^`]*\$\{/i.test(code) || /\+\s*\w/.test(code);
+          const detail = usesExec && usesTemplate
+            ? 'String concatenation or template literal builds shell command with user input.'
+            : 'User input reaches shell execution without sanitization.';
+
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'TRANSFORM (command parameterization — use execFile/spawn with argument arrays, not exec with string concatenation)',
+            severity: 'critical',
+            description: `User input from ${src.label} flows to command execution at ${sink.label}. ${detail} ` +
+              `Shell metacharacters (; | && \`\` $()) in the input will be interpreted, allowing arbitrary command execution.`,
+            fix: 'Replace exec() with execFile() or spawn() using argument arrays. ' +
+              'Example: instead of exec("grep " + input + " file.txt"), use ' +
+              'execFile("grep", [input, "file.txt"]). If shell is absolutely required, ' +
+              'validate input against a strict allowlist of permitted values. ' +
+              'In Python, use subprocess.run(["cmd", arg]) without shell=True.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-77', name: 'Command Injection', holds: findings.length === 0, findings };
+}
 
 export const verifyCWE90 = createExternalNoTransformVerifier(
   'CWE-90', 'LDAP Injection', 'high',

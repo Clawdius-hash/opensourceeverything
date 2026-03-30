@@ -32,6 +32,241 @@ import { createNode } from '../types.js';
 import { lookupCallee as _lookupCallee } from '../languages/python.js';
 
 // ---------------------------------------------------------------------------
+// Constant Folding — resolves string construction at parse time
+// ---------------------------------------------------------------------------
+// Handles Python evasion patterns like:
+//   chr(101)+chr(118)+chr(97)+chr(108)   → "eval"
+//   'ev'+'al'                             → "eval"
+//   bytes([101,118,97,108]).decode()       → "eval"
+//   base64.b64decode('ZXZhbA==').decode()  → "eval"
+//   bytearray(b'\x65\x76\x61\x6c').decode() → "eval"
+//   ''.join(chr(c) for c in [101,118,97,108]) → "eval"
+//
+// This is the anti-evasion core. Attackers split dangerous function names
+// across chr() calls, base64 encoding, and byte arrays to dodge static
+// analysis. We fold them back.
+
+function tryFoldConstant(n: SyntaxNode): string | null {
+  // Literal strings — strip quotes and resolve escape sequences
+  if (n.type === 'string') {
+    // Reject f-strings (they have interpolation children — can't fold)
+    const hasInterpolation = n.namedChildren.some(c => c.type === 'interpolation');
+    if (hasInterpolation) return null;
+    return n.text.replace(/^[bBrRuUfF]*['"](?:''|"")?|(?:['"]''|['"]""|['"])$/g, '');
+  }
+  // Concatenated strings: "ev" "al" → "eval" (Python implicit concatenation)
+  if (n.type === 'concatenated_string') {
+    const parts: string[] = [];
+    for (let i = 0; i < n.namedChildCount; i++) {
+      const child = n.namedChild(i);
+      if (child) {
+        const cv = tryFoldConstant(child);
+        if (cv !== null) parts.push(cv);
+        else return null;
+      }
+    }
+    return parts.join('');
+  }
+  // Number literals — return as string for chr() operations
+  if (n.type === 'integer') {
+    return n.text;
+  }
+  // Binary operator: "ev" + "al" → "eval", chr(101)+chr(118) → ...
+  if (n.type === 'binary_operator') {
+    const left = n.childForFieldName('left');
+    const right = n.childForFieldName('right');
+    if (left && right) {
+      // Check operator — in tree-sitter-python the operator is an anonymous child
+      const opNode = n.children.find(c => c.type === '+');
+      if (opNode?.text === '+') {
+        const lv = tryFoldConstant(left);
+        const rv = tryFoldConstant(right);
+        if (lv !== null && rv !== null) return lv + rv;
+      }
+    }
+  }
+  // Parenthesized: ("ev" + "al") → "eval"
+  if (n.type === 'parenthesized_expression') {
+    const inner = n.namedChild(0);
+    return inner ? tryFoldConstant(inner) : null;
+  }
+  // ── CALL EXPRESSIONS: chr(), bytes().decode(), base64.b64decode().decode(), etc. ──
+  if (n.type === 'call') {
+    const func = n.childForFieldName('function');
+    const args = n.childForFieldName('arguments');
+    if (func && args) {
+      // ── chr(N) → single character ──
+      if (func.type === 'identifier' && func.text === 'chr') {
+        const firstArg = args.namedChild(0);
+        if (firstArg) {
+          const code = tryFoldConstant(firstArg);
+          if (code !== null) {
+            const num = parseInt(code, 10);
+            if (!isNaN(num) && num >= 0 && num <= 0x10FFFF) {
+              return String.fromCodePoint(num);
+            }
+          }
+        }
+      }
+      // ── .decode() on bytes()/bytearray()/base64.b64decode() ──
+      if (func.type === 'attribute') {
+        const method = func.childForFieldName('attribute');
+        const innerObj = func.childForFieldName('object');
+        if (method?.text === 'decode' && innerObj?.type === 'call') {
+          const innerFunc = innerObj.childForFieldName('function');
+          const innerArgs = innerObj.childForFieldName('arguments');
+          if (innerFunc && innerArgs) {
+            // ── bytes([101, 118, 97, 108]).decode() → "eval" ──
+            if (innerFunc.type === 'identifier' && innerFunc.text === 'bytes') {
+              const firstInnerArg = innerArgs.namedChild(0);
+              if (firstInnerArg?.type === 'list') {
+                const codes: number[] = [];
+                let allLiteral = true;
+                for (let i = 0; i < firstInnerArg.namedChildCount; i++) {
+                  const el = firstInnerArg.namedChild(i);
+                  if (el) {
+                    const val = tryFoldConstant(el);
+                    if (val !== null) {
+                      const num = parseInt(val, 10);
+                      if (!isNaN(num) && num >= 0 && num <= 255) {
+                        codes.push(num);
+                      } else { allLiteral = false; break; }
+                    } else { allLiteral = false; break; }
+                  }
+                }
+                if (allLiteral && codes.length > 0) {
+                  return String.fromCharCode(...codes);
+                }
+              }
+            }
+            // ── bytearray(b'\x65\x76\x61\x6c').decode() → "eval" ──
+            if (innerFunc.type === 'identifier' && innerFunc.text === 'bytearray') {
+              const firstInnerArg = innerArgs.namedChild(0);
+              if (firstInnerArg) {
+                const raw = tryFoldConstant(firstInnerArg);
+                if (raw !== null) {
+                  // If it came from a bytes literal (b'...'), resolve hex escapes
+                  return resolveByteEscapes(raw);
+                }
+              }
+            }
+            // ── base64.b64decode('ZXZhbA==').decode() → "eval" ──
+            if (innerFunc.type === 'attribute') {
+              const b64Obj = innerFunc.childForFieldName('object');
+              const b64Method = innerFunc.childForFieldName('attribute');
+              if (b64Method?.text === 'b64decode' &&
+                  b64Obj?.type === 'identifier' && b64Obj.text === 'base64') {
+                const firstInnerArg = innerArgs.namedChild(0);
+                if (firstInnerArg) {
+                  const b64Str = tryFoldConstant(firstInnerArg);
+                  if (b64Str !== null) {
+                    try {
+                      return Buffer.from(b64Str, 'base64').toString('utf-8');
+                    } catch { /* not valid base64 */ }
+                  }
+                }
+              }
+            }
+            // ── Also handle import-aliased b64decode: b64decode('ZXZhbA==').decode() ──
+            if (innerFunc.type === 'identifier' && innerFunc.text === 'b64decode') {
+              const firstInnerArg = innerArgs.namedChild(0);
+              if (firstInnerArg) {
+                const b64Str = tryFoldConstant(firstInnerArg);
+                if (b64Str !== null) {
+                  try {
+                    return Buffer.from(b64Str, 'base64').toString('utf-8');
+                  } catch { /* not valid base64 */ }
+                }
+              }
+            }
+          }
+        }
+        // ── ''.join(chr(c) for c in [...]) or ''.join([chr(c) for c in [...]]) ──
+        if (method?.text === 'join' && innerObj) {
+          const sepFolded = tryFoldConstant(innerObj);
+          if (sepFolded !== null && sepFolded === '') {
+            const firstArg = args.namedChild(0);
+            if (firstArg) {
+              // Generator expression: chr(c) for c in [101,118,97,108]
+              if (firstArg.type === 'generator_expression') {
+                const codes = extractChrGeneratorCodes(firstArg);
+                if (codes) return String.fromCharCode(...codes);
+              }
+              // List comprehension: [chr(c) for c in [101,118,97,108]]
+              if (firstArg.type === 'list_comprehension') {
+                const codes = extractChrGeneratorCodes(firstArg);
+                if (codes) return String.fromCharCode(...codes);
+              }
+              // Simple list of chr() calls: [chr(101), chr(118), ...]
+              if (firstArg.type === 'list') {
+                const parts: string[] = [];
+                let allFolded = true;
+                for (let i = 0; i < firstArg.namedChildCount; i++) {
+                  const el = firstArg.namedChild(i);
+                  if (el) {
+                    const folded = tryFoldConstant(el);
+                    if (folded !== null) parts.push(folded);
+                    else { allFolded = false; break; }
+                  }
+                }
+                if (allFolded && parts.length > 0) return parts.join('');
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Resolve \xHH and \uHHHH escape sequences in Python byte strings
+function resolveByteEscapes(s: string): string {
+  return s
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\');
+}
+
+// Extract integer codes from `chr(c) for c in [101,118,97,108]` generator/comprehension
+function extractChrGeneratorCodes(genNode: SyntaxNode): number[] | null {
+  // Look for the iterable (a list of integer literals) inside the for_in_clause
+  // and verify the body expression is chr(c) or similar
+  let bodyExpr: SyntaxNode | null = null;
+  let iterableNode: SyntaxNode | null = null;
+
+  for (let i = 0; i < genNode.namedChildCount; i++) {
+    const child = genNode.namedChild(i);
+    if (!child) continue;
+    if (child.type === 'for_in_clause') {
+      // The iterable is the `right` field
+      iterableNode = child.childForFieldName('right');
+    } else if (child.type === 'call' || child.type === 'identifier' || child.type === 'string') {
+      bodyExpr = child;
+    }
+  }
+
+  // Verify body is a chr() call
+  if (!bodyExpr || bodyExpr.type !== 'call') return null;
+  const bodyFunc = bodyExpr.childForFieldName('function');
+  if (!bodyFunc || bodyFunc.type !== 'identifier' || bodyFunc.text !== 'chr') return null;
+
+  if (!iterableNode || iterableNode.type !== 'list') return null;
+
+  const codes: number[] = [];
+  for (let i = 0; i < iterableNode.namedChildCount; i++) {
+    const el = iterableNode.namedChild(i);
+    if (el?.type === 'integer') {
+      codes.push(parseInt(el.text, 10));
+    } else {
+      return null;
+    }
+  }
+  return codes.length > 0 ? codes : null;
+}
+
+// ---------------------------------------------------------------------------
 // AST Node Type Sets
 // ---------------------------------------------------------------------------
 
@@ -75,6 +310,13 @@ const TAINTED_PATHS: ReadonlySet<string> = new Set([
   'Request.headers', 'Request.cookies',
   // sys
   'sys.argv', 'sys.stdin',
+  // BaseHTTPRequestHandler (http.server stdlib)
+  'self.path', 'self.headers', 'self.rfile', 'self.command',
+  'self.client_address', 'self.requestline',
+  // WSGI environ
+  'environ', 'environ.get',
+  // CGI
+  'cgi.FieldStorage',
 ]);
 
 // Comprehension types that create implicit scopes
@@ -744,52 +986,12 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
   }
 
   // Constant folding: action = "quer" + "y" -> constantValue = "query"
+  // Also handles evasion: name = chr(101)+chr(118)+chr(97)+chr(108) -> "eval"
   let constantValue: string | undefined;
   {
     const valueNode = node.childForFieldName('right');
     if (valueNode) {
-      const tryFold = (n: SyntaxNode): string | null => {
-        if (n.type === 'string') {
-          // Check if it's a simple string (no interpolation children)
-          const hasInterpolation = n.namedChildren.some(c => c.type === 'interpolation');
-          if (!hasInterpolation) {
-            return n.text.replace(/^[bBrRuUfF]*['"]|['"]$/g, '');
-          }
-        }
-        if (n.type === 'concatenated_string') {
-          const parts: string[] = [];
-          for (let i = 0; i < n.namedChildCount; i++) {
-            const child = n.namedChild(i);
-            if (child) {
-              const cv = tryFold(child);
-              if (cv !== null) parts.push(cv);
-              else return null;
-            }
-          }
-          return parts.join('');
-        }
-        if (n.type === 'binary_operator') {
-          // Find the operator text — it's an anonymous child between left and right
-          const left = n.childForFieldName('left');
-          const right = n.childForFieldName('right');
-          // Python concatenation: "a" + "b"
-          if (left && right) {
-            // Check operator — in tree-sitter-python the operator is an anonymous child
-            const opText = n.children.find(c => c.type === '+')?.text;
-            if (opText === '+') {
-              const lv = tryFold(left);
-              const rv = tryFold(right);
-              if (lv !== null && rv !== null) return lv + rv;
-            }
-          }
-        }
-        if (n.type === 'parenthesized_expression') {
-          const inner = n.namedChild(0);
-          return inner ? tryFold(inner) : null;
-        }
-        return null;
-      };
-      const folded = tryFold(valueNode);
+      const folded = tryFoldConstant(valueNode);
       if (folded !== null) constantValue = folded;
     }
   }
@@ -1157,7 +1359,65 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           }
         }
       }
+      // ── CONSTANT FOLDING: getattr(__builtins__, chr(101)+chr(118)+...) ──
+      // Must run BEFORE resolveCallee so we resolve getattr to the *target*
+      // function (e.g., eval) rather than classifying it as TRANSFORM/calculate.
+      if (!resolution) {
+        const foldCallee = node.childForFieldName('function');
+        const foldArgs = node.childForFieldName('arguments');
+        if (foldCallee?.type === 'identifier' && foldCallee.text === 'getattr' && foldArgs) {
+          const secondArg = foldArgs.namedChild(1);
+          if (secondArg) {
+            const foldedName = tryFoldConstant(secondArg);
+            if (foldedName) {
+              const getattrPattern = _lookupCallee([foldedName]);
+              if (getattrPattern) {
+                resolution = {
+                  nodeType: getattrPattern.nodeType,
+                  subtype: getattrPattern.subtype,
+                  tainted: getattrPattern.tainted,
+                  chain: ['getattr', foldedName],
+                };
+              }
+            }
+          }
+        }
+      }
+
       if (!resolution) resolution = resolveCallee(node);
+
+      // ── CONSTANT FOLDING: __import__(chr(111)+chr(115)) → __import__('os') ──
+      // Fold function arguments to discover hidden module/function names.
+      if (resolution) {
+        const calleeNode = node.childForFieldName('function');
+        const foldArgs = node.childForFieldName('arguments');
+        if (calleeNode?.type === 'identifier' && foldArgs) {
+          const calleeName = calleeNode.text;
+          // For __import__ and similar calls, try to fold the first argument
+          // to set a constantValue tag so downstream analysis knows the resolved name
+          if (calleeName === '__import__' || calleeName === 'eval' || calleeName === 'exec') {
+            const firstArg = foldArgs.namedChild(0);
+            if (firstArg) {
+              const foldedArg = tryFoldConstant(firstArg);
+              if (foldedArg) {
+                // Re-resolve with the folded argument for __import__
+                if (calleeName === '__import__') {
+                  const importPattern = _lookupCallee([foldedArg]);
+                  if (importPattern) {
+                    resolution = {
+                      nodeType: importPattern.nodeType,
+                      subtype: importPattern.subtype,
+                      tainted: importPattern.tainted,
+                      chain: ['__import__', foldedArg],
+                    };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
       if (resolution) {
         const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
         const n = createNode({
@@ -1315,46 +1575,111 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
       } else {
         // -- Computed property resolution: db[action](...) where action = "query" --
+        // Also handles inline concat: globals()['ev' + 'al'](...) → eval
+        // And evasion patterns: globals()[chr(101)+chr(118)+chr(97)+chr(108)](x) → eval
         const computedCallee = node.childForFieldName('function');
         if (computedCallee?.type === 'subscript') {
           const compObj = computedCallee.childForFieldName('value');
           const compIdx = computedCallee.childForFieldName('subscript');
-          if (compObj?.type === 'identifier' && compIdx?.type === 'identifier') {
+          // Try inline constant folding first: obj[chr(101)+chr(118)+'al']()
+          let resolvedPropertyName: string | null = null;
+          if (compIdx) {
+            resolvedPropertyName = tryFoldConstant(compIdx);
+          }
+          // Fall back to variable lookup: name = 'eval'; obj[name]()
+          if (!resolvedPropertyName && compIdx?.type === 'identifier') {
             const idxVar = ctx.resolveVariable(compIdx.text);
-            if (idxVar?.constantValue) {
-              const compChain = [compObj.text, idxVar.constantValue];
-              const compPattern = _lookupCallee(compChain);
-              if (compPattern) {
-                const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
-                const compN = createNode({
-                  label,
-                  node_type: compPattern.nodeType,
-                  node_subtype: compPattern.subtype,
-                  language: 'python',
-                  file: ctx.neuralMap.source_file,
-                  line_start: node.startPosition.row + 1,
-                  line_end: node.endPosition.row + 1,
-                  code_snapshot: node.text.slice(0, 200),
-                });
-                if (compPattern.nodeType === 'EXTERNAL' && compPattern.subtype === 'system_exec') {
-                  compN.attack_surface.push('command_injection');
-                }
-                ctx.neuralMap.nodes.push(compN);
-                ctx.lastCreatedNodeId = compN.id;
-                ctx.emitContainsIfNeeded(compN.id);
-                const compArgs = node.childForFieldName('arguments');
-                if (compArgs) {
-                  for (let a = 0; a < compArgs.namedChildCount; a++) {
-                    const arg = compArgs.namedChild(a);
-                    if (!arg) continue;
-                    const taintSources = extractTaintSources(arg, ctx);
-                    for (const source of taintSources) {
-                      ctx.addDataFlow(source.nodeId, compN.id, source.name, 'unknown', true);
-                    }
+            if (idxVar?.constantValue) resolvedPropertyName = idxVar.constantValue;
+          }
+          if (compObj && resolvedPropertyName) {
+            // Extract chain from compObj (may be identifier or call like globals())
+            const objChain = compObj.type === 'identifier' ? [compObj.text] :
+              (compObj.type === 'call' ? (() => {
+                const fn = compObj.childForFieldName('function');
+                return fn?.type === 'identifier' ? [fn.text + '()'] : [compObj.text.slice(0, 30)];
+              })() :
+              (compObj.type === 'attribute' ? extractCalleeChain(compObj) : [compObj.text.slice(0, 30)]));
+            const compChain = [...objChain, resolvedPropertyName];
+            const compPattern = _lookupCallee(compChain);
+            // Also try just the resolved property name — for getattr(__builtins__, 'eval') → eval
+            const directPattern = !compPattern ? _lookupCallee([resolvedPropertyName]) : null;
+            const finalPattern = compPattern || directPattern;
+            if (finalPattern) {
+              const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
+              const compN = createNode({
+                label,
+                node_type: finalPattern.nodeType,
+                node_subtype: finalPattern.subtype,
+                language: 'python',
+                file: ctx.neuralMap.source_file,
+                line_start: node.startPosition.row + 1,
+                line_end: node.endPosition.row + 1,
+                code_snapshot: node.text.slice(0, 200),
+              });
+              if (finalPattern.nodeType === 'EXTERNAL' && finalPattern.subtype === 'system_exec') {
+                compN.attack_surface.push('command_injection');
+              }
+              compN.tags.push('constant_folded');
+              ctx.neuralMap.nodes.push(compN);
+              ctx.lastCreatedNodeId = compN.id;
+              ctx.emitContainsIfNeeded(compN.id);
+              const compArgs = node.childForFieldName('arguments');
+              if (compArgs) {
+                for (let a = 0; a < compArgs.namedChildCount; a++) {
+                  const arg = compArgs.namedChild(a);
+                  if (!arg) continue;
+                  const taintSources = extractTaintSources(arg, ctx);
+                  for (const source of taintSources) {
+                    ctx.addDataFlow(source.nodeId, compN.id, source.name, 'unknown', true);
                   }
                 }
-                break;
               }
+              break;
+            }
+          }
+          // RUNTIME EVAL MARKER — constant folding failed, index is dynamic
+          // If the index is tainted (user-controlled), flag for runtime evaluation.
+          if (!resolvedPropertyName && compObj && compIdx) {
+            const idxTaint = extractTaintSources(compIdx, ctx);
+            if (idxTaint.length > 0) {
+              const dynNode = createNode({
+                label: node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text,
+                node_type: 'EXTERNAL',
+                node_subtype: 'dynamic_dispatch',
+                language: 'python',
+                file: ctx.neuralMap.source_file,
+                line_start: node.startPosition.row + 1,
+                line_end: node.endPosition.row + 1,
+                code_snapshot: node.text.slice(0, 200),
+              });
+              dynNode.tags.push('needs_runtime_eval', 'unresolved_callee');
+              dynNode.attack_surface.push('dynamic_dispatch');
+              dynNode.data_out.push({
+                name: 'result',
+                source: dynNode.id,
+                data_type: 'unknown',
+                tainted: true,
+                sensitivity: 'NONE',
+              });
+              ctx.neuralMap.nodes.push(dynNode);
+              ctx.lastCreatedNodeId = dynNode.id;
+              ctx.emitContainsIfNeeded(dynNode.id);
+              for (const source of idxTaint) {
+                ctx.addDataFlow(source.nodeId, dynNode.id, source.name, 'unknown', true);
+              }
+              // Also check arguments for taint
+              const dynArgs = node.childForFieldName('arguments');
+              if (dynArgs) {
+                for (let a = 0; a < dynArgs.namedChildCount; a++) {
+                  const arg = dynArgs.namedChild(a);
+                  if (!arg) continue;
+                  const argTaint = extractTaintSources(arg, ctx);
+                  for (const source of argTaint) {
+                    ctx.addDataFlow(source.nodeId, dynNode.id, source.name, 'unknown', true);
+                  }
+                }
+              }
+              break;
             }
           }
         }

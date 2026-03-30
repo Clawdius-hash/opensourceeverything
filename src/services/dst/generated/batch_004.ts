@@ -336,26 +336,83 @@ export const verifyCWE316 = createNoTransformVerifier(
 // C. CRYPTO/HASHING (3 CWEs)
 // ===========================================================================
 
-/** CWE-759: Use of a One-Way Hash without a Salt */
+/**
+ * CWE-759: Use of a One-Way Hash without a Salt
+ * Pattern: INGRESS(password) → STORAGE(credential) with either:
+ *   (a) no hash at all (direct cleartext storage), OR
+ *   (b) a hash that is NOT a salted adaptive hash (MD5, SHA-*, createHash)
+ *
+ * UPGRADED from factory: the original checked hasPathWithoutTransform, which
+ * only catches case (a). Case (b) is the actual CWE-759 — there IS a hash,
+ * but it has no salt. This version walks the path and inspects TRANSFORM nodes
+ * to detect unsalted hashes (createHash("md5"), hashlib.sha256, etc.).
+ *
+ * Dangerous hashes (no built-in salt): MD5, SHA-1, SHA-256, SHA-512, createHash()
+ * Safe hashes (salt built in): bcrypt, scrypt, Argon2, PBKDF2
+ */
 export function verifyCWE759(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
-  const sinks = credentialStorageNodes(map);
+  const credSinks = credentialStorageNodes(map);
+
+  // Pattern for adaptive salted hashes — these are SAFE
+  const SALTED_HASH = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bpbkdf2\b/i;
+
+  // Pattern for unsalted one-way hashes — these are VULNERABLE
+  const UNSALTED_HASH = /\bcreateHash\b|\bMD5\b|\bmd5\b|\bSHA-?1\b|\bsha1\b|\bSHA-?256\b|\bsha256\b|\bSHA-?512\b|\bsha512\b|\bhashlib\b|\bMessageDigest\b|\bdigest\b|\bhash\s*\(/i;
 
   for (const src of ingress) {
-    for (const sink of sinks) {
+    for (const sink of credSinks) {
+      // Case A: No transform at all — direct cleartext storage
       if (hasPathWithoutTransform(map, src.id, sink.id)) {
-        // Direct storage without hashing at all
         findings.push({
           source: nodeRef(src),
           sink: nodeRef(sink),
-          missing: 'TRANSFORM (salted hash — bcrypt/scrypt/Argon2)',
+          missing: 'TRANSFORM (password must be hashed with salted adaptive function — bcrypt/scrypt/Argon2)',
           severity: 'high',
-          description: `Sensitive data from ${src.label} is stored at ${sink.label} without hashing. ` +
-            `If a hash exists elsewhere, it may lack a salt.`,
-          fix: 'Hash passwords with bcrypt, scrypt, or Argon2 (which include salting). ' +
-            'Never store passwords in cleartext or with unsalted hashes.',
+          description: `Password from ${src.label} is stored in cleartext at ${sink.label}. ` +
+            `No hashing of any kind was detected on the data path.`,
+          fix: 'Hash passwords with bcrypt (cost >= 10), scrypt, or Argon2id before storage. ' +
+            'These functions generate a unique random salt per password automatically. ' +
+            'Example: const hash = await bcrypt.hash(password, 12)',
         });
+        continue; // Don't double-report
+      }
+
+      // Case B: There IS a transform, but is it a salted hash?
+      // Find TRANSFORM nodes between src and sink that perform hashing
+      const hashTransforms = map.nodes.filter(n =>
+        n.node_type === 'TRANSFORM' &&
+        (n.node_subtype.includes('hash') || n.node_subtype.includes('crypto') ||
+         n.node_subtype.includes('digest') ||
+         n.code_snapshot.match(UNSALTED_HASH) !== null ||
+         n.code_snapshot.match(SALTED_HASH) !== null)
+      );
+
+      for (const hashNode of hashTransforms) {
+        const isUnsalted = UNSALTED_HASH.test(hashNode.code_snapshot) &&
+                           !SALTED_HASH.test(hashNode.code_snapshot);
+
+        // Also check for explicit salt usage (e.g., createHash + manual salt)
+        const hasManualSalt = hashNode.code_snapshot.match(
+          /\bsalt\b|\brandomBytes\b|\bcrypto\.random\b|\buuid\b.*\+/i
+        ) !== null;
+
+        if (isUnsalted && !hasManualSalt) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'TRANSFORM (salted hash — the hash at ' + hashNode.label + ' has no salt)',
+            severity: 'high',
+            description: `Password from ${src.label} is hashed with unsalted ${hashNode.label} before storage at ${sink.label}. ` +
+              `Without a unique salt per password, attackers can use precomputed rainbow tables ` +
+              `to crack all passwords in the database simultaneously.`,
+            fix: 'Replace createHash("sha256") with bcrypt.hash(password, 12) or argon2.hash(). ' +
+              'These generate a unique random salt automatically. ' +
+              'If you must use createHash: generate a unique salt per user with crypto.randomBytes(16) ' +
+              'and prepend it: createHash("sha256").update(salt + password).',
+          });
+        }
       }
     }
   }

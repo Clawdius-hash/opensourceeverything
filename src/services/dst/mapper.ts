@@ -874,8 +874,9 @@ export function buildNeuralMap(
   // the tree cursor for a proper enter/leave traversal.
   walkWithScopes(root, ctx, profile);
 
-  // Pop module scope
-  ctx.popScope();
+  // NOTE: We intentionally do NOT pop the module scope here.
+  // The module scope remains on ctx.scopeStack so that callers can use
+  // ctx.resolveVariable() on the returned context (e.g., for constant-folding tests).
 
   // Post-processing: initialize taint markers and detect sensitivity
   initializeTaint(ctx.neuralMap);

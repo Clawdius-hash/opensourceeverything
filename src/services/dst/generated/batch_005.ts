@@ -214,14 +214,69 @@ export const verifyCWE93 = createOutputVerifier(
     'CRLF injection enables HTTP response splitting and log forging.',
 );
 
-/** CWE-113: HTTP Response Splitting */
-export const verifyCWE113 = createOutputVerifier(
-  'CWE-113', 'HTTP Response Splitting', 'high',
-  headerEgressNodes, CRLF_SAFE,
-  'TRANSFORM (CRLF neutralization in HTTP headers)',
-  'Strip CR/LF from values placed in HTTP headers. Response splitting enables cache poisoning, ' +
-    'XSS, and session fixation. Use framework header APIs that reject CRLF.',
-);
+/**
+ * CWE-113: HTTP Response Splitting
+ * Pattern: INGRESS → EGRESS(HTTP header) without TRANSFORM(CRLF neutralization)
+ *
+ * UPGRADED from factory: specific HTTP header sinks (setHeader, writeHead,
+ * res.header, addHeader), specific CRLF mitigation patterns (replace \\r\\n,
+ * encodeURIComponent, header-safe libraries), checks both sink and source context.
+ *
+ * Dangerous sinks: res.setHeader(), res.writeHead(), res.header(), addHeader()
+ *   — any API that sets HTTP response header values from user input.
+ * NOT dangerous: res.json(), res.send() (body output, not headers).
+ * Safe mitigations: CRLF stripping (replace /[\\r\\n]/g), encodeURIComponent(),
+ *   encodeURI(), framework header APIs that auto-reject CRLF (Express 4.x+),
+ *   sanitizeHeader() library functions.
+ */
+export function verifyCWE113(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Only EGRESS nodes that specifically set HTTP headers
+  const headerSinks = map.nodes.filter(n =>
+    n.node_type === 'EGRESS' &&
+    (n.node_subtype.includes('header') || n.attack_surface.includes('http_header') ||
+     n.code_snapshot.match(
+       /\b(setHeader|writeHead|res\.header|res\.set|addHeader|response\.header|response\.setHeader)\b/i
+     ) !== null) &&
+    // Exclude body-output APIs — they don't set headers
+    !n.code_snapshot.match(/\bres\.json\b|\bres\.send\b|\bres\.end\b|\bres\.render\b/i)
+  );
+
+  for (const src of ingress) {
+    for (const sink of headerSinks) {
+      if (hasPathWithoutTransform(map, src.id, sink.id)) {
+        // Check for CRLF-specific sanitization in the sink code
+        const hasCRLFStrip = sink.code_snapshot.match(
+          /replace\s*\(.*\\r.*\\n|replace\s*\(.*\\n.*\\r|strip.*crlf|strip.*newline|sanitize.*header/i
+        ) !== null;
+
+        // Check for encoding that neutralizes CRLF
+        const hasEncoding = sink.code_snapshot.match(
+          /\bencodeURIComponent\b|\bencodeURI\b|\bencodeHeader\b|\bsanitizeHeader\b/i
+        ) !== null;
+
+        if (!hasCRLFStrip && !hasEncoding) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'TRANSFORM (CRLF neutralization — strip \\r\\n or encodeURIComponent before header)',
+            severity: 'high',
+            description: `User input from ${src.label} is placed in HTTP header at ${sink.label} without CRLF neutralization. ` +
+              `An attacker can inject \\r\\n to split the response, enabling: ` +
+              `cache poisoning, XSS via injected body, and session fixation via Set-Cookie.`,
+            fix: 'Strip CR/LF: value.replace(/[\\r\\n]/g, ""). Or use encodeURIComponent(). ' +
+              'Modern Express (4.x+) rejects CRLF in setHeader — ensure your framework version is current. ' +
+              'Never place raw user input in Location, Set-Cookie, or Content-Disposition headers.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-113', name: 'HTTP Response Splitting', holds: findings.length === 0, findings };
+}
 
 /** CWE-138: Improper Neutralization of Special Elements */
 export const verifyCWE138 = createOutputVerifier(
