@@ -441,6 +441,7 @@ describe('CWE Factory Pattern Verification', () => {
         id: 'ctrl1',
         label: 'bounds check',
         code_snapshot: 'if (offset < 0 || offset >= arr.length) throw new RangeError()',
+        data_in: [{ name: 'offset', source: 'xf1', data_type: 'number', tainted: true, sensitivity: 'NONE' }],
         edges: [{ target: 'buf1', edge_type: 'DATA_FLOW', conditional: false, async: false }],
       });
       const buffer = createNode({
@@ -698,6 +699,7 @@ describe('CWE Factory Pattern Verification', () => {
         id: 'ctrl1',
         label: 'size validation',
         code_snapshot: 'if (totalSize > SIZE_MAX || totalSize <= 0) throw new RangeError()',
+        data_in: [{ name: 'totalSize', source: 'comp1', data_type: 'number', tainted: true, sensitivity: 'NONE' }],
         edges: [{ target: 'mem1', edge_type: 'DATA_FLOW', conditional: false, async: false }],
       });
       const memOp = createNode({

@@ -522,6 +522,7 @@ describe('CWE-601: Open Redirect (upgraded)', () => {
           label: 'URL allowlist check',
           node_subtype: 'validation',
           code_snapshot: 'if (allowedUrls.includes(next)) {',
+          data_in: [{ name: 'next', source: 'INGRESS_1', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'EGRESS_1', edge_type: 'DATA_FLOW', conditional: true, async: false }],
         },
         {

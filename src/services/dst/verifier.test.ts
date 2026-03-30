@@ -359,6 +359,7 @@ describe('CWE-306: Missing Authentication', () => {
           label: 'requireAuth',
           node_subtype: 'middleware',
           code_snapshot: 'requireAuth',
+          data_in: [{ name: 'request', source: 'SRC', data_type: 'object', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {

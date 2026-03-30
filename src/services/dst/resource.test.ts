@@ -351,6 +351,7 @@ describe('CWE-400: Uncontrolled Resource Consumption', () => {
           node_subtype: 'validation',
           code_snapshot: 'if (req.body.size > MAX_SIZE) return;',
           attack_surface: [],
+          data_in: [{ name: 'size', source: 'SRC', data_type: 'number', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: true, async: false }],
         },
         {
@@ -619,6 +620,7 @@ describe('CWE-1333: ReDoS (Regular Expression Denial of Service)', () => {
           node_subtype: 'validation',
           code_snapshot: 'escapeRegExp(req.query.pattern)',
           attack_surface: [],
+          data_in: [{ name: 'pattern', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {

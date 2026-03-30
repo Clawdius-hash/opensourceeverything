@@ -221,6 +221,7 @@ describe('CWE-89: SQL Injection (stress)', () => {
           label: 'validate()',
           node_subtype: 'validation',
           code_snapshot: 'validate(req.body.email)',
+          data_in: [{ name: 'email', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'PII' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {
@@ -728,6 +729,7 @@ describe('CWE-918: SSRF (stress)', () => {
           label: 'allowlist.includes()',
           node_subtype: 'validation',
           code_snapshot: 'allowlist.includes(url)',
+          data_in: [{ name: 'url', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: true, async: false }],
         },
         {
@@ -862,6 +864,7 @@ describe('CWE-22: Path Traversal (stress)', () => {
           label: 'sanitizePath()',
           node_subtype: 'path_validation',
           code_snapshot: 'sanitizePath(req.query.file)',
+          data_in: [{ name: 'file', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {
@@ -935,6 +938,7 @@ describe('CWE-306: Missing Authentication (stress)', () => {
           label: 'requireAuth',
           node_subtype: 'middleware',
           code_snapshot: 'requireAuth',
+          data_in: [{ name: 'request', source: 'SRC', data_type: 'object', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {
@@ -1263,6 +1267,7 @@ describe('CWE-200: Information Exposure (stress)', () => {
           label: 'redact()',
           node_subtype: 'data_filter',
           code_snapshot: 'redact(user)',
+          data_in: [{ name: 'user', source: 'SRC', data_type: 'object', tainted: false, sensitivity: 'PII' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {
@@ -1395,6 +1400,7 @@ describe('CWE-611: XXE (stress)', () => {
           label: 'XMLParser config',
           node_subtype: 'parser_config',
           code_snapshot: 'new XMLParser({ resolveEntities: false })',
+          data_in: [{ name: 'xml', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {
@@ -1681,6 +1687,7 @@ describe('CWE Verification Summary Report', () => {
             code_snapshot: 'app.delete("/users/:id", requireAuth, handler)', attack_surface: ['user_input'],
             edges: [{ target: 'A', edge_type: 'DATA_FLOW', conditional: false, async: false }] },
           { id: 'A', node_type: 'AUTH', label: 'requireAuth', node_subtype: 'middleware', code_snapshot: 'requireAuth',
+            data_in: [{ name: 'request', source: 'S', data_type: 'object', tainted: true, sensitivity: 'NONE' }],
             edges: [{ target: 'K', edge_type: 'DATA_FLOW', conditional: false, async: false }] },
           { id: 'K', node_type: 'STORAGE', label: 'db.delete()', node_subtype: 'sql_delete',
             code_snapshot: 'db.query("DELETE FROM users WHERE id=$1", [id])', attack_surface: ['sensitive', 'delete'], edges: [] },

@@ -240,6 +240,7 @@ describe('CWE-77: Command Injection (upgraded)', () => {
           node_subtype: 'validation',
           code_snapshot: 'allowedCommands.includes(cmd)',
           attack_surface: [],
+          data_in: [{ name: 'cmd', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: true, async: false }],
         },
         {
@@ -404,6 +405,7 @@ describe('CWE-91: XML Injection (upgraded)', () => {
           node_subtype: 'validation',
           code_snapshot: 'validate(input)',
           attack_surface: [],
+          data_in: [{ name: 'input', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {

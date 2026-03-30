@@ -91,8 +91,16 @@ export interface NeuralMapNode {
   line_start: number;
   /** End line in source (1-indexed) */
   line_end: number;
-  /** Verbatim code snippet for this node */
+  /** Verbatim code snippet for this node (truncated to ~200 chars for human display) */
   code_snapshot: string;
+  /** Full code context for machine analysis (up to 2000 chars, no truncation) */
+  analysis_snapshot: string;
+  /** Extracted parameter names from the AST walk (avoids post-hoc string parsing) */
+  param_names?: string[];
+  /** Resolved call chain for this node (e.g. ["db", "query"]) */
+  callee_chain?: string[];
+  /** The actual algorithm string for crypto verifiers (e.g. "md5", "sha256") */
+  algorithm_name?: string;
   /** Data flowing into this node */
   data_in: DataFlow[];
   /** Data flowing out of this node */
@@ -178,6 +186,10 @@ export function createNode(partial: Partial<NeuralMapNode> & { node_type: NodeTy
     line_start: partial.line_start ?? 0,
     line_end: partial.line_end ?? 0,
     code_snapshot: partial.code_snapshot ?? '',
+    analysis_snapshot: partial.analysis_snapshot ?? partial.code_snapshot ?? '',
+    param_names: partial.param_names,
+    callee_chain: partial.callee_chain,
+    algorithm_name: partial.algorithm_name,
     data_in: partial.data_in ?? [],
     data_out: partial.data_out ?? [],
     edges: partial.edges ?? [],

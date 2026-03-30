@@ -391,6 +391,7 @@ export class MapperContext {
         line_start: 1,
         line_end: 1,
         code_snapshot: `// module: ${this.neuralMap.source_file}`,
+        analysis_snapshot: `// module: ${this.neuralMap.source_file}`,
       });
       this.neuralMap.nodes.push(moduleNode);
     }
@@ -479,10 +480,11 @@ export class MapperContext {
       if (!funcNode) continue;
       // Try the profile's pattern first (language-specific), fall back to JS default
       const jsPattern = /(?:function\s+\w+\s*|(?:async\s+)?)\(([^)]*)\)|(\w+)\s*=>|\w+\s*\(([^)]*)\)\s*\{/;
+      const funcAnalysis = funcNode.analysis_snapshot || funcNode.code_snapshot;
       const paramMatch = (this.profile.functionParamPattern
-        ? funcNode.code_snapshot.match(this.profile.functionParamPattern)
+        ? funcAnalysis.match(this.profile.functionParamPattern)
         : null
-      ) || funcNode.code_snapshot.match(jsPattern);
+      ) || funcAnalysis.match(jsPattern);
       let paramNames: string[] = [];
       if (paramMatch) {
         const paramStr = paramMatch[1] || paramMatch[2] || paramMatch[3] || '';
@@ -506,7 +508,7 @@ export class MapperContext {
 
       // Check if any sink's code_snapshot references a parameter
       const sinksReferencingParams = sinks.filter(sink =>
-        paramNames.some(p => sink.code_snapshot.includes(p))
+        paramNames.some(p => (sink.analysis_snapshot || sink.code_snapshot).includes(p))
       );
 
       if (sinksReferencingParams.length > 0) {
@@ -526,7 +528,7 @@ export class MapperContext {
       // AND whose code_snapshot calls a function in our summary
       for (const [funcName, summary] of functionTaintSummaries) {
         // Check if this node is a call to the summarized function
-        if (node.code_snapshot.match(new RegExp('\\b' + funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(')) !== null) {
+        if ((node.analysis_snapshot || node.code_snapshot).match(new RegExp('\\b' + funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(')) !== null) {
           // Check if the call has any tainted data flowing in
           const hasTaintedInput = node.data_in.some(d => d.tainted);
 
@@ -551,7 +553,7 @@ export class MapperContext {
 
           // Also check: does the call_expression's snapshot itself contain tainted source patterns?
           // This catches cases where the call is: helper(req.query.x) but the node isn't the call itself
-          if (this.profile.ingressPattern.test(node.code_snapshot)) {
+          if (this.profile.ingressPattern.test(node.analysis_snapshot || node.code_snapshot)) {
             // Find the INGRESS node for this tainted source
             const ingressNodes = this.neuralMap.nodes.filter(n =>
               n.node_type === 'INGRESS' && n.attack_surface.includes('user_input')
@@ -587,7 +589,7 @@ export class MapperContext {
 
       // Extract function name from the local_call's code
       for (const [funcName, summary] of functionTaintSummaries) {
-        if (lc.code_snapshot.match(new RegExp('\\b' + funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(')) !== null) {
+        if ((lc.analysis_snapshot || lc.code_snapshot).match(new RegExp('\\b' + funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(')) !== null) {
           // This local_call invokes a function with a taint summary → mark tainted
           lc.data_out.push({
             name: 'result', source: lc.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE',
@@ -608,7 +610,7 @@ export class MapperContext {
     );
     for (const lc of taintedLocalCalls) {
       for (const sink of sinkNodes) {
-        if (sink.code_snapshot.includes(lc.label.slice(0, 30)) && sink.id !== lc.id) {
+        if ((sink.analysis_snapshot || sink.code_snapshot).includes(lc.label.slice(0, 30)) && sink.id !== lc.id) {
           const alreadyExists = lc.edges.some(e => e.edge_type === 'DATA_FLOW' && e.target === sink.id);
           if (!alreadyExists) {
             const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
@@ -621,7 +623,7 @@ export class MapperContext {
       // Also: if this local_call's result is stored in a variable (same line),
       // find the INGRESS nodes that can reach it and connect them to internal sinks
       for (const summary of functionTaintSummaries.values()) {
-        if (lc.code_snapshot.includes(summary.funcName + '(')) {
+        if ((lc.analysis_snapshot || lc.code_snapshot).includes(summary.funcName + '(')) {
           for (const sink of summary.sinks) {
             const alreadyExists = lc.edges.some(e => e.edge_type === 'DATA_FLOW' && e.target === sink.id);
             if (!alreadyExists) {
@@ -651,10 +653,10 @@ export class MapperContext {
     const onNodes: Array<{ node: NeuralMapNode; eventName: string }> = [];
 
     for (const node of this.neuralMap.nodes) {
-      const emitMatch = node.code_snapshot.match(emitPattern);
+      const emitMatch = (node.analysis_snapshot || node.code_snapshot).match(emitPattern);
       if (emitMatch) emitNodes.push({ node, eventName: emitMatch[1] });
 
-      const onMatch = node.code_snapshot.match(onPattern);
+      const onMatch = (node.analysis_snapshot || node.code_snapshot).match(onPattern);
       if (onMatch) onNodes.push({ node, eventName: onMatch[1] });
     }
 
@@ -662,7 +664,7 @@ export class MapperContext {
     for (const emit of emitNodes) {
       // Check if emit has tainted data
       const hasTaint = emit.node.data_in.some(d => d.tainted) ||
-        this.profile.ingressPattern.test(emit.node.code_snapshot);
+        this.profile.ingressPattern.test(emit.node.analysis_snapshot || emit.node.code_snapshot);
 
       if (!hasTaint) continue;
 

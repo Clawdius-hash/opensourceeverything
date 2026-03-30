@@ -848,7 +848,7 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
           file: ctx.neuralMap.source_file,
           line_start: expr.startPosition.row + 1,
           line_end: expr.endPosition.row + 1,
-          code_snapshot: expr.text.slice(0, 200),
+          code_snapshot: expr.text.slice(0, 200), analysis_snapshot: expr.text.slice(0, 2000),
           data_out: [{
             name: 'result',
             source: 'SELF',
@@ -1276,7 +1276,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
       ctx.neuralMap.nodes.push(fnNode);
       ctx.lastCreatedNodeId = fnNode.id;
@@ -1297,7 +1297,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
       fnNode.tags.push('singleton');
       ctx.neuralMap.nodes.push(fnNode);
@@ -1325,7 +1325,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
       lambdaNode.tags.push('lambda');
       ctx.neuralMap.nodes.push(lambdaNode);
@@ -1347,7 +1347,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
       const superclass = node.childForFieldName('superclass');
       if (superclass) {
@@ -1371,7 +1371,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
       ctx.neuralMap.nodes.push(modNode);
       ctx.lastCreatedNodeId = modNode.id;
@@ -1526,7 +1526,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           file: ctx.neuralMap.source_file,
           line_start: node.startPosition.row + 1,
           line_end: node.endPosition.row + 1,
-          code_snapshot: node.text.slice(0, 200),
+          code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
         });
         if (resolution.tainted) {
           n.data_out.push({
@@ -1620,7 +1620,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                 file: ctx.neuralMap.source_file,
                 line_start: node.startPosition.row + 1,
                 line_end: node.endPosition.row + 1,
-                code_snapshot: node.text.slice(0, 200),
+                code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
               });
               if (aliasPattern.nodeType === 'EXTERNAL' && aliasPattern.subtype === 'system_exec') {
                 aliasN.attack_surface.push('command_injection');
@@ -1669,7 +1669,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             file: ctx.neuralMap.source_file,
             line_start: node.startPosition.row + 1,
             line_end: node.endPosition.row + 1,
-            code_snapshot: node.text.slice(0, 200),
+            code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
           });
           const funcNodeId = ctx.functionRegistry.get(calleeName);
           const funcStructNode = funcNodeId ? ctx.neuralMap.nodes.find((n: any) => n.id === funcNodeId) : null;
@@ -1720,7 +1720,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
       subN.attack_surface.push('command_injection');
 
@@ -1747,73 +1747,73 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
 
     // -- CONTROL nodes --
     case 'if': {
-      const ifN = createNode({ label: 'if', node_type: 'CONTROL', node_subtype: 'branch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const ifN = createNode({ label: 'if', node_type: 'CONTROL', node_subtype: 'branch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(ifN); ctx.lastCreatedNodeId = ifN.id; ctx.emitContainsIfNeeded(ifN.id);
       break;
     }
     case 'unless': {
-      const unlessN = createNode({ label: 'unless', node_type: 'CONTROL', node_subtype: 'branch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const unlessN = createNode({ label: 'unless', node_type: 'CONTROL', node_subtype: 'branch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(unlessN); ctx.lastCreatedNodeId = unlessN.id; ctx.emitContainsIfNeeded(unlessN.id);
       break;
     }
     case 'case': {
-      const caseN = createNode({ label: 'case', node_type: 'CONTROL', node_subtype: 'branch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const caseN = createNode({ label: 'case', node_type: 'CONTROL', node_subtype: 'branch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(caseN); ctx.lastCreatedNodeId = caseN.id; ctx.emitContainsIfNeeded(caseN.id);
       break;
     }
     case 'when': {
-      const whenN = createNode({ label: 'when', node_type: 'CONTROL', node_subtype: 'case', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const whenN = createNode({ label: 'when', node_type: 'CONTROL', node_subtype: 'case', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(whenN); ctx.lastCreatedNodeId = whenN.id; ctx.emitContainsIfNeeded(whenN.id);
       break;
     }
     case 'for': {
-      const forN = createNode({ label: 'for', node_type: 'CONTROL', node_subtype: 'loop', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const forN = createNode({ label: 'for', node_type: 'CONTROL', node_subtype: 'loop', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(forN); ctx.lastCreatedNodeId = forN.id; ctx.emitContainsIfNeeded(forN.id);
       break;
     }
     case 'while': {
-      const whileN = createNode({ label: 'while', node_type: 'CONTROL', node_subtype: 'loop', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const whileN = createNode({ label: 'while', node_type: 'CONTROL', node_subtype: 'loop', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(whileN); ctx.lastCreatedNodeId = whileN.id; ctx.emitContainsIfNeeded(whileN.id);
       break;
     }
     case 'until': {
-      const untilN = createNode({ label: 'until', node_type: 'CONTROL', node_subtype: 'loop', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const untilN = createNode({ label: 'until', node_type: 'CONTROL', node_subtype: 'loop', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(untilN); ctx.lastCreatedNodeId = untilN.id; ctx.emitContainsIfNeeded(untilN.id);
       break;
     }
     case 'begin': {
-      const beginN = createNode({ label: 'begin', node_type: 'CONTROL', node_subtype: 'error_handler', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const beginN = createNode({ label: 'begin', node_type: 'CONTROL', node_subtype: 'error_handler', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(beginN); ctx.lastCreatedNodeId = beginN.id; ctx.emitContainsIfNeeded(beginN.id);
       break;
     }
     case 'rescue': {
-      const rescueN = createNode({ label: 'rescue', node_type: 'CONTROL', node_subtype: 'catch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const rescueN = createNode({ label: 'rescue', node_type: 'CONTROL', node_subtype: 'catch', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       rescueN.tags.push('error-handler');
       ctx.neuralMap.nodes.push(rescueN); ctx.lastCreatedNodeId = rescueN.id; ctx.emitContainsIfNeeded(rescueN.id);
       break;
     }
     case 'ensure': {
-      const ensureN = createNode({ label: 'ensure', node_type: 'CONTROL', node_subtype: 'finally', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const ensureN = createNode({ label: 'ensure', node_type: 'CONTROL', node_subtype: 'finally', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(ensureN); ctx.lastCreatedNodeId = ensureN.id; ctx.emitContainsIfNeeded(ensureN.id);
       break;
     }
     case 'return': {
-      const retN = createNode({ label: 'return', node_type: 'CONTROL', node_subtype: 'return', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const retN = createNode({ label: 'return', node_type: 'CONTROL', node_subtype: 'return', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(retN); ctx.lastCreatedNodeId = retN.id; ctx.emitContainsIfNeeded(retN.id);
       break;
     }
     case 'break': {
-      const breakN = createNode({ label: 'break', node_type: 'CONTROL', node_subtype: 'break', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const breakN = createNode({ label: 'break', node_type: 'CONTROL', node_subtype: 'break', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(breakN); ctx.lastCreatedNodeId = breakN.id; ctx.emitContainsIfNeeded(breakN.id);
       break;
     }
     case 'next': {
-      const nextN = createNode({ label: 'next', node_type: 'CONTROL', node_subtype: 'continue', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const nextN = createNode({ label: 'next', node_type: 'CONTROL', node_subtype: 'continue', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(nextN); ctx.lastCreatedNodeId = nextN.id; ctx.emitContainsIfNeeded(nextN.id);
       break;
     }
     case 'yield': {
-      const yieldN = createNode({ label: 'yield', node_type: 'CONTROL', node_subtype: 'yield', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const yieldN = createNode({ label: 'yield', node_type: 'CONTROL', node_subtype: 'yield', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(yieldN); ctx.lastCreatedNodeId = yieldN.id; ctx.emitContainsIfNeeded(yieldN.id);
       break;
     }
@@ -1827,7 +1827,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'string': {
       const hasInterpolation = node.namedChildren.some(c => c.type === 'interpolation');
       if (hasInterpolation) {
-        const fstrN = createNode({ label: 'interpolated_string', node_type: 'TRANSFORM', node_subtype: 'template_string', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+        const fstrN = createNode({ label: 'interpolated_string', node_type: 'TRANSFORM', node_subtype: 'template_string', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
         ctx.neuralMap.nodes.push(fstrN); ctx.lastCreatedNodeId = fstrN.id; ctx.emitContainsIfNeeded(fstrN.id);
       }
       break;
@@ -1865,7 +1865,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       const augLeftNode = node.childForFieldName('left');
       const augLeft = augLeftNode?.text?.slice(0, 40) ?? '?';
       const augOp = node.childForFieldName('operator')?.text ?? '+=';
-      const augN = createNode({ label: `${augLeft} ${augOp}`, node_type: 'TRANSFORM', node_subtype: 'assignment', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+      const augN = createNode({ label: `${augLeft} ${augOp}`, node_type: 'TRANSFORM', node_subtype: 'assignment', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(augN); ctx.lastCreatedNodeId = augN.id; ctx.emitContainsIfNeeded(augN.id);
 
       const augRight = node.childForFieldName('right');
@@ -1907,7 +1907,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           file: ctx.neuralMap.source_file,
           line_start: node.startPosition.row + 1,
           line_end: node.endPosition.row + 1,
-          code_snapshot: node.text.slice(0, 200),
+          code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
         });
         elemN.data_out.push({
           name: 'result',
@@ -1935,7 +1935,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     // -- Hash literal (when notable) --
     case 'hash': {
       if (node.namedChildCount >= 3) {
-        const hashN = createNode({ label: '{...}', node_type: 'TRANSFORM', node_subtype: 'object_literal', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+        const hashN = createNode({ label: '{...}', node_type: 'TRANSFORM', node_subtype: 'object_literal', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
         ctx.neuralMap.nodes.push(hashN); ctx.lastCreatedNodeId = hashN.id; ctx.emitContainsIfNeeded(hashN.id);
       }
       break;
@@ -1944,7 +1944,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     // -- Array literal (when notable) --
     case 'array': {
       if (node.namedChildCount >= 3) {
-        const arrN = createNode({ label: '[...]', node_type: 'TRANSFORM', node_subtype: 'array_literal', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200) });
+        const arrN = createNode({ label: '[...]', node_type: 'TRANSFORM', node_subtype: 'array_literal', language: 'ruby', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
         ctx.neuralMap.nodes.push(arrN); ctx.lastCreatedNodeId = arrN.id; ctx.emitContainsIfNeeded(arrN.id);
       }
       break;

@@ -106,6 +106,20 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Console.readLine':           { nodeType: 'INGRESS', subtype: 'user_input',   tainted: true },
   'Console.readPassword':       { nodeType: 'INGRESS', subtype: 'user_input',   tainted: true },
 
+  // -- Network socket (Juliet connect_tcp pattern) --
+  // Reading from an outbound TCP socket is attacker-controlled input.
+  // Juliet uses: socket.getInputStream(), then wraps in InputStreamReader/BufferedReader.
+  'Socket.getInputStream':      { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+  'socket.getInputStream':      { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+  'Socket.getOutputStream':     { nodeType: 'EGRESS',  subtype: 'network_output', tainted: false },
+  'socket.getOutputStream':     { nodeType: 'EGRESS',  subtype: 'network_output', tainted: false },
+  'DatagramSocket.receive':     { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+  'ServerSocket.accept':        { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+  // InputStreamReader / DataInputStream wrapping socket reads
+  'InputStreamReader.read':     { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+  'DataInputStream.readUTF':    { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+  'DataInputStream.readLine':   { nodeType: 'INGRESS', subtype: 'network_input', tainted: true },
+
   // -- File read --
   'Files.readString':           { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
   'Files.readAllLines':         { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
@@ -299,9 +313,14 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Statement.executeQuery':       { nodeType: 'STORAGE', subtype: 'db_read',    tainted: false },
   'Statement.executeUpdate':      { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
   'Statement.execute':            { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
+  'Statement.addBatch':           { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
+  'Statement.executeBatch':       { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
+  'Statement.clearBatch':         { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
   'PreparedStatement.executeQuery': { nodeType: 'STORAGE', subtype: 'db_read',  tainted: false },
   'PreparedStatement.executeUpdate': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'PreparedStatement.execute':    { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
+  'PreparedStatement.addBatch':   { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
+  'PreparedStatement.executeBatch': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
   'PreparedStatement.setString':  { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
   'PreparedStatement.setInt':     { nodeType: 'STORAGE', subtype: 'db_write',   tainted: false },
   'ResultSet.getString':          { nodeType: 'STORAGE', subtype: 'db_read',    tainted: false },
@@ -378,6 +397,16 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'KeyGenerator.getInstance':     { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
   'KeyPairGenerator.getInstance': { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
   'Signature.getInstance':        { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
+
+  // -- Weak PRNG (CWE-338) — Math.random and java.util.Random are cryptographically weak --
+  'Math.random':                  { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextInt':               { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextDouble':            { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextLong':              { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextFloat':             { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextBoolean':           { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextBytes':             { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
+  'Random.nextGaussian':          { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
 
   // -- Encoding --
   'Base64.getEncoder':            { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
@@ -553,8 +582,8 @@ const NON_DB_OBJECTS = new Set([
 
 const VARIABLE_TO_CLASS: Record<string, string> = {
   // JDBC
-  'connection': 'Connection', 'conn': 'Connection', 'con': 'Connection',
-  'statement': 'Statement', 'stmt': 'Statement',
+  'connection': 'Connection', 'conn': 'Connection', 'con': 'Connection', 'dbConnection': 'Connection', 'dbConn': 'Connection', 'sqlConnection': 'Connection',
+  'statement': 'Statement', 'stmt': 'Statement', 'sqlStatement': 'Statement', 'st': 'Statement',
   'preparedStatement': 'PreparedStatement', 'pstmt': 'PreparedStatement', 'ps': 'PreparedStatement',
   'callableStatement': 'CallableStatement', 'cs': 'CallableStatement', 'cstmt': 'CallableStatement',
   'resultSet': 'ResultSet', 'rs': 'ResultSet', 'rset': 'ResultSet',
@@ -579,14 +608,26 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   'kafkaTemplate': 'KafkaTemplate',
   'jmsTemplate': 'JmsTemplate',
   'redisTemplate': 'RedisTemplate',
-  // JNDI
+  // JNDI / LDAP
   'initialContext': 'InitialContext', 'ctx': 'InitialContext',
+  'directoryContext': 'DirContext', 'dirContext': 'DirContext', 'dirCtx': 'DirContext',
+  'ldapContext': 'LdapContext', 'ldapCtx': 'LdapContext',
+  'initialDirContext': 'InitialDirContext',
   // Process
   'runtime': 'Runtime',
   'processBuilder': 'ProcessBuilder', 'pb': 'ProcessBuilder',
-  // IO
+  // IO — include Juliet naming patterns like readerBuffered, readerInputStream
   'scanner': 'Scanner',
   'bufferedReader': 'BufferedReader', 'br': 'BufferedReader', 'reader': 'BufferedReader',
+  'readerBuffered': 'BufferedReader',
+  'readerInputStream': 'InputStreamReader',
+  'inputStreamReader': 'InputStreamReader',
+  'isr': 'InputStreamReader',
+  'dataInputStream': 'DataInputStream', 'dis': 'DataInputStream',
+  'dataOutputStream': 'DataOutputStream', 'dos': 'DataOutputStream',
+  // Network
+  'socket': 'Socket', 'serverSocket': 'ServerSocket',
+  'datagramSocket': 'DatagramSocket',
   // HttpClient
   'httpClient': 'HttpClient', 'client': 'HttpClient',
   // ORM
@@ -680,6 +721,9 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   const DANGEROUS_METHOD_PATTERNS: Record<string, CalleePattern> = {
     'executeQuery':  { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
     'executeUpdate': { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+    'execute':       { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+    'addBatch':      { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
+    'executeBatch':  { nodeType: 'STORAGE', subtype: 'db_write', tainted: false },
     'prepareCall':   { nodeType: 'STORAGE', subtype: 'db_stored_proc', tainted: false },
     'prepareStatement': { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
     'createStatement': { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },

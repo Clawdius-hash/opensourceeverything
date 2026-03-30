@@ -181,6 +181,7 @@ describe('CWE-95: Eval Injection (upgraded)', () => {
         label: 'allowlist check',
         node_subtype: 'validation',
         code_snapshot: 'if (!allowedExpressions.includes(expr)) throw new Error("invalid")',
+        data_in: [{ name: 'expr', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
         edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: true, async: false }],
       },
       {
@@ -403,6 +404,7 @@ describe('CWE-113: HTTP Response Splitting (upgraded)', () => {
         label: 'strip CRLF',
         node_subtype: 'sanitize',
         code_snapshot: 'const safeLang = lang.replace(/[\\r\\n]/g, "")',
+        data_in: [{ name: 'lang', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
         edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
       },
       {
@@ -586,6 +588,7 @@ describe('CWE-759: Hash without Salt (upgraded)', () => {
         label: 'bcrypt.hash(password, 12)',
         node_subtype: 'hash',
         code_snapshot: 'const hashed = await bcrypt.hash(password, 12)',
+        data_in: [{ name: 'password', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'SECRET' }],
         edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
       },
       {
@@ -619,6 +622,7 @@ describe('CWE-759: Hash without Salt (upgraded)', () => {
         label: 'argon2.hash(password)',
         node_subtype: 'hash',
         code_snapshot: 'const hashed = await argon2.hash(password, { type: argon2.argon2id })',
+        data_in: [{ name: 'password', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'SECRET' }],
         edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
       },
       {

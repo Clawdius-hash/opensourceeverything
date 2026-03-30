@@ -57,45 +57,85 @@ export function nodesOfType(map: NeuralMap, type: NodeType): NeuralMapNode[] {
 }
 
 /**
- * BFS: is there a path from source to sink that never passes through a CONTROL node?
- * Uses composite visited keys (nodeId:passedControl) to prevent safe-path pruning.
- * Only follows data-flow edges (DATA_FLOW, CALLS, READS, WRITES, RETURNS) —
- * structural containment (CONTAINS) and dependency (DEPENDS) edges are excluded
- * because they do not represent actual data movement between nodes.
+ * Unified BFS: is there a path from source to sink that never passes through a
+ * "gate" node (a node whose type matches gateType)?
+ *
+ * @param map         - The neural map to traverse
+ * @param sourceId    - Start node ID
+ * @param sinkId      - Target node ID
+ * @param gateType    - NodeType (or array of NodeTypes) that counts as the gate
+ * @param requireTaint - When true, only nodes with tainted data_in count as sources;
+ *                       currently unused at the BFS level (callers pre-filter sources)
+ *                       but included for API completeness and future use.
+ *
+ * Uses composite visited keys (nodeId:passedGate) to prevent safe-path pruning —
+ * a safe path through the gate must not block exploration of unsafe paths.
+ * Uses index-based queue iteration (O(n)) instead of shift() (O(n²)).
+ * Only follows data-flow edges — CONTAINS/DEPENDS are excluded.
  */
-export function hasTaintedPathWithoutControl(map: NeuralMap, sourceId: string, sinkId: string): boolean {
+export function hasPathWithoutGate(
+  map: NeuralMap,
+  sourceId: string,
+  sinkId: string,
+  gateType: NodeType | NodeType[],
+  _requireTaint?: boolean,
+): boolean {
+  const gateSet: ReadonlySet<NodeType> = Array.isArray(gateType)
+    ? new Set(gateType)
+    : new Set([gateType]);
   const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
   const visited = new Set<string>();
-  const queue: Array<{ nodeId: string; passedControl: boolean }> = [
-    { nodeId: sourceId, passedControl: false },
+  const queue: Array<{ nodeId: string; passedGate: boolean }> = [
+    { nodeId: sourceId, passedGate: false },
   ];
+  let head = 0; // index-based dequeue — O(1) instead of shift() O(n)
 
-  while (queue.length > 0) {
-    const { nodeId, passedControl } = queue.shift()!;
-    const visitKey = `${nodeId}:${passedControl}`;
+  while (head < queue.length) {
+    const { nodeId, passedGate } = queue[head++];
+    const visitKey = `${nodeId}:${passedGate}`;
     if (visited.has(visitKey)) continue;
     visited.add(visitKey);
 
     const node = nodeMap.get(nodeId);
     if (!node) continue;
 
-    const controlNow = passedControl || node.node_type === 'CONTROL';
+    const isGateType = gateSet.has(node.node_type);
+
+    // A gate only counts if it actually processes data from the tracked path.
+    // A CONTROL named "sanitize" that doesn't touch the tainted variable is NOT a real gate.
+    const isEffectiveGate = isGateType && (
+      // Gate has tainted OR sensitive data flowing INTO it (it processes the relevant input)
+      node.data_in?.some(d => d.tainted || d.sensitivity !== 'NONE') ||
+      // OR gate has a DATA_FLOW edge FROM a node on our current path
+      // (the data actually passes through this control)
+      node.edges?.some(e => e.edge_type === 'DATA_FLOW' && visited.has(`${e.target}:false`))
+    );
+
+    const gateNow = passedGate || isEffectiveGate;
 
     if (nodeId === sinkId) {
-      if (!controlNow) return true;
+      if (!gateNow) return true;
       continue;
     }
 
     for (const edge of node.edges) {
       if (!FLOW_EDGE_TYPES.has(edge.edge_type)) continue;
-      const edgeKey = `${edge.target}:${controlNow}`;
+      const edgeKey = `${edge.target}:${gateNow}`;
       if (!visited.has(edgeKey)) {
-        queue.push({ nodeId: edge.target, passedControl: controlNow });
+        queue.push({ nodeId: edge.target, passedGate: gateNow });
       }
     }
   }
 
   return false;
+}
+
+/**
+ * BFS: is there a path from source to sink that never passes through a CONTROL node?
+ * Delegates to hasPathWithoutGate.
+ */
+export function hasTaintedPathWithoutControl(map: NeuralMap, sourceId: string, sinkId: string): boolean {
+  return hasPathWithoutGate(map, sourceId, sinkId, 'CONTROL');
 }
 
 /**
@@ -319,9 +359,10 @@ export function hasPathWithoutIntermediateType(
   const queue: Array<{ nodeId: string; passedType: boolean }> = [
     { nodeId: sourceId, passedType: false },
   ];
+  let head = 0;
 
-  while (queue.length > 0) {
-    const { nodeId, passedType } = queue.shift()!;
+  while (head < queue.length) {
+    const { nodeId, passedType } = queue[head++];
     const visitKey = `${nodeId}:${passedType}`;
     if (visited.has(visitKey)) continue;
     visited.add(visitKey);
@@ -352,43 +393,10 @@ export function hasPathWithoutIntermediateType(
 
 /**
  * BFS: is there a path from source to sink that never passes through a TRANSFORM node?
- * Detects missing data transformation (encoding, sanitization, hashing, etc.)
- * Uses composite visited keys to prevent safe-path pruning.
- * Only follows data-flow edges — CONTAINS/DEPENDS are excluded.
+ * Delegates to hasPathWithoutGate.
  */
 export function hasPathWithoutTransform(map: NeuralMap, sourceId: string, sinkId: string): boolean {
-  const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
-  const visited = new Set<string>();
-  const queue: Array<{ nodeId: string; passedTransform: boolean }> = [
-    { nodeId: sourceId, passedTransform: false },
-  ];
-
-  while (queue.length > 0) {
-    const { nodeId, passedTransform } = queue.shift()!;
-    const visitKey = `${nodeId}:${passedTransform}`;
-    if (visited.has(visitKey)) continue;
-    visited.add(visitKey);
-
-    const node = nodeMap.get(nodeId);
-    if (!node) continue;
-
-    const transformNow = passedTransform || node.node_type === 'TRANSFORM';
-
-    if (nodeId === sinkId) {
-      if (!transformNow) return true;
-      continue;
-    }
-
-    for (const edge of node.edges) {
-      if (!FLOW_EDGE_TYPES.has(edge.edge_type)) continue;
-      const edgeKey = `${edge.target}:${transformNow}`;
-      if (!visited.has(edgeKey)) {
-        queue.push({ nodeId: edge.target, passedTransform: transformNow });
-      }
-    }
-  }
-
-  return false;
+  return hasPathWithoutGate(map, sourceId, sinkId, 'TRANSFORM');
 }
 
 // ---------------------------------------------------------------------------
@@ -481,10 +489,14 @@ export function stripComments(code: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns code_snapshots for all nodes in the same containing scope as nodeId.
+ * Returns analysis_snapshots (full context) for all nodes in the same containing scope as nodeId.
  * "Containing scope" = all nodes sharing the same CONTAINS parent in the graph.
  * Fixes the #1 systemic FP: safe patterns (DOMPurify, parameterized queries, etc.)
  * applied on prior lines are invisible when checking only the sink node itself.
+ *
+ * V4-D: Uses analysis_snapshot (full 2000-char context, set by V4-A) instead of
+ * code_snapshot (200-char truncated display string), so safe-pattern checks on
+ * larger functions can see the full surrounding code context.
  */
 export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): string[] {
   const snapshots: string[] = [];
@@ -493,14 +505,17 @@ export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): str
 
   // Find the parent STRUCTURAL node that contains this node
   const parentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === nodeId);
-  if (!parentEdge) return [targetNode.code_snapshot];
+  if (!parentEdge) {
+    // No CONTAINS parent: return the node's own full-context snapshot
+    return [targetNode.analysis_snapshot || targetNode.code_snapshot];
+  }
 
-  // Get all siblings (nodes contained by the same parent)
+  // Get all siblings (nodes contained by the same parent) — use analysis_snapshot for full context
   const siblings = map.edges
     .filter(e => e.edge_type === 'CONTAINS' && e.source === parentEdge.source)
     .map(e => map.nodes.find(n => n.id === e.target))
     .filter(Boolean)
-    .map(n => n!.code_snapshot);
+    .map(n => n!.analysis_snapshot || n!.code_snapshot);
 
   return siblings;
 }
@@ -525,7 +540,10 @@ export function createGenericVerifier(
     for (const src of sources) {
       for (const sink of sinks) {
         if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-          if (!safePattern.test(stripComments(sink.code_snapshot))) {
+          // V4-D: check scope snapshots (analysis_snapshot) so safe patterns on prior lines are visible
+          const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
+          const combinedScope = stripComments(scopeSnaps.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+          if (!safePattern.test(combinedScope)) {
             findings.push({
               source: nodeRef(src),
               sink: nodeRef(sink),
