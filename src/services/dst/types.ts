@@ -136,6 +136,8 @@ export interface DataFlow {
 }
 
 export interface Edge {
+  /** Source node ID this edge originates from (set on top-level map.edges) */
+  source?: string;
   /** Target node ID this edge points to */
   target: string;
   /** Type of relationship */

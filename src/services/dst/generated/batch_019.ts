@@ -120,11 +120,15 @@ export const verifyCWE434 = (map: NeuralMap): VerificationResult => {
  * CWE-476: NULL Pointer Dereference
  * A nullable return from EXTERNAL/TRANSFORM reaches dereference without null check CONTROL.
  * Causes crashes (DoS) or, in privileged contexts, unauthorized memory access.
+ *
+ * Also detects Java-specific patterns:
+ *  - Non-short-circuit & in null check: if (x != null & x.method()) — evaluates both sides
+ *  - Variable assigned null then dereferenced without null check
  */
 export const verifyCWE476 = (map: NeuralMap): VerificationResult => {
   const findings: Finding[] = [];
 
-  // Sources: nodes that can return nullable values
+  // ── Graph-based detection (original) ──
   const sources = map.nodes.filter(n =>
     (n.node_type === 'EXTERNAL' || n.node_type === 'TRANSFORM') &&
     (n.node_subtype.includes('nullable') || n.node_subtype.includes('optional') ||
@@ -133,7 +137,6 @@ export const verifyCWE476 = (map: NeuralMap): VerificationResult => {
      ) !== null)
   );
 
-  // Sinks: nodes that dereference values (member access, method calls, array indexing)
   const sinks = nodesOfType(map, 'TRANSFORM').filter(n =>
     n.code_snapshot.match(
       /\.\w+\s*[\([]|\.length\b|\.toString\b|\.valueOf\b|\[\s*\d+\s*\]/i
@@ -156,6 +159,79 @@ export const verifyCWE476 = (map: NeuralMap): VerificationResult => {
             fix: 'Add null/undefined check before dereferencing. Use optional chaining (?.), nullish coalescing (??), ' +
               'or explicit null guards. Consider TypeScript strict null checks.',
           });
+        }
+      }
+    }
+  }
+
+  // ── Source-based detection (Java structural patterns) ──
+  const src2 = map.source_code || '';
+  if (src2) {
+    const lines = src2.split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+      // Pattern 1: Non-short-circuit & in null check
+      // if ((x != null) & (x.method())) or if (x != null & x.length())
+      // The & evaluates both sides, so x.method() runs even when x is null
+      if (/\bif\s*\(/.test(line)) {
+        // Check for single & (not &&) in null check context
+        const condMatch = line.match(/\bif\s*\((.*)\)/);
+        if (condMatch) {
+          const cond = condMatch[1];
+          // Has null check AND has single & (not &&)
+          if (/\w+\s*!=\s*null/.test(cond) && /[^&]&[^&]/.test(cond)) {
+            // And has dereference on the other side of &
+            if (/\.\w+\s*\(/.test(cond) || /\.length\b/.test(cond)) {
+              const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+              if (nearNode) {
+                findings.push({
+                  source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                  missing: 'CONTROL (use && not & for null guard — short-circuit evaluation)',
+                  severity: 'medium',
+                  description: `L${i + 1}: Non-short-circuit operator & used in null check. Both sides of & are always evaluated, so the dereference executes even when the variable is null. Use && instead.`,
+                  fix: 'Use && (short-circuit AND) instead of & in null checks. With &&, the right side is only evaluated if the left side is true.',
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Pattern 2: Variable explicitly assigned null, then dereferenced without reassignment or null check
+      const nullAssign = line.match(/(\w+)\s*=\s*null\s*;/);
+      if (nullAssign) {
+        const varName = nullAssign[1];
+        // Look ahead for dereference without reassignment
+        let reassigned = false;
+        for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+          const ahead = lines[j];
+          if (/^\s*\/\//.test(ahead) || /^\s*\*/.test(ahead)) continue;
+          // Check if variable is reassigned
+          const reassignPat = new RegExp(`\\b${varName}\\s*=\\s*(?!null\\s*;|=)`);
+          if (reassignPat.test(ahead)) { reassigned = true; break; }
+          // Check if there's a null check
+          const nullCheckPat = new RegExp(`\\b${varName}\\s*!=\\s*null\\b|\\b${varName}\\s*==\\s*null\\b`);
+          if (nullCheckPat.test(ahead)) { reassigned = true; break; } // null check counts as safe
+          // Check if variable is dereferenced
+          const derefPat = new RegExp(`\\b${varName}\\.(\\w+)\\s*\\(`);
+          if (derefPat.test(ahead)) {
+            // But skip if it's inside a short-circuit null guard on the same line
+            if (/&&/.test(ahead) && nullCheckPat.test(ahead)) { reassigned = true; break; }
+            const nearNode = map.nodes.find(n => Math.abs(n.line_start - (j + 1)) <= 2) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'CONTROL (null check before dereference)',
+                severity: 'medium',
+                description: `L${j + 1}: Variable '${varName}' was assigned null at L${i + 1} and is dereferenced without a null check.`,
+                fix: 'Add a null check before dereferencing. Ensure the variable is assigned a non-null value before use.',
+              });
+            }
+            break;
+          }
         }
       }
     }

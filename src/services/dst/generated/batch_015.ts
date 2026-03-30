@@ -10,62 +10,14 @@ import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, hasPathWithoutTransform,
   hasPathWithoutIntermediateType,
+  makeVerifier as v,
+  bfs_nC as nC, bfs_nT as nT, bfs_nCi as nCi, bfs_nA as nA,
+  bfs_nTi as nTi, bfs_nM as nM,
+  SP_V as V, SP_S as S, SP_A as A, SP_E as E, SP_L as L, SP_R as R, SP_I as I,
+  scanSourceLines, findNearestNode,
+  type BfsCheck,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
-
-// ---------------------------------------------------------------------------
-// Generic factory (same as batch_014 but self-contained)
-// ---------------------------------------------------------------------------
-
-type BfsCheck = (map: NeuralMap, srcId: string, sinkId: string) => boolean;
-
-function v(
-  cweId: string, cweName: string, severity: Severity,
-  sourceType: NodeType, sinkType: NodeType,
-  bfsCheck: BfsCheck,
-  safePattern: RegExp,
-  missingDesc: string,
-  fixDesc: string,
-): (map: NeuralMap) => VerificationResult {
-  return (map: NeuralMap): VerificationResult => {
-    const findings: Finding[] = [];
-    const sources = nodesOfType(map, sourceType);
-    const sinks = nodesOfType(map, sinkType);
-    for (const src of sources) {
-      for (const sink of sinks) {
-        if (src.id === sink.id) continue;
-        if (bfsCheck(map, src.id, sink.id)) {
-          if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-            findings.push({
-              source: nodeRef(src), sink: nodeRef(sink),
-              missing: missingDesc, severity,
-              description: `${sourceType} at ${src.label} → ${sinkType} at ${sink.label} without controls. Vulnerable to ${cweName}.`,
-              fix: fixDesc,
-            });
-          }
-        }
-      }
-    }
-    return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
-  };
-}
-
-// BFS shortcuts
-const nC: BfsCheck = hasTaintedPathWithoutControl;
-const nT: BfsCheck = hasPathWithoutTransform;
-const nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONTROL');
-const nA: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'AUTH');
-const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRANSFORM');
-const nM: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'META');
-
-// Safe patterns
-const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
-const S = /\bsanitize\s*\(|\bescape\s*\(|\bencode\s*\(|\b\.filter\s*\(|\bstrip\s*\(|\bneutralize\s*\(/i;
-const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\btoken\b.*\bverif\w*\s*\(|\bauth\s*\(/i;
-const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
-const L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b|\btransaction\b/i;
-const R = /\brelease\s*\(|\bclose\s*\(|\bdispose\s*\(|\bfinally\b|\bcleanup\s*\(/i;
-const I = /\bimmutable\b|\b\.freeze\s*\(|\breadonly\b|\bconst\b|\b\.seal\s*\(/i;
 
 // ===========================================================================
 // INGRESS→CONTROL without CONTROL (9 CWEs)
@@ -98,7 +50,109 @@ export const verifyCWE162 = v('CWE-162', 'Improper Neutralization of Trailing Sp
 export const verifyCWE229 = v('CWE-229', 'Improper Handling of Values', 'medium', 'INGRESS', 'CONTROL', nT, V, 'TRANSFORM (value validation before control)', 'Validate and transform values before using in control flow.');
 export const verifyCWE351 = v('CWE-351', 'Insufficient Type Distinction', 'medium', 'INGRESS', 'CONTROL', nT, /\btypeof\b|\binstanceof\b|\btype.*check\b/i, 'TRANSFORM (type distinction before control decisions)', 'Check types explicitly before branching on them.');
 export const verifyCWE595 = v('CWE-595', 'Comparison of Object References Instead of Object Contents', 'medium', 'INGRESS', 'CONTROL', nT, /\b===\b.*\bvalue\b|\bequals\b|\bdeepEqual\b|\bJSON\.stringify\b/i, 'TRANSFORM (value comparison, not reference comparison)', 'Compare object contents (.equals, deepEqual), not references (===), for security decisions.');
-export const verifyCWE597 = v('CWE-597', 'Use of Wrong Operator in String Comparison', 'medium', 'INGRESS', 'CONTROL', nT, /\b===\b|\bstrictEqual\b|\blocaleCompare\b/i, 'TRANSFORM (strict string comparison)', 'Use strict equality (===) for string comparisons, not == which coerces types.');
+// CWE-597: Structural — detect == or != used to compare String objects in Java (should use .equals())
+export const verifyCWE597 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-597', name: 'Use of Wrong Operator in String Comparison', holds: true, findings };
+
+  // Detect Java: check if source has Java-specific keywords
+  const isJava = /\bpackage\s+\w|import\s+java\.|public\s+class\b/.test(src);
+  if (!isJava) {
+    // For non-Java: fall back to topology check
+    const srcs = nodesOfType(map, 'INGRESS');
+    const sinks = nodesOfType(map, 'CONTROL');
+    for (const s of srcs) {
+      for (const sk of sinks) {
+        if (s.id === sk.id) continue;
+        if (nT(map, s.id, sk.id)) {
+          const safeRe = /\b===\b|\bstrictEqual\b|\blocaleCompare\b/i;
+          if (!safeRe.test(sk.code_snapshot) && !safeRe.test(s.code_snapshot)) {
+            findings.push({
+              source: nodeRef(s), sink: nodeRef(sk),
+              missing: 'TRANSFORM (strict string comparison)',
+              severity: 'medium',
+              description: `${s.label} -> ${sk.label}: string comparison uses wrong operator.`,
+              fix: 'Use strict equality (===) for string comparisons, not == which coerces types.',
+            });
+          }
+        }
+      }
+    }
+    return { cwe: 'CWE-597', name: 'Use of Wrong Operator in String Comparison', holds: findings.length === 0, findings };
+  }
+
+  // Java-specific: find String variables compared with == or !=
+  const scanned = scanSourceLines(src);
+
+  // Collect known String variable names (declared as String, method params, or returned from readLine, etc.)
+  const stringVars = new Set<string>();
+  for (const { line } of scanned) {
+    // String varName = ... or String varName;
+    const decl = line.match(/\bString\s+(\w+)\s*[=;]/);
+    if (decl) stringVars.add(decl[1]);
+    // Method parameters: (String varName) or (String varName, ...) or (..., String varName)
+    const paramRe = /\bString\s+(\w+)\s*[,)]/g;
+    let paramMatch;
+    while ((paramMatch = paramRe.exec(line)) !== null) {
+      stringVars.add(paramMatch[1]);
+    }
+    // Also: varName = readerBuffered.readLine()
+    const readLine = line.match(/(\w+)\s*=\s*\w+\.readLine\(\)/);
+    if (readLine) stringVars.add(readLine[1]);
+  }
+
+  for (const { line, lineNum, isComment } of scanned) {
+    if (isComment) continue;
+
+    // Detect: stringVar == stringVar, stringVar == "literal", or "literal" == stringVar (reference comparison)
+    // But NOT: stringVar == null or stringVar != null (that's valid)
+    for (const v1 of stringVars) {
+      // Pattern 1: v1 == v2 (where v2 is another variable OR a string literal)
+      const eqPattern = new RegExp(`\\b${v1}\\s*==\\s*(?:(\\w+)\\b|("(?:[^"\\\\]|\\\\.)*"))`);
+      const match = eqPattern.exec(line);
+      if (match) {
+        const v2 = match[1] || match[2]; // match[1] = identifier, match[2] = string literal
+        if (v2 === 'null' || v2 === 'true' || v2 === 'false') continue; // null check is fine
+        if (stringVars.has(v2) || (match[2] !== undefined)) {
+          const nearNode = findNearestNode(map, lineNum);
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'TRANSFORM (use .equals() for String comparison)',
+              severity: 'medium',
+              description: `L${lineNum}: String comparison uses == operator instead of .equals(). '${v1} == ${v2}' compares object references, not string contents.`,
+              fix: 'Use String.equals() for content comparison. The == operator compares object references in Java.',
+            });
+          }
+        }
+      }
+
+      // Pattern 2: "literal" == v1 (Yoda comparison with string literal on left)
+      const yodaPattern = new RegExp(`("(?:[^"\\\\]|\\\\.)*")\\s*==\\s*\\b${v1}\\b`);
+      const yodaMatch = yodaPattern.exec(line);
+      if (yodaMatch) {
+        const lit = yodaMatch[1];
+        // Avoid double-reporting if Pattern 1 already caught this line for this variable
+        const alreadyReported = findings.some(f => f.description.includes(`L${lineNum}:`) && f.description.includes(v1));
+        if (!alreadyReported) {
+          const nearNode = findNearestNode(map, lineNum);
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'TRANSFORM (use .equals() for String comparison)',
+              severity: 'medium',
+              description: `L${lineNum}: String comparison uses == operator instead of .equals(). '${lit} == ${v1}' compares object references, not string contents.`,
+              fix: 'Use String.equals() for content comparison. The == operator compares object references in Java.',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-597', name: 'Use of Wrong Operator in String Comparison', holds: findings.length === 0, findings };
+};
 export const verifyCWE606 = v('CWE-606', 'Unchecked Input for Loop Condition', 'high', 'INGRESS', 'CONTROL', nT, V, 'TRANSFORM (input validation before loop condition)', 'Validate user input used in loop conditions. Unchecked input causes infinite loops.');
 
 // ===========================================================================
@@ -297,7 +351,55 @@ export const verifyCWE555 = v('CWE-555', 'J2EE Misconfiguration: Plaintext Passw
 export const verifyCWE587 = v('CWE-587', 'Assignment of a Fixed Address to a Pointer', 'medium', 'META', 'STORAGE', nT, /\bdynamic\b|\bmalloc\b|\bvolatile\b|\bno.*fixed.*addr\b/i, 'TRANSFORM (dynamic address resolution, not fixed)', 'Do not assign fixed addresses to pointers. Use dynamic allocation for portability and ASLR.');
 
 // CONTROL→STORAGE without TRANSFORM (3)
-export const verifyCWE482 = v('CWE-482', 'Comparing instead of Assigning', 'medium', 'CONTROL', 'STORAGE', nT, /\b=\b(?!=)|\bassign\b|\bset\b/i, 'TRANSFORM (correct assignment operator)', 'Use = for assignment, == for comparison. Lint for accidental comparison in assignment context.');
+// CWE-482: Structural — detect comparison (==) used where assignment (=) was intended
+export const verifyCWE482 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-482', name: 'Comparing instead of Assigning', holds: true, findings };
+
+  const scanned = scanSourceLines(src);
+
+  // Pattern: inside an if-condition, a comparison is used where assignment was likely intended.
+  // The Juliet pattern: if((isZero == (zeroOrOne == 0)) == true) — should be =, not ==
+  // General pattern: if((var == expr) == true) or standalone comparison-as-statement
+  // Also: var == value; as a standalone statement (comparison result discarded)
+  for (const { line, lineNum, isComment } of scanned) {
+    if (isComment) continue;
+
+    // Pattern 1: if((boolVar == (expr)) == true) — the outer == should be = (assignment inside if)
+    // Detect: if( (identifier == (expr)) == true )
+    if (/\bif\s*\(\s*\(\s*\w+\s*==\s*\([^)]+\)\s*\)\s*==\s*true\s*\)/.test(line)) {
+      const nearNode = findNearestNode(map, lineNum);
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'TRANSFORM (use = for assignment, not == for comparison)',
+          severity: 'medium',
+          description: `L${lineNum}: Comparison (==) used where assignment (=) was likely intended inside if-condition.`,
+          fix: 'Use = for assignment, == for comparison. The == operator does not modify the variable.',
+        });
+      }
+    }
+
+    // Pattern 2: standalone comparison-as-statement: identifier == value;
+    // (a comparison whose result is discarded)
+    const standalone = line.match(/^\s*(\w+)\s*==\s*[^=].*;\s*$/);
+    if (standalone && !/\bif\b|\bwhile\b|\breturn\b|\bfor\b/.test(line)) {
+      const nearNode = findNearestNode(map, lineNum);
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'TRANSFORM (use = for assignment, not == for comparison)',
+          severity: 'medium',
+          description: `L${lineNum}: Comparison result discarded — '${standalone[1]} ==' should likely be '${standalone[1]} =' (assignment).`,
+          fix: 'Use = for assignment, == for comparison. Standalone comparisons have no effect.',
+        });
+      }
+    }
+  }
+
+  return { cwe: 'CWE-482', name: 'Comparing instead of Assigning', holds: findings.length === 0, findings };
+};
 export const verifyCWE560 = v('CWE-560', 'Use of umask() with chmod()-style Argument', 'medium', 'CONTROL', 'STORAGE', nT, /\bumask\b.*\b0[0-7]{3}\b|\bcorrect.*umask\b/i, 'TRANSFORM (correct umask argument — complement of desired permissions)', 'umask takes complement of desired permissions. umask(022) not umask(755).');
 export const verifyCWE656 = v('CWE-656', 'Reliance on Security Through Obscurity', 'medium', 'CONTROL', 'STORAGE', nT, E, 'TRANSFORM (proper security mechanisms, not obscurity)', 'Use encryption, authentication, and access controls — not obscurity — for security.');
 

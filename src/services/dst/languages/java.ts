@@ -166,8 +166,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'System.out.println':         { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
   'System.out.print':           { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
   'System.out.printf':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+  'System.out.format':          { nodeType: 'EGRESS', subtype: 'format',        tainted: false },
   'System.err.println':         { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
   'System.err.print':           { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+  'System.err.printf':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+  'System.err.format':          { nodeType: 'EGRESS', subtype: 'format',        tainted: false },
 
   // -- PrintWriter (servlet response writer alias) --
   // When `out = response.getWriter()`, calls on `out` must also be classified.

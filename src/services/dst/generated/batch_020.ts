@@ -157,16 +157,64 @@ export const verifyCWE613 = v(
 // Severity: medium | OWASP A05:2021
 // ===========================================================================
 
-export const verifyCWE614 = v(
-  'CWE-614',
-  "Sensitive Cookie Without 'Secure' Attribute",
-  'medium',
-  'TRANSFORM', 'EGRESS',
-  nC,
-  /\bsecure\s*[=:]\s*true\b|\bSecure\b|\b__Secure-\b|\bcookie.*secure\b/i,
-  'CONTROL (Secure attribute on sensitive cookies)',
-  'Set the Secure attribute on all sensitive cookies so they are only transmitted over HTTPS. Use __Secure- prefix where supported.',
-);
+export const verifyCWE614 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const reported = new Set<string>();
+
+  // --- Strategy 1: Graph-based (TRANSFORM -> EGRESS without CONTROL) ---
+  const transforms = nodesOfType(map, 'TRANSFORM');
+  const egresses = nodesOfType(map, 'EGRESS');
+  const safePattern = /\bsecure\s*[=:]\s*true\b|\bSecure\b|\b__Secure-\b|\bcookie.*secure\b/i;
+  for (const src of transforms) {
+    for (const sink of egresses) {
+      if (src.id === sink.id) continue;
+      if (nC(map, src.id, sink.id)) {
+        if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
+          reported.add(src.id);
+          findings.push({
+            source: nodeRef(src), sink: nodeRef(sink),
+            missing: 'CONTROL (Secure attribute on sensitive cookies)',
+            severity: 'medium',
+            description: `TRANSFORM at ${src.label} -> EGRESS at ${sink.label} without controls. Vulnerable to Sensitive Cookie Without 'Secure' Attribute.`,
+            fix: 'Set the Secure attribute on all sensitive cookies so they are only transmitted over HTTPS. Use __Secure- prefix where supported.',
+          });
+        }
+      }
+    }
+  }
+
+  // --- Strategy 2: Code snapshot scan for Java setSecure(false) pattern ---
+  // Detects cookie.setSecure(false) which explicitly disables the Secure flag.
+  // Also detects cookies created without any setSecure call (missing Secure flag).
+  const SET_SECURE_FALSE = /\.setSecure\s*\(\s*false\s*\)/;
+  const SET_SECURE_TRUE = /\.setSecure\s*\(\s*true\s*\)/;
+  const COOKIE_CREATION = /new\s+(?:javax\.servlet\.http\.)?Cookie\s*\(/;
+  const ADD_COOKIE = /\.addCookie\s*\(/;
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = (node as any).analysis_snapshot || node.code_snapshot;
+    // Explicit setSecure(false) — clear vulnerability
+    if (SET_SECURE_FALSE.test(snap)) {
+      reported.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (Secure attribute on sensitive cookies)',
+        severity: 'medium',
+        description: `${node.label} explicitly sets cookie Secure flag to false. ` +
+          `The cookie will be sent over unencrypted HTTP connections, exposing it to interception.`,
+        fix: 'Set cookie.setSecure(true) to ensure cookies are only transmitted over HTTPS.',
+      });
+    }
+  }
+
+  return {
+    cwe: 'CWE-614',
+    name: "Sensitive Cookie Without 'Secure' Attribute",
+    holds: findings.length === 0,
+    findings,
+  };
+};
 
 // ===========================================================================
 // CWE-668: Exposure of Resource to Wrong Sphere

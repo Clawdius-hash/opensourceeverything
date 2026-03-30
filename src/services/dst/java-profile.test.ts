@@ -803,4 +803,142 @@ public class FormatEvasion {
     );
     expect(reflectionNodes.length).toBeGreaterThan(0);
   });
+
+  // =========================================================================
+  // Alias Chain: Cast Expression Resolution
+  // =========================================================================
+
+  it('resolves method calls through cast-assigned variable (declared type = Statement)', () => {
+    // Strategy 1 picks up 'Statement' from the declared type.
+    // The cast is redundant here but common in real code.
+    const code = `
+public class CastAlias {
+    public void process(Object obj) {
+        Statement stmt = (Statement) obj;
+        stmt.executeQuery("SELECT 1");
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'CastAlias.java', javaProfile);
+
+    // executeQuery should resolve through Statement alias → STORAGE/db_read
+    const storageNodes = map.nodes.filter(n => n.node_type === 'STORAGE');
+    expect(storageNodes.length).toBeGreaterThan(0);
+    const readNodes = storageNodes.filter(n => n.node_subtype === 'db_read');
+    expect(readNodes.length).toBeGreaterThan(0);
+  });
+
+  it('resolves method calls when declared type is Object but value is cast (Strategy 1b)', () => {
+    // Strategy 1 sees 'Object' (in JAVA_PRIMITIVES), so it falls through.
+    // Strategy 1b should extract 'Statement' from the cast expression.
+    const code = `
+public class CastFallback {
+    public void process(Object raw) {
+        Object stmt = (Statement) raw;
+        stmt.executeQuery("SELECT 1");
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'CastFallback.java', javaProfile);
+
+    // executeQuery should resolve through the cast-derived alias → STORAGE/db_read
+    const storageNodes = map.nodes.filter(n => n.node_type === 'STORAGE' && n.node_subtype === 'db_read');
+    expect(storageNodes.length).toBeGreaterThan(0);
+  });
+
+  // =========================================================================
+  // Alias Chain: Reassignment Update
+  // =========================================================================
+
+  it('resolves method calls after reassignment with cast expression', () => {
+    // Variable starts as Object, gets reassigned with a cast to Statement.
+    // The aliasChain should update so stmt.executeQuery resolves.
+    const code = `
+public class ReassignCast {
+    public void process(Object raw) {
+        Object stmt = raw;
+        stmt = (Statement) raw;
+        stmt.executeQuery("SELECT 1");
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'ReassignCast.java', javaProfile);
+
+    const storageNodes = map.nodes.filter(n => n.node_type === 'STORAGE' && n.node_subtype === 'db_read');
+    expect(storageNodes.length).toBeGreaterThan(0);
+  });
+
+  it('resolves method calls after reassignment with new ClassName()', () => {
+    const code = `
+public class ReassignNew {
+    public void process() {
+        Object obj = null;
+        obj = new ProcessBuilder("ls");
+        obj.start();
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'ReassignNew.java', javaProfile);
+
+    // ProcessBuilder.start is not in the phoneme dict, but ProcessBuilder constructor IS.
+    // The reassignment should set aliasChain to ['ProcessBuilder'].
+    // Verify at minimum that the constructor is recognized.
+    const externalNodes = map.nodes.filter(n => n.node_type === 'EXTERNAL' && n.node_subtype === 'system_exec');
+    expect(externalNodes.length).toBeGreaterThan(0);
+  });
+
+  it('resolves method calls after reassignment with method invocation', () => {
+    const code = `
+public class ReassignMethod {
+    public void process(Connection conn) {
+        Object stmt = null;
+        stmt = conn.createStatement();
+        stmt.executeQuery("SELECT 1");
+    }
+}
+`;
+    const tree = parseJava(code);
+    const { map } = buildNeuralMap(tree, code, 'ReassignMethod.java', javaProfile);
+
+    // After reassignment, aliasChain = ['conn', 'createStatement']
+    // stmt.executeQuery should produce ['conn', 'createStatement', 'executeQuery']
+    // This may not match the phoneme dict (needs Statement.executeQuery), but
+    // verify the assignment node was created at minimum.
+    const assignNodes = map.nodes.filter(n => n.node_subtype === 'assignment');
+    expect(assignNodes.length).toBeGreaterThan(0);
+  });
+
+  // =========================================================================
+  // Generic Type Parameter Extraction
+  // =========================================================================
+
+  it('stores generic type arguments on class field declarations', () => {
+    // Class fields are in the module/class scope which is NOT popped,
+    // so we can inspect them via ctx.resolveVariable.
+    const code = `
+import java.util.Map;
+import java.util.List;
+
+public class GenericFields {
+    Map<String, Statement> stmtMap = null;
+    List<Connection> conns = null;
+}
+`;
+    const tree = parseJava(code);
+    const { ctx } = buildNeuralMap(tree, code, 'GenericFields.java', javaProfile);
+
+    const stmtMapVar = ctx.resolveVariable('stmtMap');
+    expect(stmtMapVar).toBeDefined();
+    expect(stmtMapVar!.aliasChain).toEqual(['Map']);
+    expect(stmtMapVar!.genericTypeArgs).toEqual(['String', 'Statement']);
+
+    const connsVar = ctx.resolveVariable('conns');
+    expect(connsVar).toBeDefined();
+    expect(connsVar!.aliasChain).toEqual(['List']);
+    expect(connsVar!.genericTypeArgs).toEqual(['Connection']);
+  });
 });

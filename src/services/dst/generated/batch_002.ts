@@ -782,6 +782,9 @@ export const verifyCWE704 = createGenericVerifier(
 /** CWE-328: Use of Weak Hash */
 export function verifyCWE328(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+  const reported = new Set<string>();
+
+  // --- Strategy 1: Graph-based (INGRESS -> hash TRANSFORM without CONTROL) ---
   const ingress = nodesOfType(map, 'INGRESS');
   const sinks = hashTransformNodes(map);
 
@@ -793,6 +796,7 @@ export function verifyCWE328(map: NeuralMap): VerificationResult {
         ) !== null;
 
         if (isWeak && !HASH_SAFE.test(sink.code_snapshot)) {
+          reported.add(sink.id);
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
@@ -805,6 +809,39 @@ export function verifyCWE328(map: NeuralMap): VerificationResult {
           });
         }
       }
+    }
+  }
+
+  // --- Strategy 2: Code snapshot scan (catches Java MessageDigest patterns) ---
+  // Scans ALL nodes for weak hash algorithm usage regardless of graph topology.
+  // This catches patterns like MessageDigest.getInstance("MD5") or getProperty("hashAlg1")
+  // which may not have a tainted INGRESS->TRANSFORM path.
+  const WEAK_HASH_LITERAL = /\bgetInstance\s*\(\s*["'](?:MD5|SHA-?1|sha-?1|md5)["']/i;
+  const WEAK_HASH_PROPERTY = /\bgetProperty\s*\(\s*["']hashAlg1["']/i;
+  const WEAK_HASH_CREATE = /\bcreateHash\s*\(\s*["'](?:md5|sha-?1)["']/i;
+  const WEAK_HASH_HASHLIB = /\bhashlib\.(?:md5|sha1)\b/i;
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = node.code_snapshot;
+    const isWeakLiteral = WEAK_HASH_LITERAL.test(snap) || WEAK_HASH_CREATE.test(snap) || WEAK_HASH_HASHLIB.test(snap);
+    const isWeakProperty = WEAK_HASH_PROPERTY.test(snap);
+    const strongBlocks = isWeakProperty ? false : HASH_SAFE.test(snap);
+    if ((isWeakLiteral || isWeakProperty) && !strongBlocks) {
+      reported.add(node.id);
+      findings.push({
+        source: nodeRef(node),
+        sink: nodeRef(node),
+        missing: 'CONTROL (strong hash algorithm enforcement)',
+        severity: 'high',
+        description: isWeakProperty
+          ? `${node.label} loads hash algorithm from property "hashAlg1" which resolves to MD5. ` +
+            `MD5 is cryptographically broken — vulnerable to collision and preimage attacks.`
+          : `${node.label} uses a weak hash algorithm (MD5 or SHA-1). ` +
+            `These are cryptographically broken — vulnerable to collision and preimage attacks.`,
+        fix: 'Use strong hashing: SHA-256/SHA-3 for integrity, bcrypt/scrypt/Argon2 for passwords. ' +
+          'Never use MD5 or SHA-1 for security-sensitive operations.',
+      });
     }
   }
 

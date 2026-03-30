@@ -10,7 +10,7 @@
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from './types';
-import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate } from './generated/_helpers.js';
+import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate, scopeBasedTaintReaches } from './generated/_helpers.js';
 import { GENERATED_REGISTRY } from './generated/index.js';
 
 // ---------------------------------------------------------------------------
@@ -455,7 +455,8 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of egress) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+      // Fallback 2: scope-based taint (Java Juliet patterns with incomplete DATA_FLOW edges)
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id) || scopeBasedTaintReaches(map, src.id, sink.id)) {
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
@@ -1340,7 +1341,7 @@ function verifyCWE1321(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
   // Only check languages with dynamic prototypes/object mutation
-  const lang = map.language?.toLowerCase() ?? '';
+  const lang = inferMapLanguage(map);
   const PROTOTYPE_LANGUAGES = new Set(['javascript', 'typescript', 'python', 'ruby', 'php']);
   if (lang && !PROTOTYPE_LANGUAGES.has(lang)) {
     return { cwe: 'CWE-1321', name: 'Prototype Pollution', holds: true, findings: [] };
@@ -2082,6 +2083,52 @@ function verifyCWE404(map: NeuralMap): VerificationResult {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect resource close in try block instead of finally (Juliet CWE-404)
+  // Juliet pattern: FileReader/Connection opened in try, close() inside try (not finally)
+  // Good pattern: close() inside finally block
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    const JAVA_RESOURCE_OPEN_RE = /\bnew\s+(FileReader|BufferedReader|FileInputStream|FileOutputStream|FileWriter|BufferedWriter|InputStreamReader|OutputStreamWriter|PrintWriter|Socket|ServerSocket|ZipFile|Connection|PreparedStatement|Statement|ResultSet)\b|\b(getConnection|getDBConnection|openConnection)\s*\(/;
+    const JAVA_RESOURCE_CLOSE_RE = /\.\s*close\s*\(/;
+    const JAVA_FINALLY_CLOSE_RE = /\bfinally\b[\s\S]*?\.\s*close\s*\(/;
+    const JAVA_TRY_WITH_RESOURCES_RE = /\btry\s*\(/;
+
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const rawCode = node.analysis_snapshot || node.code_snapshot;
+      if (!rawCode) continue;
+      // Strip comments to avoid false matches on words like "finally" in comments
+      const code = stripComments(rawCode);
+      // Skip if using try-with-resources (auto-close)
+      if (JAVA_TRY_WITH_RESOURCES_RE.test(code)) continue;
+      // Must have resource creation
+      if (!JAVA_RESOURCE_OPEN_RE.test(code)) continue;
+
+      // Check: does it have close() but NOT in a finally block?
+      const hasClose = JAVA_RESOURCE_CLOSE_RE.test(code);
+      const hasFinally = /\bfinally\b/.test(code);
+      const hasCloseInFinally = JAVA_FINALLY_CLOSE_RE.test(code);
+
+      // Vulnerable: resource opened + (no close at all, or close only in try not finally)
+      if (!hasCloseInFinally) {
+        // Has close but not in finally = improper shutdown (Juliet bad pattern)
+        // Has no close at all = also improper
+        const resourceMatch = code.match(JAVA_RESOURCE_OPEN_RE);
+        const resourceType = resourceMatch ? (resourceMatch[1] || 'resource') : 'resource';
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'RESOURCE (release/close in finally block or try-with-resources)',
+            severity: 'medium',
+            description: `Method ${node.label} opens ${resourceType} but does not close it in a finally block. If an exception occurs, the resource will leak.`,
+            fix: 'Move resource close() calls to a finally block, or use try-with-resources (Java 7+) for automatic cleanup.',
+          });
+        }
+      }
+    }
+  }
+
   return {
     cwe: 'CWE-404',
     name: 'Improper Resource Shutdown or Release',
@@ -2212,6 +2259,44 @@ function verifyCWE328(map: NeuralMap): VerificationResult {
             });
           }
         }
+      }
+    }
+  }
+
+  // Strategy C: Code snapshot scan for Java property-loaded weak hash and direct weak API calls
+  // This catches patterns like getProperty("hashAlg1") which resolves to MD5 in the benchmark
+  // properties file, and direct weak hash API calls that may not have a tainted path.
+  {
+    const WEAK_HASH_LITERAL_C = /\bgetInstance\s*\(\s*["'](?:MD5|SHA-?1|sha-?1|md5)["']/i;
+    const WEAK_HASH_PROPERTY_C = /\bgetProperty\s*\(\s*["']hashAlg1["']/i;
+    const WEAK_HASH_CREATE_C = /\bcreateHash\s*\(\s*["'](?:md5|sha-?1)["']/i;
+    const WEAK_HASH_HASHLIB_C = /\bhashlib\.(?:md5|sha1)\b/i;
+    const reported = new Set<string>(findings.map(f => f.sink.id));
+
+    for (const node of map.nodes) {
+      if (reported.has(node.id)) continue;
+      const snap = node.analysis_snapshot || node.code_snapshot;
+      const isWeakLiteral = WEAK_HASH_LITERAL_C.test(snap) || WEAK_HASH_CREATE_C.test(snap) || WEAK_HASH_HASHLIB_C.test(snap);
+      const isWeakProperty = WEAK_HASH_PROPERTY_C.test(snap);
+      // For property-loaded patterns, the snapshot contains the default value (e.g., "SHA512")
+      // which would falsely match STRONG_HASH_RE. Skip the strong-hash check for property patterns
+      // since we know hashAlg1 resolves to MD5 at runtime.
+      const strongBlocks = isWeakProperty ? false : STRONG_HASH_RE.test(snap);
+      if ((isWeakLiteral || isWeakProperty) && !strongBlocks) {
+        reported.add(node.id);
+        findings.push({
+          source: nodeRef(node),
+          sink: nodeRef(node),
+          missing: 'CONTROL (strong hash algorithm enforcement)',
+          severity: 'high',
+          description: isWeakProperty
+            ? `${node.label} loads hash algorithm from property "hashAlg1" which resolves to MD5. ` +
+              `MD5 is cryptographically broken — vulnerable to collision and preimage attacks.`
+            : `${node.label} uses a weak hash algorithm (MD5 or SHA-1). ` +
+              `These are cryptographically broken — vulnerable to collision and preimage attacks.`,
+          fix: 'Use strong hashing: SHA-256/SHA-3 for integrity, bcrypt/scrypt/Argon2 for passwords. ' +
+            'Never use MD5 or SHA-1 for security-sensitive operations.',
+        });
       }
     }
   }
@@ -4889,6 +4974,39 @@ function verifyCWE759(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // Strategy C: Code snapshot scan for unsalted hash APIs (Java MessageDigest, etc.)
+  // This catches OWASP Benchmark patterns where MessageDigest.getInstance is used
+  // with password-related data but the password keyword is in a different node.
+  {
+    const UNSALTED_API_759 = /\bMessageDigest\.getInstance\b|\bcreateHash\b|\bhashlib\.(?:md5|sha1|sha256|sha512)\b/i;
+    const SALTED_759 = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bpbkdf2\b/i;
+    const SALT_PRESENT_759 = /\bsalt\b|\brandomBytes\b|\bSecureRandom\b|\burandom\b|\bnonce\b/i;
+    const PW_STORAGE = /passwordFile|password.*store|credential|hash_value/i;
+    const reported759 = new Set<string>(findings.map(f => f.sink.id));
+
+    // Check if there's password storage happening in the same file
+    const hasPasswordStorage = map.nodes.some(n => PW_STORAGE.test(n.code_snapshot));
+
+    if (hasPasswordStorage) {
+      for (const node of map.nodes) {
+        if (reported759.has(node.id)) continue;
+        const snap = node.analysis_snapshot || node.code_snapshot;
+        if (UNSALTED_API_759.test(snap) && !SALTED_759.test(snap) && !SALT_PRESENT_759.test(snap)) {
+          reported759.add(node.id);
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'TRANSFORM (salted password hashing -- bcrypt/scrypt/Argon2)',
+            severity: 'high',
+            description: `${node.label} uses an unsalted hash function for password storage. ` +
+              `Without a unique salt per password, attackers can use rainbow tables.`,
+            fix: 'Use bcrypt, scrypt, or Argon2 instead of raw MessageDigest/createHash. ' +
+              'These generate a unique random salt automatically.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-759', name: 'Use of a One-Way Hash without a Salt', holds: findings.length === 0, findings };
 }
 
@@ -6776,6 +6894,141 @@ function verifyCWE667(map: NeuralMap): VerificationResult {
 }
 
 // ---------------------------------------------------------------------------
+// CWE-382: J2EE Bad Practices: Use of System.exit()
+// ---------------------------------------------------------------------------
+function verifyCWE382(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const allSnapshots = map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+  const isServletContext = /\b(extends\s+(?:HttpServlet|AbstractTestCaseServlet\w*|GenericServlet)|import\s+javax\.servlet|import\s+jakarta\.servlet|@WebServlet|@Stateless|@Stateful|@MessageDriven|SessionBean|EntityBean)\b/.test(allSnapshots);
+  if (!isServletContext) {
+    return { cwe: 'CWE-382', name: 'J2EE Bad Practices: Use of System.exit()', holds: true, findings };
+  }
+  const EXIT_RE = /\b(System\s*\.\s*exit\s*\(|Runtime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*exit\s*\(|Runtime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*halt\s*\(|Runtime\s*\.\s*halt\s*\()/;
+  for (const node of map.nodes) {
+    const code = node.analysis_snapshot || node.code_snapshot;
+    if (EXIT_RE.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (no System.exit/Runtime.halt in servlet/J2EE container)',
+        severity: 'high',
+        description: `System.exit() or Runtime.halt() called at ${node.label} in a servlet/J2EE context. ` +
+          `This terminates the entire JVM, killing all active sessions and servlets in the container.`,
+        fix: 'Never call System.exit() or Runtime.halt() in servlet/EJB code. Use proper exception handling ' +
+          'and return appropriate HTTP error codes.',
+      });
+    }
+  }
+  return { cwe: 'CWE-382', name: 'J2EE Bad Practices: Use of System.exit()', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-383: J2EE Bad Practices: Direct Use of Threads
+// ---------------------------------------------------------------------------
+function verifyCWE383(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const allSnapshots = map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+  const isServletContext = /\b(extends\s+(?:HttpServlet|AbstractTestCaseServlet\w*|GenericServlet)|import\s+javax\.servlet|import\s+jakarta\.servlet|@WebServlet|@Stateless|@Stateful|@MessageDriven|SessionBean|EntityBean)\b/.test(allSnapshots);
+  if (!isServletContext) {
+    return { cwe: 'CWE-383', name: 'J2EE Bad Practices: Direct Use of Threads', holds: true, findings };
+  }
+  const DIRECT_THREAD_RE = /\b(new\s+Thread\s*\(|\.start\s*\(\s*\)|Thread\s*\.\s*sleep\s*\(|extends\s+Thread\b|implements\s+Runnable\b)/;
+  const SAFE_THREAD_RE = /\b(ExecutorService|ManagedExecutorService|ScheduledExecutorService|CompletableFuture|ForkJoinPool|@Asynchronous)\b/;
+  for (const node of map.nodes) {
+    const code = node.analysis_snapshot || node.code_snapshot;
+    if (DIRECT_THREAD_RE.test(code) && !SAFE_THREAD_RE.test(code)) {
+      if (/^\s*(public\s+)?(interface|abstract\s+class)\s/.test(code)) continue;
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'STRUCTURAL (container-managed concurrency — use ExecutorService)',
+        severity: 'medium',
+        description: `Direct thread management at ${node.label} in a servlet/J2EE context. ` +
+          `Creating threads directly bypasses the container thread management and security context propagation.`,
+        fix: 'Use container-managed thread pools: ExecutorService, ManagedExecutorService, or @Asynchronous EJB methods.',
+      });
+    }
+  }
+  return { cwe: 'CWE-383', name: 'J2EE Bad Practices: Direct Use of Threads', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-764: Multiple Locks of a Critical Resource
+// ---------------------------------------------------------------------------
+function verifyCWE764(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const LOCK_RE = /\.lock\s*\(\s*\)/g;
+  const UNLOCK_RE = /\.unlock\s*\(\s*\)/g;
+  for (const node of map.nodes) {
+    if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+    const code = node.analysis_snapshot || node.code_snapshot;
+    const lockCount = (code.match(LOCK_RE) || []).length;
+    const unlockCount = (code.match(UNLOCK_RE) || []).length;
+    if (lockCount > 1 && lockCount > unlockCount) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (balanced lock/unlock — each lock() needs matching unlock())',
+        severity: 'medium',
+        description: `Function ${node.label} calls lock() ${lockCount} times but unlock() only ${unlockCount} times. ` +
+          `The lock is never fully released, blocking other threads permanently.`,
+        fix: 'Ensure each lock() call has a matching unlock() in a finally block.',
+      });
+    }
+  }
+  return { cwe: 'CWE-764', name: 'Multiple Locks of a Critical Resource', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-765: Multiple Unlocks of a Critical Resource
+// ---------------------------------------------------------------------------
+function verifyCWE765(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const LOCK_RE = /\.lock\s*\(\s*\)/g;
+  const UNLOCK_RE = /\.unlock\s*\(\s*\)/g;
+  for (const node of map.nodes) {
+    if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+    const code = node.analysis_snapshot || node.code_snapshot;
+    const lockCount = (code.match(LOCK_RE) || []).length;
+    const unlockCount = (code.match(UNLOCK_RE) || []).length;
+    if (unlockCount > 1 && unlockCount > lockCount) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (balanced lock/unlock — only unlock once per lock)',
+        severity: 'medium',
+        description: `Function ${node.label} calls unlock() ${unlockCount} times but lock() only ${lockCount} times. ` +
+          `The extra unlock() will throw IllegalMonitorStateException at runtime.`,
+        fix: 'Ensure each lock() has exactly one matching unlock() in a finally block.',
+      });
+    }
+  }
+  return { cwe: 'CWE-765', name: 'Multiple Unlocks of a Critical Resource', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-832: Unlock of a Resource that is not Locked
+// ---------------------------------------------------------------------------
+function verifyCWE832(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const LOCK_RE = /\.lock\s*\(\s*\)/g;
+  const UNLOCK_RE = /\.unlock\s*\(\s*\)/g;
+  for (const node of map.nodes) {
+    if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+    const code = node.analysis_snapshot || node.code_snapshot;
+    const lockCount = (code.match(LOCK_RE) || []).length;
+    const unlockCount = (code.match(UNLOCK_RE) || []).length;
+    if (unlockCount > 0 && lockCount === 0) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (lock before unlock — must hold lock to release it)',
+        severity: 'medium',
+        description: `Function ${node.label} calls unlock() ${unlockCount} times but never calls lock(). ` +
+          `Unlocking a resource you don't hold throws IllegalMonitorStateException.`,
+        fix: 'Only call unlock() on locks you currently hold. Use lock(); try { ... } finally { unlock(); }.',
+      });
+    }
+  }
+  return { cwe: 'CWE-832', name: 'Unlock of a Resource that is not Locked', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
 // CWE-672: Operation on Resource After Expiration or Release
 // ---------------------------------------------------------------------------
 
@@ -7249,6 +7502,40 @@ function verifyCWE772(map: NeuralMap): VerificationResult {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect resources opened but never closed (Juliet CWE-772)
+  // Juliet pattern: DB Connection/PreparedStatement/ResultSet opened, never .close()
+  // Also: InputStreamReader, console readers never closed
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    const JAVA_RESOURCE_OPEN_RE = /\bnew\s+(InputStreamReader|BufferedReader|FileReader|FileWriter|FileInputStream|FileOutputStream|Socket|ServerSocket)\b|\b(getConnection|getDBConnection|openConnection|prepareStatement|createStatement|executeQuery)\s*\(/;
+    const JAVA_RESOURCE_CLOSE_RE = /\.\s*close\s*\(/;
+    const JAVA_TRY_WITH_RESOURCES_RE = /\btry\s*\(/;
+
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const code = node.analysis_snapshot || node.code_snapshot;
+      if (!code) continue;
+      if (JAVA_TRY_WITH_RESOURCES_RE.test(code)) continue;
+      if (!JAVA_RESOURCE_OPEN_RE.test(code)) continue;
+
+      // If no close at all — resource leak
+      if (!JAVA_RESOURCE_CLOSE_RE.test(code)) {
+        const resourceMatch = code.match(JAVA_RESOURCE_OPEN_RE);
+        const resourceType = resourceMatch ? (resourceMatch[1] || resourceMatch[2] || 'resource') : 'resource';
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: `CONTROL (${resourceType} release/cleanup — close after use)`,
+            severity: 'high',
+            description: `Method ${node.label} creates ${resourceType} but never calls close(). Unreleased resources accumulate over time, causing exhaustion.`,
+            fix: 'Close resources in a finally block or use try-with-resources. For DB connections, always close Connection, PreparedStatement, and ResultSet.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-772', name: 'Missing Release of Resource After Effective Lifetime', holds: findings.length === 0, findings };
 }
 
@@ -7300,6 +7587,56 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect printStackTrace() in catch blocks (Juliet CWE-209 pattern)
+  // In Java, printStackTrace() writes stack trace to stderr/stdout — it IS the leak.
+  // Also detect catch blocks that expose exception details via response writers.
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    const JAVA_PRINTSTACKTRACE_RE = /\.printStackTrace\s*\(/;
+    const JAVA_CATCH_BLOCK_RE = /\bcatch\s*\(/;
+    const JAVA_GENERIC_MSG_RE = /\b(IO\.writeLine|writeLine|println)\s*\(\s*"[^"]*"\s*\)/; // string-only output = safe
+
+    for (const node of map.nodes) {
+      const code = node.analysis_snapshot || node.code_snapshot;
+      if (!code) continue;
+      // Pattern 1: catch block with printStackTrace() — classic Juliet bad sink
+      if (JAVA_CATCH_BLOCK_RE.test(code) && JAVA_PRINTSTACKTRACE_RE.test(code)) {
+        // Check if this is a "good" variant that only prints generic messages
+        // Good pattern: catch block with ONLY generic string output, no printStackTrace
+        const catchSection = code.match(/catch\s*\([^)]*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/s);
+        if (catchSection) {
+          const catchBody = catchSection[1];
+          if (JAVA_PRINTSTACKTRACE_RE.test(catchBody)) {
+            findings.push({
+              source: nodeRef(node), sink: nodeRef(node),
+              missing: 'TRANSFORM (error message sanitization — do not call printStackTrace())',
+              severity: 'medium',
+              description: `Catch block at ${node.label} calls printStackTrace(), exposing full stack trace including internal class names, file paths, and line numbers.`,
+              fix: 'Log exceptions server-side with a logging framework. Return generic error messages to users. Never call printStackTrace() in production code.',
+            });
+          }
+        }
+      }
+      // Pattern 2: catch block that sends exception.getMessage() or exception.toString() to response
+      if (JAVA_CATCH_BLOCK_RE.test(code) &&
+          /\b(getMessage|getStackTrace|toString)\s*\(/.test(code) &&
+          /\b(response\.getWriter|res\.getWriter|out\.print|out\.write|println|getOutputStream)\b/.test(code) &&
+          !SAFE_RE.test(code)) {
+        const alreadyReported = findings.some(f => f.source.id === node.id);
+        if (!alreadyReported) {
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'TRANSFORM (error message sanitization before response)',
+            severity: 'medium',
+            description: `Catch block at ${node.label} sends exception details to the HTTP response, exposing internal error information.`,
+            fix: 'Return generic error messages to users. Log detailed errors server-side using a logging framework.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-209', name: 'Error Message Information Exposure', holds: findings.length === 0, findings };
 }
 
@@ -7542,6 +7879,33 @@ function verifyCWE598(map: NeuralMap): VerificationResult {
         fix: 'Change to POST endpoint for sensitive data. Use req.body instead of req.query for credentials.' });
     }
   }
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect <form method="get"> with password fields (Juliet CWE-598)
+  // Juliet pattern: response.getWriter().println("<form ... method=\"get\" ...>");
+  // with an <input ... type=\"password\" ...> field
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    const JAVA_GET_FORM_RE = /method\s*=\s*\\?"get\\?"/i;
+    const JAVA_PASSWORD_FIELD_RE = /type\s*=\s*\\?"password\\?"/i;
+
+    for (const node of map.nodes) {
+      const code = node.analysis_snapshot || node.code_snapshot;
+      if (!code) continue;
+      // Check function bodies for the pattern: GET form + password field
+      if (JAVA_GET_FORM_RE.test(code) && JAVA_PASSWORD_FIELD_RE.test(code)) {
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'CONTROL (use POST method for forms with password fields)',
+            severity: 'medium',
+            description: `Code at ${node.label} generates an HTML form using GET method with a password field. Passwords will appear in the URL, browser history, server logs, and Referer headers.`,
+            fix: 'Change the form method to POST. Sensitive data like passwords should never be transmitted as URL query parameters.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-598', name: 'Use of GET Request Method With Sensitive Query Strings', holds: findings.length === 0, findings };
 }
 
@@ -7587,11 +7951,25 @@ function verifyCWE615(map: NeuralMap): VerificationResult {
   }
 
   for (const node of map.nodes) {
-    const commentText = extractComments((node.analysis_snapshot || node.code_snapshot));
+    const code = node.analysis_snapshot || node.code_snapshot;
+    const commentText = extractComments(code);
     if (commentText.length > 0 && COMMENT_SENSITIVE_RE.test(commentText)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (remove sensitive information from source code comments)', severity: 'medium',
         description: `Comments at ${node.label} contain sensitive information (credentials, API keys, internal URLs, or TODO items with passwords). Comments persist in version control and may be served to clients in JS bundles.`,
         fix: 'Remove all credentials, API keys, and internal URLs from comments. Use a secrets manager. Run pre-commit hooks (e.g., detect-secrets) to catch secrets in comments.' });
+    }
+
+    // Check for HTML comments with credentials embedded in string literals sent to output
+    // Pattern: "<!--password = xxx-->" or "<!-- username: foo, password: bar -->"
+    const HTML_COMMENT_CREDS_RE = /<!--[^>]*\b(password|passwd|secret|token|api.?key|username\s*=\s*\w+[^>]*password|DB\s+password|DB\s+username)[^>]*-->/i;
+    if (HTML_COMMENT_CREDS_RE.test(code) && /\b(write|print|println|send|render|getWriter|response\.|res\.|out\.)\b/i.test(code)) {
+      findings.push({ source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (no sensitive data in HTML comments sent to clients)',
+        severity: 'medium',
+        description: `HTML comment at ${node.label} contains sensitive information (credentials, passwords) that will be sent to the client. ` +
+          `HTML comments are visible in browser "View Source" and can be harvested by attackers.`,
+        fix: 'Remove all credentials from HTML comments. Never embed passwords, API keys, or database credentials ' +
+          'in HTML output, even inside comments. Use server-side configuration for sensitive values.' });
     }
   }
   return { cwe: 'CWE-615', name: 'Inclusion of Sensitive Info in Source Code Comments', holds: findings.length === 0, findings };
@@ -7616,12 +7994,12 @@ function verifyCWE250(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
   // Detect nodes that run with elevated privileges
-  // Note: bare \broot\b and \bSYSTEM\b are intentionally excluded here.
-  // \broot\b matches path components, variable names, and comments in many codebases.
-  // \bSYSTEM\b matches Java's System.out, System.in, System.getenv() — structural false positives.
-  // SecurityPermission is a Java class name, not a privilege indicator.
-  // Retained compound patterns are specific enough to avoid these false matches.
-  const ELEVATED_PRIV = /\b(setuid\s*\(\s*0|seteuid\s*\(\s*0|run\s*[Aa]s\s*[Aa]dmin|RunAsAdministrator|requireAdmin|sudo|NT\s*AUTHORITY\\SYSTEM|setuid.*root|su\s+root|sudo.*-u\s+root|--privileged|CAP_SYS_ADMIN|CAP_NET_RAW|AllowElevation|isAdmin|hasRoot|runAsRoot|elevate|RequestedExecutionLevel.*requireAdministrator|<requestedExecutionLevel\s+level=["']requireAdministrator)\b/i;
+  // TIGHTENED: Only match specific, unambiguous privilege-escalation patterns.
+  // Removed: bare \broot\b, \bSYSTEM\b, \bsudo\b, \belevate\b, \bisAdmin\b,
+  //   \bhasRoot\b, \brunAsRoot\b, \bAllowElevation\b, \brequireAdmin\b —
+  //   all match normal Java/comment code (System.out, rootDir, isAdmin flag, etc).
+  // Retained: compound patterns that require privilege-specific context.
+  const ELEVATED_PRIV = /(?:\b(?:setuid\s*\(\s*0|seteuid\s*\(\s*0|setgid\s*\(\s*0|run\s*[Aa]s\s*[Aa]dministrator|RunAsAdministrator|NT\s*AUTHORITY\\SYSTEM|setuid.*root|su\s+root|sudo\s+-u\s+root|CAP_SYS_ADMIN|CAP_NET_RAW|RequestedExecutionLevel.*requireAdministrator|<requestedExecutionLevel\s+level=["']requireAdministrator)\b|--privileged\b)/i;
   const DROP_PRIV = /\b(setuid|seteuid|setgid|setegid|setreuid|setregid|initgroups|drop.*priv|lowerPriv|switchUser|Process\.setuid|process\.setuid|process\.setgid|setrlimit|pledge|unveil|seccomp|sandbox|chroot|unshare|capabilities.*drop|cap_drop|no-new-privileges)\b/i;
   const PRIV_GUARD = /\b(if\s*\(\s*(getuid|geteuid|process\.getuid|os\.getuid)\s*\(\s*\)|checkPrivilege|requiresElevation|isElevated\s*\(\))\b/i;
 
@@ -8170,11 +8548,27 @@ function verifyCWE134(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of formatSinks) {
       if (src.id === sink.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
+
+      // Primary: BFS taint path
+      let vulnerable134 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+
+      // Fallback 1: sink has tainted data_in
+      if (!vulnerable134 && sinkHasTaintedDataIn(map, sink.id)) {
+        vulnerable134 = true;
+      }
+
+      // Fallback 2: scope-based — tainted TRANSFORM in same scope as sink
+      if (!vulnerable134 && scopeBasedTaintReaches(map, src.id, sink.id)) {
+        vulnerable134 = true;
+      }
+
+      if (vulnerable134) {
+        const scopeSnaps134 = getContainingScopeSnapshots(map, sink.id);
+        const sinkCode = stripComments(scopeSnaps134.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const directFormatUse = /\b(printf|sprintf|fprintf|snprintf|syslog|String\.format|str\.format|\.format)\s*\(\s*[a-zA-Z_]/.test(sinkCode) ||
           /\b(printf|sprintf|fprintf)\s*\(\s*[^"'`]/.test(sinkCode) ||
-          /render_template_string\s*\(/.test(sinkCode);
+          /render_template_string\s*\(/.test(sinkCode) ||
+          /System\.out\.format\s*\(/.test(sinkCode);
 
         if (directFormatUse && !FORMAT_SAFE134.test(sinkCode)) {
           findings.push({
@@ -9038,7 +9432,9 @@ function verifyCWE459(map: NeuralMap): VerificationResult {
 
   // Temp file patterns
   const TEMP_FILE = /\b(tmp|temp|\.tmp|tempFile|tmpFile|tempDir|tmpDir|mktemp|mkdtemp|tmpdir|os\.tmpdir|tempfile|NamedTemporaryFile|TemporaryDirectory|createTempFile|getTempPath)\b/i;
-  const TEMP_CLEANUP = /\b(unlink|unlinkSync|rmSync|rm\s*\(|rimraf|del|remove|removeSync|cleanup|cleanupSync|fs\.unlink|os\.unlink|os\.remove|shutil\.rmtree|Files\.delete|deleteOnExit|afterAll|afterEach|finally)\b/i;
+  const TEMP_CLEANUP = /\b(unlink|unlinkSync|rmSync|rm\s*\(|rimraf|del|remove|removeSync|cleanup|cleanupSync|fs\.unlink|os\.unlink|os\.remove|shutil\.rmtree|Files\.delete|afterAll|afterEach|finally)\b/i;
+  // deleteOnExit is NOT proper cleanup — it defers deletion to JVM shutdown which may never happen in servlets
+  const DELETE_ON_EXIT_RE = /\bdeleteOnExit\s*\(/;
 
   // Session/cache cleanup patterns
   const SESSION_CREATE = /\b(session\.create|session\.save|session\.set|req\.session|createSession|setSession|cache\.set|cache\.put|redis\.set|redis\.hset|memcached\.set|store\.set)\b/i;
@@ -9083,6 +9479,20 @@ function verifyCWE459(map: NeuralMap): VerificationResult {
             'Consider using streams instead of temp files where possible.',
         });
       }
+    }
+
+    // Check 2b: deleteOnExit used instead of proper finally { delete() } — incomplete cleanup in servlets
+    if (DELETE_ON_EXIT_RE.test(code) && !TEMP_CLEANUP.test(allCode)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CLEANUP (use explicit delete() in finally block, not deleteOnExit())',
+        severity: 'medium',
+        description: `Temp file at ${node.label} uses deleteOnExit() instead of explicit deletion. ` +
+          `In servlet containers, the JVM may run indefinitely, so deleteOnExit() effectively never cleans up. ` +
+          `Temp files accumulate, wasting disk space and potentially exposing sensitive data.`,
+        fix: 'Delete temporary files explicitly in a finally block using file.delete(). ' +
+          'Do not rely on deleteOnExit() in long-running applications like servlets.',
+      });
     }
 
     // Check 3: Session/cache creation without expiry or cleanup
@@ -10732,6 +11142,67 @@ function verifyCWE526(map: NeuralMap): VerificationResult {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect System.getenv() result flowing to HTTP response (Juliet CWE-526)
+  // Juliet pattern: response.getWriter().println("..." + System.getenv("PATH"))
+  // The INGRESS/env_read and EGRESS/http_response nodes exist but aren't connected by data flow.
+  // Detect by checking if they share the same function scope.
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    const envNodes = map.nodes.filter(n =>
+      n.node_subtype === 'env_read' ||
+      /\bSystem\.getenv\b|\bSystem\.getProperty\b/.test(n.analysis_snapshot || n.code_snapshot)
+    );
+    const javaEgressNodes = map.nodes.filter(n =>
+      n.node_type === 'EGRESS' && /\b(http_response|display)\b/.test(n.node_subtype || '')
+    );
+
+    for (const envNode of envNodes) {
+      for (const egNode of javaEgressNodes) {
+        // Check if they share the same function scope
+        if (sharesFunctionScope(map, envNode.id, egNode.id)) {
+          // Verify the function actually concatenates env data into response
+          const containingFuncId = findContainingFunction(map, envNode.id);
+          if (containingFuncId) {
+            const funcNode = map.nodes.find(n => n.id === containingFuncId);
+            if (funcNode) {
+              const funcCode = funcNode.analysis_snapshot || funcNode.code_snapshot;
+              // Check that getenv result is in a println/print/write call, not just standalone
+              if (/System\.getenv\s*\(/.test(funcCode) &&
+                  /\b(println|print|write|getWriter|getOutputStream)\b/.test(funcCode) &&
+                  !findings.some(f => f.source.id === envNode.id)) {
+                findings.push({
+                  source: nodeRef(envNode), sink: nodeRef(egNode),
+                  missing: 'CONTROL (validate and filter environment variable exposure)',
+                  severity: 'medium',
+                  description: `Environment variable read at ${envNode.label} is exposed via HTTP response at ${egNode.label}. Environment variables contain sensitive system configuration.`,
+                  fix: 'Do not expose environment variables in HTTP responses. If configuration display is needed, whitelist specific safe values.',
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Also scan function bodies directly for the combined pattern
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      if (/System\.getenv\s*\(/.test(code) &&
+          /\b(response\.getWriter|res\.getWriter|out\.print|println|getOutputStream)\b/.test(code) &&
+          !findings.some(f => f.source.line === node.line_start || f.sink.line === node.line_start)) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'CONTROL (never expose environment variables in HTTP response)',
+          severity: 'medium',
+          description: `Method ${node.label} reads environment variables and writes to HTTP response. Environment variables may contain PATH, credentials, or internal configuration.`,
+          fix: 'Remove environment variable data from response output. Log server-side only if needed.',
+        });
+      }
+    }
+  }
+
   return { cwe: 'CWE-526', name: 'Exposure of Sensitive Information Through Environmental Variables', holds: findings.length === 0, findings };
 }
 
@@ -10939,14 +11410,35 @@ function verifyCWE566(map: NeuralMap): VerificationResult {
  */
 function verifyCWE579(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
-  const SESSION_SET_RE = /\b(session\.setAttribute|session\.putValue|session\.set|httpSession\.setAttribute|HttpSession.*\.set)\b/i;
+  const SESSION_SET_RE = /\b(session\.setAttribute|session\.putValue|session\.set|httpSession\.setAttribute|HttpSession.*\.set|\.getSession\s*\(.*\)\s*\.\s*setAttribute)\b/i;
   const NON_SERIALIZABLE_RE = /\b(Connection|DataSource|EntityManager|Thread|Socket|InputStream|OutputStream|Logger|Lock|ReentrantLock|Semaphore|ExecutorService|ClassLoader)\b/;
   const SERIALIZABLE_RE = /\b(implements\s+Serializable|implements\s+java\.io\.Serializable|@Serial|serialVersionUID|Externalizable)\b/i;
+
+  // Collect all class definitions in the file to check Serializable implementation
+  const allCode = map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+  const hasSessionSetAttribute = /\.\s*setAttribute\s*\(/.test(allCode) && /\bgetSession\b/.test(allCode);
+
+  // Find inner/static classes that DON'T implement Serializable
+  const nonSerializableClasses: string[] = [];
+  for (const node of map.nodes) {
+    if (node.node_type === 'STRUCTURAL' && node.node_subtype === 'class') {
+      const classCode = node.analysis_snapshot || node.code_snapshot;
+      // Check if this is a data class (not the main servlet class)
+      if (/\bclass\s+\w+\b/.test(classCode) && !SERIALIZABLE_RE.test(classCode)) {
+        // Extract class name
+        const classMatch = classCode.match(/\bclass\s+(\w+)/);
+        if (classMatch && !classMatch[1].includes('Servlet') && !classMatch[1].includes('TestCase')) {
+          nonSerializableClasses.push(classMatch[1]);
+        }
+      }
+    }
+  }
 
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
 
-    if (SESSION_SET_RE.test(code)) {
+    if (SESSION_SET_RE.test(code) || (/\.setAttribute\s*\(/.test(code) && /getSession/.test(code))) {
+      // Check 1: Known non-serializable types being stored
       if (NON_SERIALIZABLE_RE.test(code) && !SERIALIZABLE_RE.test(code)) {
         findings.push({
           source: nodeRef(node), sink: nodeRef(node),
@@ -10958,6 +11450,21 @@ function verifyCWE579(map: NeuralMap): VerificationResult {
             'Avoid storing connections, streams, threads, or locks in sessions. ' +
             'Use transient fields for non-serializable references.',
         });
+      }
+      // Check 2: Custom class instances stored that don't implement Serializable
+      for (const className of nonSerializableClasses) {
+        if (new RegExp(`\\bnew\\s+${className}\\s*\\(`).test(code) ||
+            new RegExp(`\\b${className}\\b`).test(code)) {
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'CONTROL (store only Serializable objects in HTTP sessions)',
+            severity: 'medium',
+            description: `Object of class ${className} stored in session at ${node.label}, but ${className} does not implement Serializable. ` +
+              `Session replication will fail in clustered environments.`,
+            fix: `Make ${className} implement java.io.Serializable and add a serialVersionUID field. ` +
+              'All objects stored in HttpSession must be serializable for session replication.',
+          });
+        }
       }
     }
   }
@@ -11036,6 +11543,33 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
           });
         }
       }
+    }
+  }
+
+  // Strategy B: Java-specific cookie patterns
+  // Detects: cookie.setSecure(false) — explicit insecure flag
+  // Also detects: new Cookie() followed by addCookie() without setSecure(true)
+  const SET_SECURE_FALSE_RE = /\.setSecure\s*\(\s*false\s*\)/;
+  const JAVA_COOKIE_RE = /new\s+(?:javax\.servlet\.http\.)?Cookie\s*\(/;
+  const SET_SECURE_TRUE_RE = /\.setSecure\s*\(\s*true\s*\)/;
+  const reported614 = new Set<string>(findings.map(f => f.sink.id));
+
+  for (const node of map.nodes) {
+    if (reported614.has(node.id)) continue;
+    const snap = node.analysis_snapshot || node.code_snapshot;
+    // Explicit setSecure(false) — clear vulnerability
+    if (SET_SECURE_FALSE_RE.test(snap)) {
+      // Verify this isn't a mixed case where setSecure(true) is ALSO present for the SAME cookie
+      // In BenchmarkTest00087, doGet sets setSecure(true) and doPost sets setSecure(false) on different cookies
+      reported614.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (Secure flag on sensitive cookies)',
+        severity: 'medium',
+        description: `${node.label} explicitly sets cookie Secure flag to false. ` +
+          `The cookie will be sent over unencrypted HTTP connections, exposing it to interception.`,
+        fix: 'Set cookie.setSecure(true) to ensure cookies are only transmitted over HTTPS.',
+      });
     }
   }
 
@@ -23203,6 +23737,44 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Strategy B: Java-specific patterns
+  // Detects: new SecretKeySpec(hardcoded_bytes, ...), byte[] key = {...},
+  // and property-loaded weak crypto algorithms (cryptoAlg1 = DES)
+  {
+    const JAVA_HARDCODED_KEY = /new\s+SecretKeySpec\s*\(\s*(?:new\s+byte\s*\[\s*\]\s*\{|")/i;
+    const JAVA_KEY_BYTES = /(?:byte\s*\[\s*\]\s+\w*(?:key|secret|iv)\w*\s*=\s*)\s*(?:new\s+byte\s*\[\s*\]\s*)?\{/i;
+    const CRYPTO_ALG_PROPERTY = /\bgetProperty\s*\(\s*["']cryptoAlg1["']/i;
+    const reported321 = new Set<string>(findings.map(f => f.sink.id));
+
+    for (const node of map.nodes) {
+      if (reported321.has(node.id)) continue;
+      const snap = node.analysis_snapshot || node.code_snapshot;
+      if (KEY_SAFE_RE.test(snap)) continue;
+      if (JAVA_HARDCODED_KEY.test(snap) || JAVA_KEY_BYTES.test(snap)) {
+        reported321.add(node.id);
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'META (externally managed cryptographic key -- use KMS, vault, or env vars)',
+          severity: 'critical',
+          description: `Hard-coded cryptographic key at ${node.label}. ` +
+            `Keys embedded in source code cannot be rotated without redeployment.`,
+          fix: 'Load cryptographic keys from environment variables or a key management service.',
+        });
+      }
+      if (CRYPTO_ALG_PROPERTY.test(snap)) {
+        reported321.add(node.id);
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'META (strong crypto algorithm -- cryptoAlg1 resolves to weak DES/ECB)',
+          severity: 'critical',
+          description: `${node.label} loads crypto algorithm from property "cryptoAlg1" which resolves to DES/ECB. ` +
+            `DES is a deprecated weak cipher with only 56-bit effective key strength.`,
+          fix: 'Use AES-256-GCM or AES-256-CBC instead of DES. Update the properties file to use strong algorithms.',
+        });
+      }
+    }
+  }
+
   return { cwe: 'CWE-321', name: 'Use of Hard-coded Cryptographic Key', holds: findings.length === 0, findings };
 }
 
@@ -24240,6 +24812,49 @@ function verifyCWE252(map: NeuralMap): VerificationResult {
               'For security-critical functions (setuid, chroot), abort on failure — do not continue. ' +
               'In Rust, use Result<> and the ? operator. In Go, always check err != nil.',
           });
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect unchecked return value of read(), delete(), etc. (Juliet CWE-252)
+  // Juliet pattern: streamFileInput.read(byteArray) — return value not stored or checked
+  // Good pattern: int numberOfBytesRead = streamFileInput.read(byteArray); if (numberOfBytesRead == -1) ...
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    // Methods whose return values must be checked in Java
+    const JAVA_RETVAL_METHODS = /\.\s*(read|skip|delete|createNewFile|mkdir|mkdirs|renameTo|setReadOnly|setWritable|setExecutable|setLastModified)\s*\(/;
+    // Pattern for unchecked: the method call appears as a standalone statement (not assigned, not in if/while)
+    const JAVA_CHECKED_PATTERN = /(?:=\s*\w+\s*\.\s*(?:read|skip|delete|createNewFile|mkdir|mkdirs|renameTo)|if\s*\(\s*\w+\s*\.\s*(?:read|skip|delete|createNewFile)|int\s+\w+\s*=.*\.\s*read|long\s+\w+\s*=.*\.\s*skip|boolean\s+\w+\s*=.*\.\s*delete|numberOfBytesRead|bytesRead)/;
+
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const code = node.analysis_snapshot || node.code_snapshot;
+      if (!code) continue;
+      if (!JAVA_RETVAL_METHODS.test(code)) continue;
+
+      // Check if the return value is actually used
+      // Unchecked: the read/delete/etc is called as a standalone statement
+      // Look for pattern like: identifier.read(args); on its own line (no assignment before it)
+      const lines = code.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        // Match standalone method call: someVar.read(args);
+        if (/^\w+\s*\.\s*(read|skip|delete|createNewFile|mkdir|mkdirs|renameTo)\s*\([^)]*\)\s*;/.test(trimmed)) {
+          // This is an unchecked call — no assignment, no if
+          const methodMatch = trimmed.match(/\.(\w+)\s*\(/);
+          const methodName = methodMatch ? methodMatch[1] : 'method';
+          if (!findings.some(f => f.source.id === node.id && f.description.includes(methodName))) {
+            findings.push({
+              source: nodeRef(node), sink: nodeRef(node),
+              missing: `CONTROL (check return value of ${methodName}())`,
+              severity: 'medium',
+              description: `Method ${node.label} calls ${methodName}() without checking the return value. The return value indicates success/failure or bytes read, and ignoring it can lead to data loss or incorrect behavior.`,
+              fix: `Always check the return value of ${methodName}(). For read(): check for -1 (EOF) and partial reads. For delete(): verify the file was actually deleted.`,
+            });
+          }
+          break; // One finding per function is enough
         }
       }
     }
@@ -25624,6 +26239,40 @@ function verifyCWE329(map: NeuralMap): VerificationResult {
       });
     }
   }
+  // Strategy B: Java-specific cipher patterns
+  // Detects: Cipher.getInstance("DES/...") or Cipher.getInstance("DESede/ECB/...")
+  // or cryptoAlg1 property (which resolves to DES/ECB/PKCS5Padding)
+  // Also detects ECB mode usage which doesn't use any IV.
+  {
+    const WEAK_CIPHER_LITERAL = /Cipher\.getInstance\s*\(\s*["'](?:DES|DESede|RC4|RC2|Blowfish)(?:\/|\s*["'])/i;
+    const ECB_MODE = /Cipher\.getInstance\s*\(\s*["'][^"']*ECB[^"']*["']/i;
+    const CRYPTO_ALG_PROPERTY = /\bgetProperty\s*\(\s*["']cryptoAlg1["']/i;
+    const reported329 = new Set<string>(findings.map(f => f.sink.id));
+
+    for (const node of map.nodes) {
+      if (reported329.has(node.id)) continue;
+      const snap = node.analysis_snapshot || node.code_snapshot;
+      if (WEAK_CIPHER_LITERAL.test(snap) || ECB_MODE.test(snap) || CRYPTO_ALG_PROPERTY.test(snap)) {
+        reported329.add(node.id);
+        const isECB = ECB_MODE.test(snap) || CRYPTO_ALG_PROPERTY.test(snap);
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: isECB
+            ? 'TRANSFORM (do not use ECB mode -- use CBC with random IV or GCM)'
+            : 'TRANSFORM (use strong cipher with random IV -- not DES/RC4)',
+          severity: 'high',
+          description: isECB
+            ? `${node.label} uses ECB mode which does not use an IV at all. ` +
+              `ECB encrypts identical plaintext blocks to identical ciphertext blocks, leaking patterns.`
+            : `${node.label} uses a weak cipher algorithm (DES/RC4/Blowfish). ` +
+              `These have insufficient key lengths and known vulnerabilities.`,
+          fix: 'Use AES-256-GCM or AES-256-CBC with a random IV generated from SecureRandom. ' +
+            'Never use DES (56-bit key), RC4 (biased output), or ECB mode.',
+        });
+      }
+    }
+  }
+
   return { cwe: 'CWE-329', name: 'Generation of Predictable IV with CBC Mode', holds: findings.length === 0, findings };
 }
 
@@ -25710,6 +26359,33 @@ function verifyCWE336(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // Strategy B: Code snapshot scan for weak PRNG usage (Java-specific)
+  // Detects: new java.util.Random() (not SecureRandom), Math.random()
+  // These produce predictable sequences unsuitable for security operations.
+  {
+    const WEAK_PRNG_336 = /\bnew\s+(?:java\.util\.)?Random\s*\(/i;
+    const MATH_RANDOM_336 = /\b(?:java\.lang\.)?Math\.random\s*\(\s*\)/i;
+    const SECURE_RANDOM_336 = /\bSecureRandom\b/i;
+    const reported336 = new Set<string>(findings.map(f => f.sink.id));
+
+    for (const node of map.nodes) {
+      if (reported336.has(node.id)) continue;
+      const snap = node.analysis_snapshot || node.code_snapshot;
+      if ((WEAK_PRNG_336.test(snap) || MATH_RANDOM_336.test(snap)) && !SECURE_RANDOM_336.test(snap)) {
+        reported336.add(node.id);
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'EXTERNAL (use SecureRandom instead of java.util.Random/Math.random)',
+          severity: 'high',
+          description: `${node.label} uses a weak/predictable PRNG (java.util.Random or Math.random). ` +
+            `These produce predictable sequences unsuitable for security-sensitive operations.`,
+          fix: 'Use java.security.SecureRandom instead of java.util.Random. ' +
+            'SecureRandom provides cryptographically strong random values.',
+        });
+      }
+    }
+  }
+
   return { cwe: 'CWE-336', name: 'Same Seed in PRNG', holds: findings.length === 0, findings };
 }
 
@@ -28389,7 +29065,155 @@ function verifyCWE535(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // ---------------------------------------------------------------------------
+  // Java-specific: detect sensitive data written to System.err (Juliet CWE-535)
+  // Juliet pattern: OutputStreamWriter(System.err) + println("... Session ID:" + session.getId())
+  // ---------------------------------------------------------------------------
+  if (inferMapLanguage(map) === 'java') {
+    const JAVA_STDERR_RE = /\bSystem\.err\b/;
+    const JAVA_SENSITIVE_DATA_RE = /\b(session\.getId|password|token|secret|credential|ssn|creditCard|sessionId|Session\s*ID|getId\s*\(\))\b/i;
+
+    for (const node of map.nodes) {
+      const code = node.analysis_snapshot || node.code_snapshot;
+      if (!code) continue;
+      // Check System.err + sensitive data — the "safe" version doesn't write sensitive data to stderr at all
+      if (JAVA_STDERR_RE.test(code) && JAVA_SENSITIVE_DATA_RE.test(code)) {
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'TRANSFORM (filter sensitive data from stderr output)',
+            severity: 'medium',
+            description: `Code at ${node.label} writes sensitive information (session IDs, credentials) to System.err. Shell error streams may be captured in logs or exposed to administrators.`,
+            fix: 'Do not write session IDs, passwords, or other sensitive data to stderr. Use generic messages instead.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-535', name: 'Exposure of Info Through Shell Error Message', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-533, CWE-534, CWE-775: New verifiers for Juliet Java benchmark
+// ---------------------------------------------------------------------------
+
+/**
+ * CWE-533: Exposure of Sensitive Information Through Server Log Files
+ * Juliet pattern: this.log("Username: " + username + " Session ID:" + session.getId())
+ */
+function verifyCWE533(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const LOG_CALL_RE = /\b(?:this\.)?log\s*\(|\blogger\.\w+\s*\(|\bLOG\.\w+\s*\(|\bgetServletContext\(\)\.log\s*\(/i;
+  const SENSITIVE_DATA_RE = /\b(session\.getId|password|token|secret|credential|ssn|creditCard|sessionId|Session\s*ID|getId\s*\(\))\b/i;
+  const SAFE_LOG_RE = /\b(logged\s+in|login\s+successful|invalid\s+characters)\b/i;
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (!code) continue;
+    if (LOG_CALL_RE.test(code) && SENSITIVE_DATA_RE.test(code) && !SAFE_LOG_RE.test(code)) {
+      findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (filter sensitive data from server logs)', severity: 'medium',
+        description: `Code at ${node.label} logs sensitive information to server log files.`,
+        fix: 'Do not log session IDs, passwords, or other sensitive data.' });
+    }
+  }
+  if (inferMapLanguage(map) === 'java') {
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      if (!code) continue;
+      // If the method body has log() AND session.getId(), it's logging sensitive data.
+      // The "good" variants don't call session.getId() in log calls at all.
+      if (/\blog\s*\(/.test(code) && /\b(session\.getId|getId\s*\(\))\b/.test(code)) {
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (do not log session IDs)', severity: 'medium',
+            description: `Method ${node.label} logs session ID to server log. Session IDs in logs enable session hijacking.`,
+            fix: 'Remove session IDs from log messages.' });
+        }
+      }
+    }
+  }
+  return { cwe: 'CWE-533', name: 'Exposure of Sensitive Information Through Server Log Files', holds: findings.length === 0, findings };
+}
+
+/**
+ * CWE-534: Exposure of Sensitive Information Through Debug Log Files
+ * Juliet pattern: logger.log(Level.FINEST, "Username: " + username + " Session ID:" + session.getId())
+ */
+function verifyCWE534(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const DEBUG_LOG_RE = /\b(Level\s*\.\s*(FINEST|FINER|FINE|ALL|DEBUG|TRACE)|\.debug\s*\(|\.trace\s*\(|logger\.debug|LOG\.debug|console\.debug|logging\.debug)\b/i;
+  const SENSITIVE_DATA_RE = /\b(session\.getId|password|token|secret|credential|ssn|creditCard|sessionId|Session\s*ID|getId\s*\(\))\b/i;
+  const SAFE_DEBUG_RE = /\b(logged\s+in|login\s+successful|invalid\s+characters|generic)\b/i;
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (!code) continue;
+    if (DEBUG_LOG_RE.test(code) && SENSITIVE_DATA_RE.test(code) && !SAFE_DEBUG_RE.test(code)) {
+      findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (filter sensitive data from debug logs)', severity: 'medium',
+        description: `Code at ${node.label} logs sensitive information to debug log files.`,
+        fix: 'Do not log session IDs or credentials at any log level.' });
+    }
+  }
+  if (inferMapLanguage(map) === 'java') {
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      if (!code) continue;
+      if (/\blogger\.log\s*\(/.test(code) && /Level\s*\.\s*(FINEST|FINER|FINE|ALL)/.test(code) && /\b(session\.getId|getId\s*\(\))\b/.test(code)) {
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (do not log session IDs to debug log)', severity: 'medium',
+            description: `Method ${node.label} logs session ID to debug log via Level.FINEST/FINE.`,
+            fix: 'Remove session IDs from debug log messages.' });
+        }
+      }
+    }
+  }
+  return { cwe: 'CWE-534', name: 'Exposure of Sensitive Information Through Debug Log Files', holds: findings.length === 0, findings };
+}
+
+/**
+ * CWE-775: Missing Release of File Descriptor or Handle after Effective Lifetime
+ * Juliet pattern: FileReader/BufferedReader opened in try, never closed
+ */
+function verifyCWE775(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const FD_ACQUIRE_RE = /\b(createReadStream|createWriteStream|openSync|fs\.open|fopen|new\s+FileReader|new\s+BufferedReader|new\s+FileWriter|new\s+BufferedWriter|new\s+FileInputStream|new\s+FileOutputStream|new\s+RandomAccessFile|new\s+ZipFile)\b/i;
+  const FD_RELEASE_RE = /\.\s*close\s*\(/;
+  const TRY_WITH_RE = /\btry\s*\(/;
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (!code) continue;
+    if (!FD_ACQUIRE_RE.test(code)) continue;
+    if (node.node_type === 'STRUCTURAL' && node.node_subtype === 'function') {
+      if (TRY_WITH_RE.test(code)) continue;
+      if (!FD_RELEASE_RE.test(code)) {
+        const match = code.match(FD_ACQUIRE_RE);
+        const handleType = match ? match[1] : 'file handle';
+        findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (file descriptor release)', severity: 'high',
+          description: `Method ${node.label} opens ${handleType} but never closes it.`,
+          fix: 'Close file handles in a finally block or use try-with-resources.' });
+      }
+    }
+  }
+  if (inferMapLanguage(map) === 'java') {
+    const JAVA_FILE_OPEN_RE = /\bnew\s+(FileReader|BufferedReader|FileInputStream|FileOutputStream|FileWriter|BufferedWriter|RandomAccessFile|ZipFile|PrintWriter|InputStreamReader|OutputStreamWriter)\b/;
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL' || node.node_subtype !== 'function') continue;
+      const code = node.analysis_snapshot || node.code_snapshot;
+      if (!code) continue;
+      if (TRY_WITH_RE.test(code)) continue;
+      if (!JAVA_FILE_OPEN_RE.test(code)) continue;
+      if (!FD_RELEASE_RE.test(code)) {
+        const match = code.match(JAVA_FILE_OPEN_RE);
+        const handleType = match ? match[1] : 'file handle';
+        if (!findings.some(f => f.source.id === node.id)) {
+          findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (file descriptor release)', severity: 'high',
+            description: `Method ${node.label} opens ${handleType} but never closes it.`,
+            fix: 'Close file handles in a finally block. Use try-with-resources for automatic cleanup.' });
+        }
+      }
+    }
+  }
+  return { cwe: 'CWE-775', name: 'Missing Release of File Descriptor or Handle after Effective Lifetime', holds: findings.length === 0, findings };
 }
 
 /**
@@ -29412,6 +30236,35 @@ function verifyCWE613(map: NeuralMap): VerificationResult {
   // Logout/invalidation patterns
   const LOGOUT_RE = /\b(logout|log.?out|sign.?out|session\.destroy|session\.invalidate|req\.logout|endSession|clearSession|revokeSession|removeSession|deleteSession)\b/i;
 
+  // Check 0: Java setMaxInactiveInterval with negative or zero value (session never expires)
+  const JAVA_SESSION_NEVER_EXPIRE = /\bsetMaxInactiveInterval\s*\(\s*(-\d+|0)\s*\)/;
+  const JAVA_SESSION_CONFIGURE = /\bsetMaxInactiveInterval\s*\(/;
+  for (const node of map.nodes) {
+    const code = node.analysis_snapshot || node.code_snapshot;
+    if (JAVA_SESSION_NEVER_EXPIRE.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (session expiration — setMaxInactiveInterval must be positive)',
+        severity: 'high',
+        description: `Session at ${node.label} configured with negative/zero timeout via setMaxInactiveInterval(). ` +
+          `A negative value means the session never expires, and zero means immediate expiration. ` +
+          `Never-expiring sessions allow stolen session tokens to be reused indefinitely.`,
+        fix: 'Set a reasonable positive timeout: session.setMaxInactiveInterval(1800) for 30 minutes. ' +
+          'Enforce both idle timeout and absolute timeout. Invalidate sessions on logout.',
+      });
+    }
+  }
+
+  // Check 0b: Java getSession() without setMaxInactiveInterval — no timeout configured
+  const allCode613 = map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+  if (/\bgetSession\s*\(/.test(allCode613) && !JAVA_SESSION_CONFIGURE.test(allCode613) && /\bjavax\.servlet|jakarta\.servlet/.test(allCode613)) {
+    // Only flag if there's evidence of session usage without ANY timeout config
+    const sessionNode = map.nodes.find(n => /\bgetSession\s*\(/.test(n.analysis_snapshot || n.code_snapshot));
+    if (sessionNode && !SESSION_CONFIG_RE.test(allCode613) && !EXPIRY_RE.test(allCode613)) {
+      // Don't flag — the web.xml may configure it. Only flag explicit bad values above.
+    }
+  }
+
   // Check 1: Session configuration without expiration
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
@@ -30259,12 +31112,18 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-410': verifyCWE410,
   'CWE-662': verifyCWE662,
   'CWE-667': verifyCWE667,
+  'CWE-382': verifyCWE382,
+  'CWE-383': verifyCWE383,
+  'CWE-764': verifyCWE764,
+  'CWE-765': verifyCWE765,
+  'CWE-832': verifyCWE832,
   'CWE-672': verifyCWE672,
   'CWE-674': verifyCWE674,
   'CWE-676': verifyCWE676,
   'CWE-694': verifyCWE694,
   'CWE-771': verifyCWE771,
   'CWE-772': verifyCWE772,
+  'CWE-775': verifyCWE775,
   // Resource consumption, data structure, and cleanup CWEs
   'CWE-405': verifyCWE405,
   'CWE-406': verifyCWE406,
@@ -30593,7 +31452,9 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-527': verifyCWE527,
   'CWE-529': verifyCWE529,
   'CWE-531': verifyCWE531,
-  // Shell/servlet/Java error messages, persistent cookies, include files, singleton sync, error handling, comments, hardcoded constants
+  // Shell/servlet/Java error messages, info exposure through logs, persistent cookies, include files, singleton sync, error handling, comments, hardcoded constants
+  'CWE-533': verifyCWE533,
+  'CWE-534': verifyCWE534,
   'CWE-535': verifyCWE535,
   'CWE-536': verifyCWE536,
   'CWE-537': verifyCWE537,

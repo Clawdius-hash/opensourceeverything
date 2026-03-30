@@ -1,6 +1,8 @@
 /**
  * DST Generated Verifiers — Shared Helpers
- * Graph traversal, node filtering, and result types used by all batches.
+ * Graph traversal, node filtering, result types, shared safe-pattern regexes,
+ * compact factory, BFS shortcuts, source scanning utilities, and language
+ * detection used by all batches.
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType, EdgeType, RangeInfo } from '../types';
@@ -571,6 +573,86 @@ export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): str
 }
 
 // ---------------------------------------------------------------------------
+// Scope-based taint fallback — for Java Juliet patterns where BFS path
+// doesn't exist but tainted data clearly flows through assignments
+// ---------------------------------------------------------------------------
+
+/**
+ * Check whether two nodes share a function scope.
+ * "Shares scope" = both nodes are contained (via CONTAINS edges) by the same
+ * STRUCTURAL/function ancestor, OR both lie within the same function's line range.
+ */
+export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: string): boolean {
+  const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
+  const nodeA = nodeMap.get(nodeIdA);
+  const nodeB = nodeMap.get(nodeIdB);
+  if (!nodeA || !nodeB) return false;
+
+  // Strategy 1: Direct CONTAINS edge matching
+  const getAncestors = (nodeId: string): Set<string> => {
+    const ancestors = new Set<string>();
+    for (const n of map.nodes) {
+      if (n.node_type === 'STRUCTURAL') {
+        for (const edge of n.edges) {
+          if (edge.target === nodeId && edge.edge_type === 'CONTAINS') {
+            ancestors.add(n.id);
+          }
+        }
+      }
+    }
+    return ancestors;
+  };
+
+  const ancestorsA = getAncestors(nodeIdA);
+  const ancestorsB = getAncestors(nodeIdB);
+  for (const a of ancestorsA) {
+    if (ancestorsB.has(a)) return true;
+  }
+
+  // Strategy 2: Line-range containment
+  const funcNodes = map.nodes.filter(n =>
+    n.node_type === 'STRUCTURAL' &&
+    (n.node_subtype === 'function' || n.node_subtype === 'route_def')
+  );
+
+  for (const func of funcNodes) {
+    if (nodeA.line_start >= func.line_start && nodeA.line_start <= func.line_end &&
+        nodeB.line_start >= func.line_start && nodeB.line_start <= func.line_end) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Scope-based taint fallback: checks whether an INGRESS source and an EGRESS/sink
+ * share a function scope AND there exists a tainted TRANSFORM node (variable assignment
+ * carrying tainted data) in the same scope. This catches patterns where:
+ *   data = request.getParameter("x");   // INGRESS -> TRANSFORM (tainted)
+ *   response.getWriter().println(data);  // EGRESS  (no direct DATA_FLOW edge)
+ *
+ * The BFS path fails because the mapper doesn't create DATA_FLOW edges through
+ * chained method calls like response.getWriter().println(data). But the taint
+ * IS captured in the TRANSFORM node's data_in.
+ */
+export function scopeBasedTaintReaches(
+  map: NeuralMap, sourceId: string, sinkId: string
+): boolean {
+  if (!sharesFunctionScope(map, sourceId, sinkId)) return false;
+
+  // Check if any TRANSFORM node in the same scope has tainted data_in
+  // (meaning the INGRESS data was assigned to a variable in scope)
+  const hasTaintedTransform = map.nodes.some(n =>
+    n.node_type === 'TRANSFORM' &&
+    n.data_in.some(d => d.tainted) &&
+    sharesFunctionScope(map, n.id, sinkId)
+  );
+
+  return hasTaintedTransform;
+}
+
+// ---------------------------------------------------------------------------
 // Generic factory — configurable source, sink, safe pattern
 // ---------------------------------------------------------------------------
 
@@ -610,4 +692,147 @@ export function createGenericVerifier(
 
     return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
   };
+}
+
+// ---------------------------------------------------------------------------
+// Safe-pattern regex constants — shared across batch_015, 016, 017, 018
+// ---------------------------------------------------------------------------
+
+/** Validation functions */
+export const SP_V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
+/** Sanitization functions */
+export const SP_S = /\bsanitize\s*\(|\bescape\s*\(|\bencode\s*\(|\b\.filter\s*\(|\bstrip\s*\(|\bneutralize\s*\(/i;
+/** Authorization functions */
+export const SP_A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\btoken\b.*\bverif\w*\s*\(|\bauth\s*\(/i;
+/** Encryption/hashing functions */
+export const SP_E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
+/** Lock/synchronization primitives */
+export const SP_L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b|\btransaction\b/i;
+/** Resource release functions */
+export const SP_R = /\brelease\s*\(|\bclose\s*\(|\bdispose\s*\(|\bfinally\b|\bcleanup\s*\(/i;
+/** Immutability patterns */
+export const SP_I = /\bimmutable\b|\b\.freeze\s*\(|\breadonly\b|\bconst\b|\b\.seal\s*\(/i;
+/** Debug/production mode checks */
+export const SP_D = /\bdebug.*off\b|\bproduction\b|\bNODE_ENV\b/i;
+/** Cryptographic random functions */
+export const SP_CR = /\bcrypto\.random\b|\brandomBytes\b|\bCSPRNG\b|\bgetRandomValues\b/i;
+
+// ---------------------------------------------------------------------------
+// BFS shortcut type + shared shortcuts
+// ---------------------------------------------------------------------------
+
+export type BfsCheck = (map: NeuralMap, srcId: string, sinkId: string) => boolean;
+
+/** No path without CONTROL (taint-aware) */
+export const bfs_nC: BfsCheck = hasTaintedPathWithoutControl;
+/** No path without TRANSFORM */
+export const bfs_nT: BfsCheck = hasPathWithoutTransform;
+/** No path without intermediate CONTROL */
+export const bfs_nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONTROL');
+/** No path without intermediate TRANSFORM */
+export const bfs_nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRANSFORM');
+/** No path without intermediate AUTH */
+export const bfs_nA: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'AUTH');
+/** No path without intermediate META */
+export const bfs_nM: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'META');
+/** No path without intermediate STRUCTURAL */
+export const bfs_nS: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STRUCTURAL');
+/** No path without intermediate EXTERNAL */
+export const bfs_nE: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'EXTERNAL');
+/** No path without intermediate EGRESS */
+export const bfs_nEg: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'EGRESS');
+/** No path without intermediate STORAGE */
+export const bfs_nSt: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STORAGE');
+
+// ---------------------------------------------------------------------------
+// Compact verifier factory — shared across batch_015, 016, 017, 018
+// ---------------------------------------------------------------------------
+
+/**
+ * Factory for simple BFS-based verifiers: iterates all (source, sink) pairs,
+ * runs bfsCheck, tests safePattern on both code_snapshots.
+ */
+export function makeVerifier(
+  cweId: string, cweName: string, severity: Severity,
+  sourceType: NodeType, sinkType: NodeType,
+  bfsCheck: BfsCheck,
+  safePattern: RegExp,
+  missingDesc: string,
+  fixDesc: string,
+): (map: NeuralMap) => VerificationResult {
+  return (map: NeuralMap): VerificationResult => {
+    const findings: Finding[] = [];
+    const sources = nodesOfType(map, sourceType);
+    const sinks = nodesOfType(map, sinkType);
+    for (const src of sources) {
+      for (const sink of sinks) {
+        if (src.id === sink.id) continue;
+        if (bfsCheck(map, src.id, sink.id)) {
+          if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
+            findings.push({
+              source: nodeRef(src), sink: nodeRef(sink),
+              missing: missingDesc, severity,
+              description: `${sourceType} at ${src.label} → ${sinkType} at ${sink.label} without controls. Vulnerable to ${cweName}.`,
+              fix: fixDesc,
+            });
+          }
+        }
+      }
+    }
+    return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Source scanning helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Split source code into lines, returning an array of { line, lineNum }
+ * with comment-only lines marked. Strips single-line comment lines
+ * (// and block-comment continuation lines starting with *).
+ *
+ * Returns cleaned lines ready for regex scanning.
+ */
+export function scanSourceLines(source: string): Array<{ line: string; lineNum: number; isComment: boolean }> {
+  const lines = source.split('\n');
+  return lines.map((line, i) => ({
+    line,
+    lineNum: i + 1,
+    isComment: /^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line),
+  }));
+}
+
+/**
+ * Find the nearest NeuralMapNode to a given source line number.
+ * Tries exact match first, then within a tolerance window, then falls back to nodes[0].
+ */
+export function findNearestNode(map: NeuralMap, lineNum: number, tolerance: number = 2): NeuralMapNode | undefined {
+  return map.nodes.find(n => n.line_start === lineNum) ||
+    map.nodes.find(n => Math.abs(n.line_start - lineNum) <= tolerance) ||
+    map.nodes[0];
+}
+
+// ---------------------------------------------------------------------------
+// Language detection
+// ---------------------------------------------------------------------------
+
+/** Extension-to-language mapping — canonical, used across all batches */
+const EXT_LANG_MAP: Record<string, string> = {
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php',
+  java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', cs: 'csharp',
+  c: 'c', cpp: 'cpp', cc: 'cpp', swift: 'swift', scala: 'scala',
+};
+
+/**
+ * Infer the effective programming language from a NeuralMap.
+ * Checks node.language first, then falls back to source_file extension.
+ * Returns lowercase language name or empty string if unknown.
+ */
+export function detectLanguage(map: NeuralMap): string {
+  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
+  if (lang) return lang;
+  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
+  return EXT_LANG_MAP[ext] || '';
 }

@@ -1041,9 +1041,124 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         checkCallTaint(valueNode);
       }
 
-      // Alias chain detection: stmt = conn.createStatement() -> store chain
+      // Alias chain detection — three strategies, strongest wins:
+      //
+      // Strategy 1 (BEST): Use the declared type from the variable declaration.
+      //   Java is statically typed: `Statement stmt = ...` means stmt IS a Statement.
+      //   Extract the simple class name from the type annotation (last component of
+      //   scoped_type_identifier, e.g., javax.crypto.Cipher -> Cipher).
+      //
+      // Strategy 2: For `new ClassName(...)`, extract ClassName from the constructor.
+      //
+      // Strategy 3 (existing): For method calls and field access, extract the call chain.
+      //   e.g., conn.createStatement() -> ['conn', 'createStatement']
+      //
+      // Strategy 1 supersedes 2/3 because the declared type is always the correct class.
       let aliasChain: string[] | undefined;
-      if (valueNode) {
+      let genericTypeArgsList: string[] | undefined;
+
+      // Strategy 1: Declared type from the local_variable_declaration's type field
+      const declTypeNode = node.childForFieldName('type');
+      if (declTypeNode) {
+        let simpleTypeName: string | undefined;
+        if (declTypeNode.type === 'type_identifier') {
+          simpleTypeName = declTypeNode.text;
+        } else if (declTypeNode.type === 'scoped_type_identifier') {
+          // e.g., javax.crypto.Cipher -> extract last component "Cipher"
+          const lastChild = declTypeNode.namedChild(declTypeNode.namedChildCount - 1);
+          if (lastChild?.type === 'type_identifier') {
+            simpleTypeName = lastChild.text;
+          }
+        } else if (declTypeNode.type === 'array_type') {
+          // e.g., Cookie[] -> extract element type "Cookie"
+          const elemType = declTypeNode.childForFieldName('element');
+          if (elemType?.type === 'type_identifier') {
+            simpleTypeName = elemType.text;
+          } else if (elemType?.type === 'scoped_type_identifier') {
+            const lastChild = elemType.namedChild(elemType.namedChildCount - 1);
+            if (lastChild?.type === 'type_identifier') simpleTypeName = lastChild.text;
+          }
+        } else if (declTypeNode.type === 'generic_type') {
+          // e.g., List<String> -> extract the base type
+          const baseType = declTypeNode.childForFieldName('name') ?? declTypeNode.namedChild(0);
+          if (baseType) {
+            if (baseType.type === 'type_identifier') {
+              simpleTypeName = baseType.text;
+            } else if (baseType.type === 'scoped_type_identifier') {
+              const lastChild = baseType.namedChild(baseType.namedChildCount - 1);
+              if (lastChild?.type === 'type_identifier') simpleTypeName = lastChild.text;
+            }
+          }
+          // Extract generic type arguments: Map<String, Statement> → ['String', 'Statement']
+          // tree-sitter-java: generic_type has a type_arguments child containing type nodes
+          const typeArgsNode = declTypeNode.children.find(c => c.type === 'type_arguments');
+          if (typeArgsNode) {
+            const extractedArgs: string[] = [];
+            for (let ta = 0; ta < typeArgsNode.namedChildCount; ta++) {
+              const typeArg = typeArgsNode.namedChild(ta);
+              if (!typeArg) continue;
+              if (typeArg.type === 'type_identifier') {
+                extractedArgs.push(typeArg.text);
+              } else if (typeArg.type === 'scoped_type_identifier') {
+                const last = typeArg.namedChild(typeArg.namedChildCount - 1);
+                if (last?.type === 'type_identifier') extractedArgs.push(last.text);
+              } else if (typeArg.type === 'generic_type') {
+                // Nested generic: e.g., List<Map<String, String>> → just grab the outer name
+                const innerBase = typeArg.namedChild(0);
+                if (innerBase?.type === 'type_identifier') extractedArgs.push(innerBase.text);
+              }
+            }
+            if (extractedArgs.length > 0) {
+              genericTypeArgsList = extractedArgs;
+            }
+          }
+        }
+        // Only use declared type as alias if it's a meaningful class name (not primitives/var)
+        const JAVA_PRIMITIVES = new Set(['int', 'long', 'float', 'double', 'boolean', 'byte', 'char', 'short', 'void', 'String', 'Object', 'var']);
+        if (simpleTypeName && !JAVA_PRIMITIVES.has(simpleTypeName)) {
+          aliasChain = [simpleTypeName];
+        }
+      }
+
+      // Strategy 1b: Cast expression — (TypeName) expr
+      // When declared type is Object/var/String (filtered by JAVA_PRIMITIVES above),
+      // but the value is a cast_expression, the cast target IS the real type.
+      // e.g., var stmt = (Statement) obj;  →  aliasChain = ['Statement']
+      //       Object x = (Cipher) factory.getInstance();  →  aliasChain = ['Cipher']
+      if (!aliasChain && valueNode?.type === 'cast_expression') {
+        const castTypeNode = valueNode.childForFieldName('type');
+        if (castTypeNode) {
+          let castTypeName: string | undefined;
+          if (castTypeNode.type === 'type_identifier') {
+            castTypeName = castTypeNode.text;
+          } else if (castTypeNode.type === 'scoped_type_identifier') {
+            const lastChild = castTypeNode.namedChild(castTypeNode.namedChildCount - 1);
+            if (lastChild?.type === 'type_identifier') castTypeName = lastChild.text;
+          }
+          const JAVA_PRIMITIVES_CAST = new Set(['int', 'long', 'float', 'double', 'boolean', 'byte', 'char', 'short', 'void', 'String', 'Object', 'var']);
+          if (castTypeName && !JAVA_PRIMITIVES_CAST.has(castTypeName)) {
+            aliasChain = [castTypeName];
+          }
+        }
+      }
+
+      // Strategy 2: object_creation_expression — new ClassName(...)
+      if (!aliasChain && valueNode?.type === 'object_creation_expression') {
+        const ctorType = valueNode.childForFieldName('type');
+        if (ctorType) {
+          let ctorTypeName: string | undefined;
+          if (ctorType.type === 'type_identifier') {
+            ctorTypeName = ctorType.text;
+          } else if (ctorType.type === 'scoped_type_identifier') {
+            const lastChild = ctorType.namedChild(ctorType.namedChildCount - 1);
+            if (lastChild?.type === 'type_identifier') ctorTypeName = lastChild.text;
+          }
+          if (ctorTypeName) aliasChain = [ctorTypeName];
+        }
+      }
+
+      // Strategy 3 (fallback): method invocation or field access call chain
+      if (!aliasChain && valueNode) {
         if (valueNode.type === 'method_invocation') {
           const obj = valueNode.childForFieldName('object');
           const name = valueNode.childForFieldName('name');
@@ -1068,6 +1183,7 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
       const v = ctx.resolveVariable(varName);
       if (v) {
         if (aliasChain) v.aliasChain = aliasChain;
+        if (genericTypeArgsList) v.genericTypeArgs = genericTypeArgsList;
         if (constantValue) v.constantValue = constantValue;
       }
     }
@@ -1141,6 +1257,24 @@ function processFunctionParams(funcNode: SyntaxNode, ctx: MapperContextLike): vo
         if (isTainted) ctx.pendingCallbackTaint.delete(paramName);
         ctx.declareVariable(paramName, 'param', null, isTainted, producingId);
       }
+
+      // Store the declared type as aliasChain for ALL parameters.
+      // This enables alias resolution: if the param is `Statement stmt`,
+      // then stmt.executeQuery() resolves to Statement.executeQuery.
+      if (typeNode) {
+        let simpleTypeName: string | undefined;
+        if (typeNode.type === 'type_identifier') {
+          simpleTypeName = typeNode.text;
+        } else if (typeNode.type === 'scoped_type_identifier') {
+          const lastChild = typeNode.namedChild(typeNode.namedChildCount - 1);
+          if (lastChild?.type === 'type_identifier') simpleTypeName = lastChild.text;
+        }
+        const PARAM_PRIMITIVES = new Set(['int', 'long', 'float', 'double', 'boolean', 'byte', 'char', 'short', 'void', 'String', 'Object']);
+        if (simpleTypeName && !PARAM_PRIMITIVES.has(simpleTypeName)) {
+          const v = ctx.resolveVariable(paramName);
+          if (v) v.aliasChain = [simpleTypeName];
+        }
+      }
     }
   }
 }
@@ -1167,7 +1301,9 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         line_end: node.endPosition.row + 1,
         // STEP 4: Use 500 chars so the parameter list is never truncated for
         // inter-procedural taint propagation via functionParamPattern.
+        // analysis_snapshot: 4000 chars to capture full method body for CWE analysis.
         code_snapshot: node.text.slice(0, 500),
+        analysis_snapshot: node.text.slice(0, 4000),
       });
 
       if (routeAnnotation) {
@@ -1934,6 +2070,66 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           });
         }
       }
+
+      // --- Alias chain update on reassignment ---
+      // When a variable is reassigned, update its aliasChain to reflect the new type.
+      // This handles: stmt = (Statement) obj;  →  aliasChain = ['Statement']
+      //               stmt = new PreparedStatement();  →  aliasChain = ['PreparedStatement']
+      //               stmt = conn.createStatement();  →  aliasChain = ['conn', 'createStatement']
+      if (assignLeft?.type === 'identifier' && assignRight) {
+        const reassignVar = ctx.resolveVariable(assignLeft.text);
+        if (reassignVar) {
+          let newAliasChain: string[] | undefined;
+          const JAVA_PRIMITIVES_REASSIGN = new Set(['int', 'long', 'float', 'double', 'boolean', 'byte', 'char', 'short', 'void', 'String', 'Object', 'var']);
+
+          // Cast expression: stmt = (Statement) obj;
+          if (assignRight.type === 'cast_expression') {
+            const castTypeNode = assignRight.childForFieldName('type');
+            if (castTypeNode) {
+              let castTypeName: string | undefined;
+              if (castTypeNode.type === 'type_identifier') {
+                castTypeName = castTypeNode.text;
+              } else if (castTypeNode.type === 'scoped_type_identifier') {
+                const lastChild = castTypeNode.namedChild(castTypeNode.namedChildCount - 1);
+                if (lastChild?.type === 'type_identifier') castTypeName = lastChild.text;
+              }
+              if (castTypeName && !JAVA_PRIMITIVES_REASSIGN.has(castTypeName)) {
+                newAliasChain = [castTypeName];
+              }
+            }
+          }
+
+          // object_creation_expression: stmt = new PreparedStatement(...);
+          if (!newAliasChain && assignRight.type === 'object_creation_expression') {
+            const ctorType = assignRight.childForFieldName('type');
+            if (ctorType) {
+              let ctorTypeName: string | undefined;
+              if (ctorType.type === 'type_identifier') {
+                ctorTypeName = ctorType.text;
+              } else if (ctorType.type === 'scoped_type_identifier') {
+                const lastChild = ctorType.namedChild(ctorType.namedChildCount - 1);
+                if (lastChild?.type === 'type_identifier') ctorTypeName = lastChild.text;
+              }
+              if (ctorTypeName) newAliasChain = [ctorTypeName];
+            }
+          }
+
+          // Method invocation fallback: stmt = conn.createStatement();
+          if (!newAliasChain && assignRight.type === 'method_invocation') {
+            const obj = assignRight.childForFieldName('object');
+            const name = assignRight.childForFieldName('name');
+            if (obj && name) {
+              const chain = extractCalleeChain(obj);
+              chain.push(name.text);
+              newAliasChain = chain;
+            }
+          }
+
+          if (newAliasChain) {
+            reassignVar.aliasChain = newAliasChain;
+          }
+        }
+      }
       break;
     }
 
@@ -2005,6 +2201,27 @@ function preVisitIteration(node: SyntaxNode, ctx: MapperContextLike): void {
     const iterTaint = extractTaintSources(value, ctx);
     if (iterTaint.length > 0) {
       ctx.declareVariable(name.text, 'const', null, true, iterTaint[0].nodeId);
+    } else {
+      // Declare even non-tainted loop variables so aliasChain can be set
+      ctx.declareVariable(name.text, 'const', null, false, null);
+    }
+
+    // Store the declared type as aliasChain for the loop variable.
+    // e.g., for (Cookie theCookie : cookies) -> theCookie aliasChain = ['Cookie']
+    const iterTypeNode = node.childForFieldName('type');
+    if (iterTypeNode) {
+      let simpleTypeName: string | undefined;
+      if (iterTypeNode.type === 'type_identifier') {
+        simpleTypeName = iterTypeNode.text;
+      } else if (iterTypeNode.type === 'scoped_type_identifier') {
+        const lastChild = iterTypeNode.namedChild(iterTypeNode.namedChildCount - 1);
+        if (lastChild?.type === 'type_identifier') simpleTypeName = lastChild.text;
+      }
+      const ITER_PRIMITIVES = new Set(['int', 'long', 'float', 'double', 'boolean', 'byte', 'char', 'short', 'void', 'String', 'Object']);
+      if (simpleTypeName && !ITER_PRIMITIVES.has(simpleTypeName)) {
+        const v = ctx.resolveVariable(name.text);
+        if (v) v.aliasChain = [simpleTypeName];
+      }
     }
   }
 }

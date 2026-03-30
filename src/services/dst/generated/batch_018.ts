@@ -13,72 +13,78 @@ import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, hasPathWithoutTransform,
   hasPathWithoutIntermediateType,
+  makeVerifier as v,
+  bfs_nC as nC, bfs_nT as nT, bfs_nA as nA, bfs_nCi as nCi,
+  bfs_nTi as nTi, bfs_nS as nS,
+  SP_V as V, SP_A as A, SP_E as E, SP_L as L,
+  scanSourceLines, findNearestNode,
+  type BfsCheck,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
-
-// ---------------------------------------------------------------------------
-// Compact factory (same shape as batch_015/016)
-// ---------------------------------------------------------------------------
-
-type BfsCheck = (map: NeuralMap, srcId: string, sinkId: string) => boolean;
-
-function v(
-  cweId: string, cweName: string, severity: Severity,
-  sourceType: NodeType, sinkType: NodeType,
-  bfsCheck: BfsCheck,
-  safePattern: RegExp,
-  missingDesc: string,
-  fixDesc: string,
-): (map: NeuralMap) => VerificationResult {
-  return (map: NeuralMap): VerificationResult => {
-    const findings: Finding[] = [];
-    const sources = nodesOfType(map, sourceType);
-    const sinks = nodesOfType(map, sinkType);
-    for (const src of sources) {
-      for (const sink of sinks) {
-        if (src.id === sink.id) continue;
-        if (bfsCheck(map, src.id, sink.id)) {
-          if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-            findings.push({
-              source: nodeRef(src), sink: nodeRef(sink),
-              missing: missingDesc, severity,
-              description: `${sourceType} at ${src.label} → ${sinkType} at ${sink.label} without controls. Vulnerable to ${cweName}.`,
-              fix: fixDesc,
-            });
-          }
-        }
-      }
-    }
-    return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
-  };
-}
-
-// BFS shortcuts
-const nC: BfsCheck = hasTaintedPathWithoutControl;
-const nT: BfsCheck = hasPathWithoutTransform;
-const nA: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'AUTH');
-const nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONTROL');
-const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRANSFORM');
-const nS: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STRUCTURAL');
-
-// Safe patterns
-const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
-const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\bauth\s*\(/i;
-const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
-const L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b/i;
 
 // ===========================================================================
 // A. INFORMATION EXPOSURE & ERROR HANDLING (3 CWEs)
 // ===========================================================================
 
-// CWE-209: Error messages leak sensitive info to users
-export const verifyCWE209 = v(
-  'CWE-209', 'Generation of Error Message Containing Sensitive Information', 'medium',
-  'CONTROL', 'EGRESS', nT,
-  /\bredact\b|\bgeneric.*error\b|\bsanitize\b|\bno.*stack\b|\bproduction\b/i,
-  'TRANSFORM (redaction of sensitive details from error messages)',
-  'Sanitize error messages before returning to users. Strip stack traces, SQL queries, file paths, and credentials.',
-);
+// CWE-209: Structural — detect stack trace / error details exposure in catch blocks
+export const verifyCWE209 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-209', name: 'Generation of Error Message Containing Sensitive Information', holds: true, findings };
+
+  const scanned = scanSourceLines(src);
+
+  // Pattern 1: Java .printStackTrace() in catch blocks
+  // Pattern 2: e.getMessage() / e.toString() sent to response/output
+  // Pattern 3: JS/Node: err.stack sent to res.send/res.json
+  for (const { line, lineNum, isComment } of scanned) {
+    if (isComment) continue;
+
+    // Java: exception.printStackTrace()
+    if (/\w+\.printStackTrace\s*\(\s*\)/.test(line)) {
+      const nearNode = findNearestNode(map, lineNum);
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'TRANSFORM (redact stack traces from error output)',
+          severity: 'medium',
+          description: `L${lineNum}: printStackTrace() exposes internal stack trace to output. This leaks class names, file paths, and line numbers.`,
+          fix: 'Log stack traces to a secure log. Return generic error messages to users. Never expose stack traces in production.',
+        });
+      }
+    }
+
+    // Java: e.getMessage() or e.toString() sent to output (response, println, writeLine)
+    if (/\b(res\.send|res\.json|res\.write|System\.out\.print|IO\.writeLine|response\.getWriter)\s*\(.*\b\w+\.(getMessage|toString|getStackTrace)\b/.test(line)) {
+      const nearNode = findNearestNode(map, lineNum);
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'TRANSFORM (redact error details from user-facing output)',
+          severity: 'medium',
+          description: `L${lineNum}: Error message details (getMessage/toString) sent to user-facing output. May expose sensitive internals.`,
+          fix: 'Sanitize error messages before returning to users. Strip SQL queries, file paths, and credentials.',
+        });
+      }
+    }
+
+    // JS: err.stack in res.send/res.json
+    if (/\b(res\.send|res\.json|res\.status)\b.*\b(err|error)\.stack\b/.test(line)) {
+      const nearNode = findNearestNode(map, lineNum);
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'TRANSFORM (redact stack traces from error responses)',
+          severity: 'medium',
+          description: `L${lineNum}: Error stack trace sent in HTTP response. Exposes internal paths and code structure.`,
+          fix: 'Return generic error messages in production. Log detailed errors server-side only.',
+        });
+      }
+    }
+  }
+
+  return { cwe: 'CWE-209', name: 'Generation of Error Message Containing Sensitive Information', holds: findings.length === 0, findings };
+};
 
 // CWE-372: Product doesn't properly distinguish internal state
 export const verifyCWE372 = v(

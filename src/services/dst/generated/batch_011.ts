@@ -11,7 +11,7 @@
 
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
-  nodeRef, nodesOfType, hasPathWithoutIntermediateType, getContainingScopeSnapshots,
+  nodeRef, nodesOfType, hasPathWithoutIntermediateType, getContainingScopeSnapshots, stripComments,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -45,10 +45,24 @@ function createControlTransformVerifier(
         if (src.id === sink.id) continue;
         if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'CONTROL')) {
           if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-            // Also check the containing scope snapshots — safe patterns in the same
-            // function/block scope as the sink should suppress the finding.
+            // Check the containing function scope for both src and sink.
+            // If the function that contains either node has proper exception handling
+            // (try/catch/finally), suppress the finding — the scope IS handled.
             const sinkScopeSnapshots = getContainingScopeSnapshots(map, sink.id);
-            const scopeSafe = sinkScopeSnapshots.some(s => safePattern.test(s));
+            const srcScopeSnapshots = getContainingScopeSnapshots(map, src.id);
+            const allScopes = [...sinkScopeSnapshots, ...srcScopeSnapshots];
+            // Also check the CONTAINS parent node's own analysis_snapshot (the function body itself)
+            const sinkParentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === sink.id);
+            const srcParentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === src.id);
+            if (sinkParentEdge) {
+              const parentNode = map.nodes.find(n => n.id === sinkParentEdge.source);
+              if (parentNode) allScopes.push(parentNode.analysis_snapshot || parentNode.code_snapshot);
+            }
+            if (srcParentEdge) {
+              const parentNode = map.nodes.find(n => n.id === srcParentEdge.source);
+              if (parentNode) allScopes.push(parentNode.analysis_snapshot || parentNode.code_snapshot);
+            }
+            const scopeSafe = allScopes.some(s => safePattern.test(stripComments(s)));
             if (!scopeSafe) {
               findings.push({
                 source: nodeRef(src),

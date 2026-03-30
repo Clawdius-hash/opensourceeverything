@@ -16,6 +16,8 @@
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
   nodeRef, nodesOfType, hasPathWithoutTransform,
+  sinkHasTaintedDataIn, scopeBasedTaintReaches, sharesFunctionScope,
+  hasTaintedPathWithoutControl, stripComments, getContainingScopeSnapshots,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -27,9 +29,11 @@ function htmlEgressNodes(map: NeuralMap): NeuralMapNode[] {
   return map.nodes.filter(n =>
     n.node_type === 'EGRESS' &&
     (n.node_subtype.includes('html') || n.node_subtype.includes('render') ||
-     n.node_subtype.includes('template') || n.attack_surface.includes('html_output') ||
+     n.node_subtype.includes('template') || n.node_subtype.includes('display') ||
+     n.node_subtype.includes('http_response') ||
+     n.attack_surface.includes('html_output') ||
      n.code_snapshot.match(
-       /\b(innerHTML|render|res\.send|res\.write|document\.write|\.html\(|template|\.ejs|\.pug|\.hbs)\b/i
+       /\b(innerHTML|render|res\.send|res\.write|document\.write|\.html\(|template|\.ejs|\.pug|\.hbs|response\.getWriter|response\.sendError|out\.println|out\.print|writer\.print|PrintWriter)\b/i
      ) !== null) &&
     !n.code_snapshot.match(/\bres\.json\s*\(/i)
   );
@@ -89,9 +93,27 @@ function createOutputVerifier(
 
     for (const src of ingress) {
       for (const sink of sinks) {
-        if (hasPathWithoutTransform(map, src.id, sink.id)) {
-          const isSafe = safePattern.test(sink.code_snapshot) ||
-            (extraSafe ? extraSafe.test(sink.code_snapshot) : false);
+        // Primary: BFS taint path without TRANSFORM gate
+        let vulnerable = hasPathWithoutTransform(map, src.id, sink.id);
+
+        // Fallback 1: sink has tainted data_in (mapper captured taint but no edge path)
+        if (!vulnerable && sinkHasTaintedDataIn(map, sink.id)) {
+          vulnerable = true;
+        }
+
+        // Fallback 2: scope-based — INGRESS and sink share a function scope
+        // and a tainted TRANSFORM (assignment) exists in the same scope.
+        // Catches Java Juliet patterns: data = request.getParameter("x"); ... response.getWriter().println(data);
+        if (!vulnerable && scopeBasedTaintReaches(map, src.id, sink.id)) {
+          vulnerable = true;
+        }
+
+        if (vulnerable) {
+          // Check safe patterns in scope context (not just sink code)
+          const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
+          const combinedScope = stripComments(scopeSnaps.join('\n') || sink.code_snapshot);
+          const isSafe = safePattern.test(combinedScope) ||
+            (extraSafe ? extraSafe.test(combinedScope) : false);
 
           if (!isSafe) {
             findings.push({
@@ -233,12 +255,13 @@ export function verifyCWE113(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
 
-  // Only EGRESS nodes that specifically set HTTP headers
+  // EGRESS nodes that set HTTP headers OR cookies (cookies are Set-Cookie headers)
   const headerSinks = map.nodes.filter(n =>
     n.node_type === 'EGRESS' &&
     (n.node_subtype.includes('header') || n.attack_surface.includes('http_header') ||
+     n.node_subtype.includes('cookie') || n.attack_surface.includes('cookie') ||
      n.code_snapshot.match(
-       /\b(setHeader|writeHead|res\.header|res\.set|addHeader|response\.header|response\.setHeader)\b/i
+       /\b(setHeader|writeHead|res\.header|res\.set|addHeader|addCookie|response\.header|response\.setHeader|response\.addHeader|response\.addCookie|Set-Cookie)\b/i
      ) !== null) &&
     // Exclude body-output APIs — they don't set headers
     !n.code_snapshot.match(/\bres\.json\b|\bres\.send\b|\bres\.end\b|\bres\.render\b/i)
@@ -246,15 +269,36 @@ export function verifyCWE113(map: NeuralMap): VerificationResult {
 
   for (const src of ingress) {
     for (const sink of headerSinks) {
-      if (hasPathWithoutTransform(map, src.id, sink.id)) {
-        // Check for CRLF-specific sanitization in the sink code
-        const hasCRLFStrip = sink.code_snapshot.match(
-          /replace\s*\(.*\\r.*\\n|replace\s*\(.*\\n.*\\r|strip.*crlf|strip.*newline|sanitize.*header/i
+      // Primary: BFS path
+      let vulnerable = hasPathWithoutTransform(map, src.id, sink.id);
+
+      // Fallback 1: sink has tainted data_in
+      if (!vulnerable && sinkHasTaintedDataIn(map, sink.id)) {
+        vulnerable = true;
+      }
+
+      // Fallback 2: scope-based taint
+      if (!vulnerable && scopeBasedTaintReaches(map, src.id, sink.id)) {
+        vulnerable = true;
+      }
+
+      if (vulnerable) {
+        // Check for CRLF-specific sanitization — use FUNCTION scope, not class scope.
+        // Find the STRUCTURAL/function that contains this sink (by line range).
+        const containingFunc = map.nodes.find(n =>
+          n.node_type === 'STRUCTURAL' && n.node_subtype === 'function' &&
+          sink.line_start >= n.line_start && sink.line_start <= n.line_end
+        );
+        const funcScope113 = containingFunc
+          ? stripComments(containingFunc.analysis_snapshot || containingFunc.code_snapshot)
+          : stripComments(sink.analysis_snapshot || sink.code_snapshot);
+        const hasCRLFStrip = funcScope113.match(
+          /replace\s*\(.*\\r.*\\n|replace\s*\(.*\\n.*\\r|strip.*crlf|strip.*newline|sanitize.*header|URLEncoder\.encode/i
         ) !== null;
 
         // Check for encoding that neutralizes CRLF
-        const hasEncoding = sink.code_snapshot.match(
-          /\bencodeURIComponent\b|\bencodeURI\b|\bencodeHeader\b|\bsanitizeHeader\b/i
+        const hasEncoding = funcScope113.match(
+          /\bencodeURIComponent\b|\bencodeURI\b|\bencodeHeader\b|\bsanitizeHeader\b|\bURLEncoder\.encode\b/i
         ) !== null;
 
         if (!hasCRLFStrip && !hasEncoding) {

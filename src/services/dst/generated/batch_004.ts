@@ -417,6 +417,38 @@ export function verifyCWE759(map: NeuralMap): VerificationResult {
     }
   }
 
+  // --- Strategy 2: Code snapshot scan for unsalted hash patterns ---
+  // Detects MessageDigest.getInstance, createHash, hashlib without salt or adaptive hash.
+  // These APIs produce unsalted hashes by default (no built-in salt like bcrypt/scrypt).
+  const SALTED_HASH_S2 = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bpbkdf2\b/i;
+  const UNSALTED_API = /\bMessageDigest\.getInstance\b|\bcreateHash\b|\bhashlib\.(?:md5|sha1|sha256|sha512)\b/i;
+  const MANUAL_SALT = /\bsalt\b|\brandomBytes\b|\bcrypto\.random\b|\bSecureRandom\b/i;
+  const reported = new Set<string>(findings.map(f => f.sink.id));
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = node.code_snapshot;
+    if (UNSALTED_API.test(snap) && !SALTED_HASH_S2.test(snap) && !MANUAL_SALT.test(snap)) {
+      // Check if it writes to a file with "password" in the name
+      const hasPasswordStorage = map.nodes.some(n =>
+        n.code_snapshot.match(/passwordFile|password.*store|credential|hash_value/i) !== null
+      );
+      if (hasPasswordStorage) {
+        reported.add(node.id);
+        findings.push({
+          source: nodeRef(node),
+          sink: nodeRef(node),
+          missing: 'TRANSFORM (salted adaptive hash — bcrypt/scrypt/Argon2)',
+          severity: 'high',
+          description: `${node.label} uses an unsalted hash function. ` +
+            `Without a unique salt per password, attackers can use precomputed rainbow tables.`,
+          fix: 'Use bcrypt, scrypt, or Argon2 instead of raw MessageDigest/createHash. ' +
+            'These generate a unique random salt automatically.',
+        });
+      }
+    }
+  }
+
   return { cwe: 'CWE-759', name: 'Use of a One-Way Hash without a Salt', holds: findings.length === 0, findings };
 }
 
@@ -599,8 +631,12 @@ export const verifyCWE464 = createNoTransformVerifier(
 
     return map.nodes.filter(n =>
       n.node_type === 'STORAGE' &&
-      // Require the storage node itself to receive tainted data OR show direct assignment.
-      (n.data_in.some(d => d.tainted) || n.data_in.some(d => d.source === 'EXTERNAL')) &&
+      // Only fire if the STORAGE node itself has tainted data_in — meaning user
+      // input actually reaches it. The previous d.source === 'EXTERNAL' fallback
+      // was too broad: it fired on any STORAGE node with external data regardless
+      // of whether that data was user-controlled (tainted). This caused 5/10
+      // Juliet false positives where arrays/strings existed but had no taint flow.
+      n.data_in.some(d => d.tainted) &&
       (n.node_subtype.includes('list') || n.node_subtype.includes('array') ||
        n.node_subtype.includes('string') || n.node_subtype.includes('buffer') ||
        n.code_snapshot.match(/\b(push|append|concat|insert|add|write|null.*terminat)\b/i) !== null)

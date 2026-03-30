@@ -33,6 +33,9 @@ export interface VariableInfo {
   /** If this variable holds a known constant string (e.g., const action = "quer" + "y" → "query"),
    *  store the value for computed property resolution: db[action] → db.query */
   constantValue?: string;
+  /** Generic type arguments from the declaration, e.g., Map<String, Statement> → ['String', 'Statement'].
+   *  Used to resolve method return types on generic containers (e.g., map.get() returns Statement). */
+  genericTypeArgs?: string[];
   /** If this variable has been range-checked by a CONTROL node,
    *  stores the inferred numeric bounds. Used by integer/arithmetic
    *  verifiers to suppress findings on bounded variables. */
@@ -249,8 +252,8 @@ export class MapperContext {
     if (container) {
       container.edges.push(edge);
     }
-    // Add to top-level edges
-    this.neuralMap.edges.push({ ...edge });
+    // Add to top-level edges (with source for graph traversal)
+    this.neuralMap.edges.push({ ...edge, source: containerNodeId });
   }
 
   /**
@@ -300,8 +303,8 @@ export class MapperContext {
         // Add to source node's edges array (edge points FROM source TO consumer)
         sourceNode.edges.push(edge);
 
-        // Add to top-level edges
-        this.neuralMap.edges.push({ ...edge });
+        // Add to top-level edges (with source for graph traversal)
+        this.neuralMap.edges.push({ ...edge, source: sourceNode.id });
       }
     }
   }
@@ -337,7 +340,7 @@ export class MapperContext {
         };
 
         node.edges.push(edge);
-        this.neuralMap.edges.push({ ...edge });
+        this.neuralMap.edges.push({ ...edge, source: node.id });
       }
     }
   }
@@ -371,7 +374,7 @@ export class MapperContext {
         };
 
         sourceNode.edges.push(edge);
-        this.neuralMap.edges.push({ ...edge });
+        this.neuralMap.edges.push({ ...edge, source: sourceNode.id });
       }
     }
   }
@@ -420,7 +423,7 @@ export class MapperContext {
       };
 
       moduleNode.edges.push(edge);
-      this.neuralMap.edges.push({ ...edge });
+      this.neuralMap.edges.push({ ...edge, source: moduleNode.id });
     }
   }
 
@@ -556,7 +559,7 @@ export class MapperContext {
                   async: false,
                 };
                 node.edges.push(edge);
-                this.neuralMap.edges.push({ ...edge });
+                this.neuralMap.edges.push({ ...edge, source: node.id });
               }
             }
           }
@@ -581,7 +584,7 @@ export class MapperContext {
                     async: false,
                   };
                   ingress.edges.push(edge);
-                  this.neuralMap.edges.push({ ...edge });
+                  this.neuralMap.edges.push({ ...edge, source: ingress.id });
                 }
               }
             }
@@ -625,7 +628,7 @@ export class MapperContext {
           if (!alreadyExists) {
             const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
             lc.edges.push(edge);
-            this.neuralMap.edges.push({ ...edge });
+            this.neuralMap.edges.push({ ...edge, source: lc.id });
           }
         }
       }
@@ -639,7 +642,7 @@ export class MapperContext {
             if (!alreadyExists) {
               const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
               lc.edges.push(edge);
-              this.neuralMap.edges.push({ ...edge });
+              this.neuralMap.edges.push({ ...edge, source: lc.id });
             }
           }
         }
@@ -704,7 +707,7 @@ export class MapperContext {
             if (!alreadyExists) {
               const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
               ingress.edges.push(edge);
-              this.neuralMap.edges.push({ ...edge });
+              this.neuralMap.edges.push({ ...edge, source: ingress.id });
             }
           }
         }
@@ -739,7 +742,7 @@ export class MapperContext {
       };
 
       callerNode.edges.push(edge);
-      this.neuralMap.edges.push({ ...edge });
+      this.neuralMap.edges.push({ ...edge, source: callerNode.id });
     }
   }
 

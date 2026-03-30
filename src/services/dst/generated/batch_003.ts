@@ -466,8 +466,8 @@ export const verifyCWE619 = createTransformStorageVerifier(
   'CWE-619', "Dangling Database Cursor ('Cursor Injection')", 'high',
   (map) => map.nodes.filter(n =>
     n.node_type === 'STORAGE' &&
-    (n.node_subtype.includes('cursor') || n.node_subtype.includes('database') ||
-     n.code_snapshot.match(/\b(cursor|Cursor|createCursor|ResultSet)\b/i) !== null)
+    (n.node_subtype.includes('cursor') ||
+     n.code_snapshot.match(/\b(cursor|Cursor|createCursor|ResultSet|openCursor|newCursor)\b/) !== null)
   ),
   RESOURCE_RELEASE_SAFE,
   'CONTROL (cursor cleanup — close in finally/using block)',

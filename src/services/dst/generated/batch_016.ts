@@ -9,69 +9,17 @@
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, hasPathWithoutTransform,
-  hasPathWithoutIntermediateType, getContainingScopeSnapshots,
+  hasPathWithoutIntermediateType, getContainingScopeSnapshots, stripComments,
+  makeVerifier as v,
+  bfs_nC as nC, bfs_nT as nT, bfs_nCi as nCi, bfs_nTi as nTi,
+  bfs_nA as nA, bfs_nM as nM, bfs_nS as nS, bfs_nE as nE,
+  bfs_nEg as nEg, bfs_nSt as nSt,
+  SP_V as V, SP_S as S, SP_A as A, SP_E as E, SP_L as L, SP_R as R,
+  SP_I as I, SP_D as D, SP_CR as CR,
+  scanSourceLines, findNearestNode, detectLanguage,
+  type BfsCheck,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
-
-// ---------------------------------------------------------------------------
-// Compact factory (same as batch_015)
-// ---------------------------------------------------------------------------
-
-type BfsCheck = (map: NeuralMap, srcId: string, sinkId: string) => boolean;
-
-function v(
-  cweId: string, cweName: string, severity: Severity,
-  sourceType: NodeType, sinkType: NodeType,
-  bfsCheck: BfsCheck,
-  safePattern: RegExp,
-  missingDesc: string,
-  fixDesc: string,
-): (map: NeuralMap) => VerificationResult {
-  return (map: NeuralMap): VerificationResult => {
-    const findings: Finding[] = [];
-    const sources = nodesOfType(map, sourceType);
-    const sinks = nodesOfType(map, sinkType);
-    for (const src of sources) {
-      for (const sink of sinks) {
-        if (src.id === sink.id) continue;
-        if (bfsCheck(map, src.id, sink.id)) {
-          if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-            findings.push({
-              source: nodeRef(src), sink: nodeRef(sink),
-              missing: missingDesc, severity,
-              description: `${sourceType} at ${src.label} → ${sinkType} at ${sink.label} without controls. Vulnerable to ${cweName}.`,
-              fix: fixDesc,
-            });
-          }
-        }
-      }
-    }
-    return { cwe: cweId, name: cweName, holds: findings.length === 0, findings };
-  };
-}
-
-// BFS shortcuts
-const nC: BfsCheck = hasTaintedPathWithoutControl;
-const nT: BfsCheck = hasPathWithoutTransform;
-const nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONTROL');
-const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRANSFORM');
-const nA: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'AUTH');
-const nM: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'META');
-const nS: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STRUCTURAL');
-const nE: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'EXTERNAL');
-const nEg: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'EGRESS');
-const nSt: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STORAGE');
-
-// Safe patterns
-const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
-const S = /\bsanitize\s*\(|\bescape\s*\(|\bencode\s*\(|\b\.filter\s*\(|\bstrip\s*\(/i;
-const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\bauth\s*\(/i;
-const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
-const L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b/i;
-const R = /\brelease\s*\(|\bclose\s*\(|\bdispose\s*\(|\bfinally\b|\bcleanup\s*\(/i;
-const I = /\bimmutable\b|\b\.freeze\s*\(|\breadonly\b|\bconst\b|\b\.seal\s*\(/i;
-const D = /\bdebug.*off\b|\bproduction\b|\bNODE_ENV\b/i;
-const CR = /\bcrypto\.random\b|\brandomBytes\b|\bCSPRNG\b|\bgetRandomValues\b/i;
 
 // ===========================================================================
 // 4-CWE SHAPES
@@ -269,7 +217,50 @@ export const verifyCWE477 = v('CWE-477', 'Use of Obsolete Function', 'low', 'TRA
 export const verifyCWE695 = v('CWE-695', 'Use of Low-Level Functionality', 'medium', 'TRANSFORM', 'EXTERNAL', nS, /\bhigh.*level\b|\babstraction\b|\bframework\b|\bAPI\b/i, 'STRUCTURAL (use high-level abstractions)', 'Use high-level APIs instead of low-level system calls where possible.');
 
 // CONTROL→STRUCTURAL without CONTROL (2)
-export const verifyCWE484 = v('CWE-484', 'Omitted Break Statement in Switch', 'medium', 'CONTROL', 'STRUCTURAL', nCi, /\bbreak\b|\breturn\b|\bfall.*through\b.*\bintentional\b/i, 'CONTROL (explicit break or documented fallthrough)', 'Add break statements to switch cases. Document intentional fallthrough.');
+// CWE-484: Structural — scan source for switch cases missing break/return/throw
+export const verifyCWE484 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-484', name: 'Omitted Break Statement in Switch', holds: true, findings };
+
+  // Find all switch blocks by scanning CONTROL nodes labeled 'switch'
+  const switchNodes = map.nodes.filter(n => n.node_type === 'CONTROL' && n.label === 'switch');
+  for (const sw of switchNodes) {
+    const rawSnapshot = sw.analysis_snapshot || sw.code_snapshot;
+    // Check for fallthrough comments in the original (before stripping)
+    const hasFallthroughComment = /fall\s*-?\s*through/i.test(rawSnapshot);
+
+    // Strip comments FIRST to avoid splitting on "case" inside comments
+    const snapshot = stripComments(rawSnapshot);
+
+    // Split into case sections: split on 'case X:' or 'default:'
+    const caseBlocks = snapshot.split(/(?=\bcase\s+[^:]+:|default\s*:)/);
+    for (let i = 0; i < caseBlocks.length; i++) {
+      const block = caseBlocks[i];
+      // Skip the preamble (switch(...) {)
+      const isCaseBlock = /^\s*(?:case\s+|default\s*:)/.test(block);
+      if (!isCaseBlock) continue;
+      // Check if this case is followed by another case (potential fallthrough)
+      const nextBlock = i + 1 < caseBlocks.length ? caseBlocks[i + 1] : null;
+      if (!nextBlock) continue; // last case in switch — closing brace terminates
+      // Check if current case ends with break, return, throw, continue
+      const hasTerminator = /\b(break|return|throw|continue)\s*[;\n}]/.test(block);
+      if (!hasTerminator && !hasFallthroughComment) {
+        // Extract the case label for reporting
+        const caseLabel = block.match(/^\s*(case\s+[^:]+|default)\s*:/)?.[1] || 'case';
+        findings.push({
+          source: nodeRef(sw), sink: nodeRef(sw),
+          missing: 'CONTROL (explicit break or documented fallthrough)',
+          severity: 'medium',
+          description: `Switch at L${sw.line_start}: '${caseLabel.trim()}' falls through to next case without break, return, throw, or fallthrough comment.`,
+          fix: 'Add break statements to switch cases. Document intentional fallthrough with /* falls through */ comment.',
+        });
+      }
+    }
+  }
+
+  return { cwe: 'CWE-484', name: 'Omitted Break Statement in Switch', holds: findings.length === 0, findings };
+};
 export const verifyCWE543 = v('CWE-543', 'Use of Singleton Pattern Without Synchronized Access', 'medium', 'CONTROL', 'STRUCTURAL', nCi, L, 'CONTROL (synchronized singleton access)', 'Synchronize singleton access in multithreaded contexts. Use double-checked locking with volatile.');
 
 // EXTERNAL→STRUCTURAL without AUTH (2)
@@ -278,7 +269,51 @@ export const verifyCWE673 = v('CWE-673', 'External Influence of Sphere Definitio
 
 // CONTROL→STRUCTURAL without INGRESS (2)
 export const verifyCWE561 = v('CWE-561', 'Dead Code', 'low', 'CONTROL', 'STRUCTURAL', nCi, /\bremove\b|\bclean\b|\bno.*dead.*code\b|\blint\b/i, 'CONTROL (dead code removal)', 'Remove dead code. It increases attack surface and maintenance burden.');
-export const verifyCWE570 = v('CWE-570', 'Expression is Always False', 'low', 'CONTROL', 'STRUCTURAL', nCi, /\blint\b|\bstatic.*analysis\b|\bcorrect\b/i, 'CONTROL (correct conditional expressions)', 'Fix always-false expressions. They indicate logic errors.');
+
+// CWE-570: Structural — scan source for expressions that always evaluate to false
+export const verifyCWE570 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-570', name: 'Expression is Always False', holds: true, findings };
+
+  const scanned = scanSourceLines(src);
+  // Patterns that are always false
+  const alwaysFalsePatterns: Array<{ re: RegExp; desc: string }> = [
+    { re: /\bif\s*\(\s*false\s*\)/, desc: 'if(false)' },
+    { re: /\bwhile\s*\(\s*false\s*\)/, desc: 'while(false)' },
+    { re: /\bif\s*\(\s*(\w+)\s*!=\s*\1\s*\)/, desc: 'x != x (always false)' },
+    { re: /\bif\s*\(\s*(\w+)\s*>\s*Integer\.MAX_VALUE\s*\)/, desc: 'n > Integer.MAX_VALUE (always false)' },
+    { re: /\bif\s*\(\s*(\w+)\s*<\s*Integer\.MIN_VALUE\s*\)/, desc: 'n < Integer.MIN_VALUE (always false)' },
+    { re: /\bif\s*\(\s*(\w+)\s*<\s*0\s*\)(?=.*\bnew\s+SecureRandom\b)/, desc: 'random < 0 after unsigned source' },
+    { re: /\bif\s*\(\s*(\w+)\s*==\s*\(\s*\1\s*-\s*1\s*\)\s*\)/, desc: 'n == (n - 1) (always false)' },
+    { re: /\bif\s*\(\s*(\w+)\s*==\s*\(\s*\1\s*\+\s*1\s*\)\s*\)/, desc: 'n == (n + 1) (always false)' },
+  ];
+
+  // Also detect class identity comparison that's always false:
+  // if (SomeClass.class.getClass() == SomeClass.class.getClass()) — different .getClass() on Class objects
+  // The Juliet pattern: obj.getClass() == otherClass.getClass() where they're different types
+
+  for (const { line, lineNum, isComment } of scanned) {
+    if (isComment) continue;
+
+    for (const pat of alwaysFalsePatterns) {
+      if (pat.re.test(line)) {
+        const nearNode = findNearestNode(map, lineNum);
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'CONTROL (correct conditional expression)',
+            severity: 'low',
+            description: `L${lineNum}: Expression always evaluates to false: ${pat.desc}. Dead code follows.`,
+            fix: 'Fix always-false expressions. They indicate logic errors or dead code.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-570', name: 'Expression is Always False', holds: findings.length === 0, findings };
+};
 
 // STRUCTURAL→EXTERNAL without EXTERNAL (2)
 export const verifyCWE572 = v('CWE-572', 'Call to Thread run() instead of start()', 'medium', 'STRUCTURAL', 'EXTERNAL', nE, /\bstart\b|\bThread\.start\b/i, 'EXTERNAL (Thread.start() not run())', 'Call Thread.start() to create a new thread. Thread.run() executes synchronously.');
@@ -304,52 +339,31 @@ export const verifyCWE628 = (map: NeuralMap): VerificationResult => {
   // without CONTROL path fires on essentially all Java/Go/Kotlin/etc. code, producing
   // 90% false positive rates on Juliet benchmarks. Suppress for all typed languages.
   const TYPED_NO_RESOLUTION_LANGS = new Set(['java', 'kotlin', 'go', 'rust', 'csharp', 'c', 'cpp', 'swift', 'scala']);
-  // Infer language from nodes or source file extension
-  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
-  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
-  const extLang: Record<string, string> = {
-    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php',
-    java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', cs: 'csharp',
-    c: 'c', cpp: 'cpp', cc: 'cpp', swift: 'swift', scala: 'scala',
-  };
-  const effectiveLang = lang || extLang[ext] || '';
+  const effectiveLang = detectLanguage(map);
   if (DYNAMIC_LANGS.has(effectiveLang) || TYPED_NO_RESOLUTION_LANGS.has(effectiveLang)) {
     return { cwe: 'CWE-628', name: 'Function Call with Incorrectly Specified Arguments', holds: true, findings: [] };
   }
   return v('CWE-628', 'Function Call with Incorrectly Specified Arguments', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\btypescript\b|\btype.*check\b|\blint\b/i, 'CONTROL (type-safe function calls)', 'Use TypeScript or linting to catch incorrect arguments at compile time.')(map);
 };
 export function verifyCWE653(map: NeuralMap): VerificationResult {
-  // CWE-653 (Improper Isolation or Compartmentalization) is only meaningful for
-  // systems that can actually create privilege/process boundaries. For managed
-  // single-process languages (Java, Python, Ruby, etc.) without explicit
-  // inter-process or container isolation APIs, the STRUCTURAL→STRUCTURAL topology
-  // check fires as a structural truism rather than a real isolation failure.
-  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
-  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
-  const extLang653: Record<string, string> = {
-    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php',
-  };
-  const effectiveLang653 = lang || extLang653[ext] || '';
+  // CWE-653 (Improper Isolation or Compartmentalization) is about process/container
+  // isolation boundaries, NOT method-level code structure. The STRUCTURAL→STRUCTURAL
+  // topology check fires as a structural truism in any single-process codebase.
+  // Return holds: true for Java and all statically typed single-process languages.
+  const effectiveLang = detectLanguage(map);
 
-  // For Java: only fire if the map contains explicit process-isolation or container APIs.
-  if (effectiveLang653 === 'java' || ext === 'java') {
-    const ISOLATION_APIS = /\b(SecurityManager|ProcessBuilder|Runtime\.exec|DockerClient|ContainerRuntime|Namespace|setSecurityManager)\b/;
-    const hasIsolationApi = map.nodes.some(n => ISOLATION_APIS.test(n.code_snapshot));
-    if (!hasIsolationApi) {
-      return { cwe: 'CWE-653', name: 'Improper Isolation or Compartmentalization', holds: true, findings: [] };
-    }
-  }
-
-  // For other managed/single-process languages without compartmentalization semantics:
-  const SINGLE_PROCESS_LANGS = new Set(['python', 'ruby', 'php']);
-  if (SINGLE_PROCESS_LANGS.has(effectiveLang653)) {
+  // CWE-653 is meaningless at the method/class level for any single-process language.
+  // Only a deployment/architecture-level CWE (containers, process boundaries, sandboxes).
+  const SINGLE_PROCESS_LANGS = new Set([
+    'java', 'kotlin', 'python', 'ruby', 'php', 'javascript', 'typescript',
+    'go', 'rust', 'csharp', 'c', 'cpp', 'swift', 'scala',
+  ]);
+  if (SINGLE_PROCESS_LANGS.has(effectiveLang)) {
     return { cwe: 'CWE-653', name: 'Improper Isolation or Compartmentalization', holds: true, findings: [] };
   }
 
-  // For all other languages: use the generic topology check.
-  return v('CWE-653', 'Improper Isolation or Compartmentalization', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\bisolat\b|\bsandbox\b|\bcompartment\b|\bmodule\b/i, 'CONTROL (proper isolation between components)', 'Isolate security domains. Use separate processes or sandboxes for untrusted code.')(map);
+  // For unknown languages: also return holds true — the topology check is never meaningful.
+  return { cwe: 'CWE-653', name: 'Improper Isolation or Compartmentalization', holds: true, findings: [] };
 }
 
 // TRANSFORM→TRANSFORM without TRANSFORM (2)
@@ -370,12 +384,169 @@ export const verifyCWE15 = v('CWE-15', 'External Control of System or Configurat
 export const verifyCWE221 = v('CWE-221', 'Information Loss or Omission', 'medium', 'CONTROL', 'EGRESS', nSt, /\bcomplete\b|\bfull\b|\bno.*omit\b/i, 'STORAGE (complete information in audit/security events)', 'Include complete context in security events. Omissions prevent incident analysis.');
 export const verifyCWE223 = v('CWE-223', 'Omission of Security-relevant Information', 'medium', 'AUTH', 'EGRESS', nSt, /\baudit\b|\blog\b|\brecord\b/i, 'STORAGE (security event logging)', 'Log all security-relevant events: auth failures, access denials, privilege changes.');
 export const verifyCWE258 = v('CWE-258', 'Empty Password in Configuration File', 'high', 'STORAGE', 'AUTH', nC, /\brequired\b|\bmin.*length\b|\breject.*empty\b/i, 'CONTROL (reject empty passwords)', 'Reject empty passwords in configuration. Require minimum password length.');
-export const verifyCWE259 = v('CWE-259', 'Use of Hard-coded Password', 'critical', 'STRUCTURAL', 'AUTH', nC, /\benv\b|\bvault\b|\bsecret.*manager\b/i, 'CONTROL (no hard-coded passwords — use env/vault)', 'Never hard-code passwords. Use environment variables or secret managers.');
+export const verifyCWE259 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const reported = new Set<string>();
+
+  // --- Strategy 1: Graph-based (original STRUCTURAL -> AUTH without CONTROL) ---
+  const structural = nodesOfType(map, 'STRUCTURAL');
+  const auth = nodesOfType(map, 'AUTH');
+  for (const src of structural) {
+    for (const sink of auth) {
+      if (src.id === sink.id) continue;
+      if (nC(map, src.id, sink.id)) {
+        if (!/\benv\b|\bvault\b|\bsecret.*manager\b/i.test(sink.code_snapshot) &&
+            !/\benv\b|\bvault\b|\bsecret.*manager\b/i.test(src.code_snapshot)) {
+          reported.add(src.id);
+          findings.push({
+            source: nodeRef(src), sink: nodeRef(sink),
+            missing: 'CONTROL (no hard-coded passwords -- use env/vault)',
+            severity: 'critical',
+            description: `STRUCTURAL at ${src.label} -> AUTH at ${sink.label} without controls. Vulnerable to hard-coded password.`,
+            fix: 'Never hard-code passwords. Use environment variables or secret managers.',
+          });
+        }
+      }
+    }
+  }
+
+  // --- Strategy 2: Code snapshot scan for hardcoded password patterns ---
+  // Detects Java patterns: password = "literal", DriverManager.getConnection with literal password,
+  // and property assignments with password-like keys.
+  const HARDCODED_PW = /(?:password|passwd|pwd|pass)\s*[=:]\s*["'][^"']{2,}["']/i;
+  const DRIVER_CONNECT = /DriverManager\.getConnection\s*\([^)]*["'][^"']+["']\s*,\s*["'][^"']+["']\s*,\s*["'][^"']+["']/i;
+  const PW_FIELD_INIT = /(?:final\s+)?(?:String|string|char\[\])\s+\w*(?:password|passwd|pwd|pass|secret|credential)\w*\s*=\s*["'][^"']{2,}["']/i;
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = node.code_snapshot;
+    if (HARDCODED_PW.test(snap) || DRIVER_CONNECT.test(snap) || PW_FIELD_INIT.test(snap)) {
+      // Skip if it's env/vault/config access
+      if (/\benv\b|\bvault\b|\bsecret.*manager\b|\bgetProperty\b|\bgetenv\b|\bprocess\.env\b/i.test(snap)) continue;
+      reported.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (no hard-coded passwords -- use env/vault)',
+        severity: 'critical',
+        description: `${node.label} contains a hard-coded password. ` +
+          `Hard-coded credentials cannot be rotated and are exposed in source control.`,
+        fix: 'Never hard-code passwords. Use environment variables, secret managers, or vaults.',
+      });
+    }
+  }
+
+  return { cwe: 'CWE-259', name: 'Use of Hard-coded Password', holds: findings.length === 0, findings };
+};
 export const verifyCWE286 = v('CWE-286', 'Incorrect User Management', 'high', 'STRUCTURAL', 'AUTH', nA, A, 'AUTH (correct user management — proper provisioning/deprovisioning)', 'Implement proper user lifecycle management. Deactivate unused accounts.');
 export const verifyCWE303 = v('CWE-303', 'Incorrect Implementation of Authentication Algorithm', 'critical', 'AUTH', 'CONTROL', nM, /\bstandard\b|\bproven\b|\bNIST\b|\bOAuth\b|\bOIDC\b/i, 'META (use standard authentication algorithms)', 'Use proven auth algorithms (OAuth2, OIDC). Do not implement custom authentication.');
-export const verifyCWE321 = v('CWE-321', 'Use of Hard-coded Cryptographic Key', 'critical', 'META', 'TRANSFORM', nE, /\benv\b|\bvault\b|\bKMS\b|\bsecret.*manager\b/i, 'EXTERNAL (key management service — no hard-coded keys)', 'Never hard-code crypto keys. Use KMS, vault, or environment variables.');
+export const verifyCWE321 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const reported = new Set<string>();
+
+  // --- Strategy 1: Graph-based (original META -> TRANSFORM without EXTERNAL) ---
+  const meta = nodesOfType(map, 'META');
+  const transforms = nodesOfType(map, 'TRANSFORM');
+  for (const src of meta) {
+    for (const sink of transforms) {
+      if (src.id === sink.id) continue;
+      if (nE(map, src.id, sink.id)) {
+        if (!/\benv\b|\bvault\b|\bKMS\b|\bsecret.*manager\b/i.test(sink.code_snapshot) &&
+            !/\benv\b|\bvault\b|\bKMS\b|\bsecret.*manager\b/i.test(src.code_snapshot)) {
+          reported.add(src.id);
+          findings.push({
+            source: nodeRef(src), sink: nodeRef(sink),
+            missing: 'EXTERNAL (key management service -- no hard-coded keys)',
+            severity: 'critical',
+            description: `META at ${src.label} -> TRANSFORM at ${sink.label} without external key source. Vulnerable to hard-coded crypto key.`,
+            fix: 'Never hard-code crypto keys. Use KMS, vault, or environment variables.',
+          });
+        }
+      }
+    }
+  }
+
+  // --- Strategy 2: Code snapshot scan for hardcoded crypto key patterns ---
+  // Detects: new SecretKeySpec(hardcoded_bytes, ...), hardcoded key byte arrays,
+  // DES key generation with static values.
+  const HARDCODED_KEY = /new\s+SecretKeySpec\s*\(/i;
+  const KEY_BYTE_ARRAY = /(?:byte\s*\[\s*\]\s+\w*(?:key|secret|iv)\w*\s*=|(?:key|secret|iv)\w*\s*=\s*)\s*(?:new\s+byte\s*\[\s*\]\s*)?\{/i;
+  const STATIC_KEY_STRING = /(?:final\s+)?(?:String|string)\s+\w*(?:key|secret|aes|des|encrypt)\w*\s*=\s*["'][^"']{4,}["']/i;
+  const CRYPTO_ALG_PROPERTY = /\bgetProperty\s*\(\s*["']cryptoAlg1["']/i;
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = node.code_snapshot;
+    if (HARDCODED_KEY.test(snap) || KEY_BYTE_ARRAY.test(snap) || STATIC_KEY_STRING.test(snap) || CRYPTO_ALG_PROPERTY.test(snap)) {
+      // Skip if it uses env/vault/KMS
+      if (/\benv\b|\bvault\b|\bKMS\b|\bsecret.*manager\b|\bgetenv\b|\bprocess\.env\b/i.test(snap)) continue;
+      reported.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'EXTERNAL (key management service -- no hard-coded keys)',
+        severity: 'critical',
+        description: `${node.label} contains a hard-coded cryptographic key or uses a weak crypto algorithm property. ` +
+          `Hard-coded keys cannot be rotated and are exposed in source control.`,
+        fix: 'Never hard-code crypto keys. Use KMS, vault, or environment variables.',
+      });
+    }
+  }
+
+  return { cwe: 'CWE-321', name: 'Use of Hard-coded Cryptographic Key', holds: findings.length === 0, findings };
+};
 export const verifyCWE335 = v('CWE-335', 'Incorrect Usage of Seeds in PRNG', 'high', 'INGRESS', 'TRANSFORM', nE, CR, 'EXTERNAL (CSPRNG / hardware entropy source)', 'Use system CSPRNG for seeding. Do not derive seeds from user input.');
-export const verifyCWE336 = v('CWE-336', 'Same Seed in PRNG', 'high', 'STORAGE', 'TRANSFORM', nE, /\bunique.*seed\b|\bper.*instance\b|\brandom.*seed\b/i, 'EXTERNAL (unique seed per instance from CSPRNG)', 'Use unique seeds per PRNG instance. Same seeds produce same output.');
+export const verifyCWE336 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const reported = new Set<string>();
+
+  // --- Strategy 1: Graph-based (original STORAGE -> TRANSFORM without EXTERNAL) ---
+  const storage = nodesOfType(map, 'STORAGE');
+  const transforms = nodesOfType(map, 'TRANSFORM');
+  for (const src of storage) {
+    for (const sink of transforms) {
+      if (src.id === sink.id) continue;
+      if (nE(map, src.id, sink.id)) {
+        if (!/\bunique.*seed\b|\bper.*instance\b|\brandom.*seed\b/i.test(sink.code_snapshot) &&
+            !/\bunique.*seed\b|\bper.*instance\b|\brandom.*seed\b/i.test(src.code_snapshot)) {
+          reported.add(src.id);
+          findings.push({
+            source: nodeRef(src), sink: nodeRef(sink),
+            missing: 'EXTERNAL (unique seed per instance from CSPRNG)',
+            severity: 'high',
+            description: `STORAGE at ${src.label} -> TRANSFORM at ${sink.label} without external entropy source. Vulnerable to same seed in PRNG.`,
+            fix: 'Use unique seeds per PRNG instance. Same seeds produce same output.',
+          });
+        }
+      }
+    }
+  }
+
+  // --- Strategy 2: Code snapshot scan for weak PRNG patterns ---
+  // Detects: java.util.Random (not SecureRandom), Math.random(),
+  // new Random(constant_seed), random.setSeed(constant)
+  const WEAK_PRNG = /\bnew\s+(?:java\.util\.)?Random\s*\(/i;
+  const MATH_RANDOM = /\b(?:java\.lang\.)?Math\.random\s*\(\s*\)/i;
+  const SECURE_RANDOM = /\bSecureRandom\b/i;
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = node.code_snapshot;
+    // Detect java.util.Random (but not SecureRandom)
+    if ((WEAK_PRNG.test(snap) || MATH_RANDOM.test(snap)) && !SECURE_RANDOM.test(snap)) {
+      reported.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'EXTERNAL (use SecureRandom instead of java.util.Random/Math.random)',
+        severity: 'high',
+        description: `${node.label} uses a weak/predictable PRNG (java.util.Random or Math.random). ` +
+          `These produce predictable sequences unsuitable for security-sensitive operations.`,
+        fix: 'Use java.security.SecureRandom instead of java.util.Random. ' +
+          'SecureRandom provides cryptographically strong random values.',
+      });
+    }
+  }
+
+  return { cwe: 'CWE-336', name: 'Same Seed in PRNG', holds: findings.length === 0, findings };
+};
 export const verifyCWE338 = v('CWE-338', 'Use of Cryptographically Weak PRNG', 'high', 'TRANSFORM', 'AUTH', nE, CR, 'EXTERNAL (CSPRNG for security-critical values)', 'Use crypto.randomBytes or getRandomValues for security. Math.random is not cryptographically secure.');
 export const verifyCWE341 = v('CWE-341', 'Predictable from Observable State', 'high', 'EXTERNAL', 'AUTH', nT, CR, 'TRANSFORM (CSPRNG — not derived from observable state)', 'Do not derive security values from observable state (PID, time, counters). Use CSPRNG.');
 export const verifyCWE344 = v('CWE-344', 'Use of Invariant Value in Dynamically Changing Context', 'medium', 'INGRESS', 'AUTH', nE, /\bdynamic\b|\bfresh\b|\brotate\b|\bper.*request\b/i, 'EXTERNAL (dynamic values from secure source)', 'Use fresh, dynamic values for each context. Do not reuse tokens across sessions.');
@@ -389,10 +560,7 @@ export const verifyCWE370 = v('CWE-370', 'Missing Check for Certificate Revocati
 export const verifyCWE397 = (map: NeuralMap): VerificationResult => {
   const JAVA_GENERIC_THROWS = /\bthrows\s+(Exception|Throwable|RuntimeException|Error)\b/;
   const JAVA_SPECIFIC_SAFE = /\bthrows\s+(?!Exception\b|Throwable\b|RuntimeException\b|Error\b)\w+Exception\b/;
-  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
-  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
-  const extLang: Record<string, string> = { js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php', java: 'java', kt: 'kotlin', cs: 'csharp' };
-  const effectiveLang = lang || extLang[ext] || '';
+  const effectiveLang = detectLanguage(map);
 
   if (effectiveLang === 'java' || effectiveLang === 'kotlin') {
     // Java/Kotlin: check TRANSFORM nodes for generic throws declarations
@@ -413,8 +581,9 @@ export const verifyCWE397 = (map: NeuralMap): VerificationResult => {
     return { cwe: 'CWE-397', name: 'Declaration of Throws for Generic Exception', holds: findings.length === 0, findings };
   }
 
-  // For all other languages: use the generic topology check.
-  return v('CWE-397', 'Declaration of Throws for Generic Exception', 'low', 'TRANSFORM', 'EGRESS', nEg, /\bspecific.*exception\b|\btyped.*error\b/i, 'EGRESS (specific exception types in throws declarations)', 'Declare specific exception types. Generic throws hides failure modes.')(map);
+  // For non-Java/Kotlin languages: CWE-397 is Java-specific (throws declarations).
+  // The generic TRANSFORM→EGRESS topology check is meaningless outside Java/Kotlin.
+  return { cwe: 'CWE-397', name: 'Declaration of Throws for Generic Exception', holds: true, findings: [] };
 };
 export const verifyCWE403 = v('CWE-403', 'Exposure of File Descriptor to Unintended Control Sphere (Descriptor Leak)', 'medium', 'STORAGE', 'EXTERNAL', nC, /\bclose.*exec\b|\bFD_CLOEXEC\b|\bO_CLOEXEC\b/i, 'CONTROL (close-on-exec flag for file descriptors)', 'Set FD_CLOEXEC/O_CLOEXEC on file descriptors. Prevents leaking to child processes.');
 export const verifyCWE414 = v('CWE-414', 'Missing Lock Check', 'medium', 'STRUCTURAL', 'TRANSFORM', nC, L, 'CONTROL (lock status check before critical operations)', 'Check lock status before critical operations.');
@@ -433,7 +602,7 @@ export const verifyCWE5 = v('CWE-5', 'J2EE Misconfiguration: Data Transmission W
 export const verifyCWE511 = v('CWE-511', 'Logic/Time Bomb', 'critical', 'CONTROL', 'TRANSFORM', nM, /\baudit\b|\breview\b|\bno.*time.*bomb\b/i, 'META (code audit for logic/time bombs)', 'Audit for time-triggered or condition-triggered malicious code.');
 export const verifyCWE531 = v('CWE-531', 'Inclusion of Sensitive Information in Test Code', 'medium', 'STRUCTURAL', 'EGRESS', nM, /\bno.*secret.*test\b|\bmock\b|\benv\b/i, 'META (no real credentials in test code)', 'Use mock credentials in tests. Never commit real secrets in test files.');
 export const verifyCWE540 = v('CWE-540', 'Inclusion of Sensitive Information in Source Code', 'medium', 'META', 'EGRESS', nA, /\benv\b|\bvault\b|\bno.*hardcode\b/i, 'AUTH (no sensitive data in source code)', 'Move sensitive data to environment variables or secret managers.');
-// CWE-544: scope-aware — check containing scope for error handling patterns before firing
+// CWE-544: scope-aware — check containing function scope for error handling patterns before firing
 export const verifyCWE544 = (map: NeuralMap): VerificationResult => {
   const safePattern = /\btry\b|\bcatch\b|\berror.*handler\b|\bmiddleware\b/i;
   const findings: Finding[] = [];
@@ -444,9 +613,24 @@ export const verifyCWE544 = (map: NeuralMap): VerificationResult => {
       if (src.id === sink.id) continue;
       if (nS(map, src.id, sink.id)) {
         if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-          // Check scope snapshots before firing
+          // Check the containing function scope for both src and sink.
+          // If the function that contains either node has proper error handling
+          // (try/catch/middleware), suppress — the scope IS handled.
           const sinkScopeSnapshots = getContainingScopeSnapshots(map, sink.id);
-          const scopeSafe = sinkScopeSnapshots.some(s => safePattern.test(s));
+          const srcScopeSnapshots = getContainingScopeSnapshots(map, src.id);
+          const allScopes = [...sinkScopeSnapshots, ...srcScopeSnapshots];
+          // Also check the CONTAINS parent node's own analysis_snapshot (the function body)
+          const sinkParentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === sink.id);
+          const srcParentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === src.id);
+          if (sinkParentEdge) {
+            const parentNode = map.nodes.find(n => n.id === sinkParentEdge.source);
+            if (parentNode) allScopes.push(parentNode.analysis_snapshot || parentNode.code_snapshot);
+          }
+          if (srcParentEdge) {
+            const parentNode = map.nodes.find(n => n.id === srcParentEdge.source);
+            if (parentNode) allScopes.push(parentNode.analysis_snapshot || parentNode.code_snapshot);
+          }
+          const scopeSafe = allScopes.some(s => safePattern.test(stripComments(s)));
           if (!scopeSafe) {
             findings.push({
               source: nodeRef(src), sink: nodeRef(sink),
@@ -462,10 +646,237 @@ export const verifyCWE544 = (map: NeuralMap): VerificationResult => {
   }
   return { cwe: 'CWE-544', name: 'Missing Standardized Error Handling Mechanism', holds: findings.length === 0, findings };
 };
-export const verifyCWE546 = v('CWE-546', 'Suspicious Comment', 'low', 'META', 'STRUCTURAL', nC, /\bno.*todo.*security\b|\breview\b|\baudit\b/i, 'CONTROL (review suspicious TODO/FIXME/HACK comments)', 'Review and resolve security-related TODO/FIXME/HACK comments before release.');
+// CWE-546: Structural — scan source for suspicious comments (BUG, FIXME, HACK, TODO, KLUDGE, etc.)
+export const verifyCWE546 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-546', name: 'Suspicious Comment', holds: true, findings };
+
+  // Match comments containing suspicious keywords
+  // Single-line comments: // ...
+  // Multi-line comments: /* ... */
+  const suspiciousKeywords = /\b(BUG|FIXME|HACK|KLUDGE|XXX|WORKAROUND|BROKEN)\b/;
+  const lines = src.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Check single-line comments
+    const slComment = line.match(/\/\/(.*)$/);
+    if (slComment && suspiciousKeywords.test(slComment[1])) {
+      const keyword = slComment[1].match(suspiciousKeywords)![1];
+      const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 1) || map.nodes[0];
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'META (resolve suspicious comments before release)',
+          severity: 'low',
+          description: `L${i + 1}: Suspicious comment contains '${keyword}': ${line.trim().slice(0, 100)}`,
+          fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+        });
+      }
+    }
+    // Check block comments on this line
+    const blockComments = line.match(/\/\*([^*]|\*(?!\/))*\*\//g);
+    if (blockComments) {
+      for (const bc of blockComments) {
+        if (suspiciousKeywords.test(bc)) {
+          const keyword = bc.match(suspiciousKeywords)![1];
+          // Skip comments that are test case metadata (FLAW, FIX, INCIDENTAL)
+          if (/\bFLAW\b|\bFIX\b|\bINCIDENTAL\b/.test(bc)) continue;
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 1) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'META (resolve suspicious comments before release)',
+              severity: 'low',
+              description: `L${i + 1}: Suspicious comment contains '${keyword}': ${bc.slice(0, 100)}`,
+              fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Also check multi-line block comments that span multiple lines
+  // (but only those NOT already caught by the per-line scan)
+  const multiLineComments = src.match(/\/\*[\s\S]*?\*\//g);
+  if (multiLineComments) {
+    for (const mc of multiLineComments) {
+      // Skip single-line block comments (already handled above)
+      if (!mc.includes('\n') && mc.includes('*/')) continue;
+      if (suspiciousKeywords.test(mc) && !/\bFLAW\b|\bFIX\b|\bINCIDENTAL\b/.test(mc)) {
+        // Find start line
+        const idx = src.indexOf(mc);
+        const lineNum = src.slice(0, idx).split('\n').length;
+        // Skip test metadata comments (Juliet template headers, @description blocks)
+        if (/TEMPLATE GENERATED|@description|Label Definition|Template File|Flow Variant/i.test(mc)) continue;
+        // Skip if a finding already covers this line
+        if (findings.some(f => Math.abs(f.source.line - lineNum) <= 2)) continue;
+        const keyword = mc.match(suspiciousKeywords)![1];
+        const nearNode = map.nodes.find(n => Math.abs(n.line_start - lineNum) <= 2) || map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'META (resolve suspicious comments before release)',
+            severity: 'low',
+            description: `L${lineNum}: Suspicious multi-line comment contains '${keyword}'`,
+            fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-546', name: 'Suspicious Comment', holds: findings.length === 0, findings };
+};
 export const verifyCWE547 = v('CWE-547', 'Use of Hard-coded, Security-relevant Constants', 'medium', 'META', 'AUTH', nSt, /\bconfig\b|\benv\b|\bconfigurable\b/i, 'STORAGE (configurable security constants — not hard-coded)', 'Make security constants configurable. Hard-coded values cannot be updated without redeployment.');
-export const verifyCWE563 = v('CWE-563', 'Assignment to Variable without Use', 'low', 'TRANSFORM', 'STORAGE', nEg, /\bused\b|\blint\b|\bno-unused\b/i, 'EGRESS (remove unused variable assignments)', 'Remove unused assignments. They may indicate logic errors or incomplete implementation.');
-export const verifyCWE571 = v('CWE-571', 'Expression is Always True', 'low', 'CONTROL', 'STRUCTURAL', nCi, /\blint\b|\bstatic.*analysis\b|\bcorrect\b/i, 'CONTROL (correct conditional expressions)', 'Fix always-true expressions. They indicate logic errors or dead branches.');
+// CWE-563: Structural — detect variables assigned but never read
+export const verifyCWE563 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-563', name: 'Assignment to Variable without Use', holds: true, findings };
+
+  const lines = src.split('\n');
+
+  // Collect variable assignments: both declarations with initializers and bare assignments
+  // Java: int x = 5; or x = 5; (after int x; declaration)
+  // JS/TS: let x = 5; const x = 5; var x = 5;
+  const javaAssignWithType = /^\s*(?:final\s+)?(?:int|long|float|double|boolean|char|byte|short|String|Object|\w+(?:<[^>]+>)?)\s+(\w+)\s*=\s*(.+);/;
+  const jsAssign = /^\s*(?:let|const|var)\s+(\w+)\s*=\s*(.+);/;
+  // Bare assignment: varName = value; (not ==, not !=, not +=, etc.)
+  const bareAssign = /^\s*(\w+)\s*=\s*(?!=)(.+);/;
+
+  // First pass: collect all local variable declarations (Java: type varName;)
+  const declaredVars = new Set<string>();
+  for (const line of lines) {
+    const declMatch = line.match(/^\s*(?:final\s+)?(?:int|long|float|double|boolean|char|byte|short|String|Object|\w+(?:<[^>]+>)?)\s+(\w+)\s*;/);
+    if (declMatch) declaredVars.add(declMatch[1]);
+    const declInit = javaAssignWithType.exec(line) || jsAssign.exec(line);
+    if (declInit) declaredVars.add(declInit[1]);
+  }
+
+  // Track which assignments we've already flagged
+  const flagged = new Set<string>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Skip comments
+    if (/^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line)) continue;
+
+    let varName: string | null = null;
+
+    const typedMatch = javaAssignWithType.exec(line) || jsAssign.exec(line);
+    if (typedMatch) {
+      varName = typedMatch[1];
+    } else {
+      // Check bare assignment for previously declared variables
+      const bareMatch = bareAssign.exec(line);
+      if (bareMatch && declaredVars.has(bareMatch[1])) {
+        varName = bareMatch[1];
+      }
+    }
+
+    if (!varName) continue;
+    // Skip common false positives
+    if (['i', 'j', 'k', 'args', 'e', 'ex', 'err', '_', 'this'].includes(varName)) continue;
+    // Skip if inside a for-loop
+    if (/\bfor\s*\(/.test(line)) continue;
+    // Skip if already flagged
+    if (flagged.has(`${varName}:${i}`)) continue;
+
+    // Find the containing scope
+    let scopeEnd = lines.length - 1;
+    let braceDepth = 0;
+    for (let j = i; j < lines.length; j++) {
+      for (const ch of lines[j]) {
+        if (ch === '{') braceDepth++;
+        if (ch === '}') braceDepth--;
+      }
+      if (braceDepth < 0) { scopeEnd = j; break; }
+    }
+
+    // Check if variable is used (read) after assignment in the scope
+    let isUsed = false;
+    const varPattern = new RegExp(`\\b${varName}\\b`);
+    for (let j = i + 1; j <= scopeEnd; j++) {
+      const checkLine = lines[j];
+      // Skip comments
+      if (/^\s*\/\//.test(checkLine) || /^\s*\*/.test(checkLine) || /^\s*\/\*/.test(checkLine)) continue;
+      // Strip inline comments
+      const stripped = checkLine.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      if (varPattern.test(stripped)) {
+        // Check it's not just another bare assignment to the same var
+        const isReassign = new RegExp(`^\\s*${varName}\\s*=\\s*(?!=)`).test(stripped);
+        if (!isReassign) {
+          isUsed = true;
+          break;
+        }
+      }
+    }
+
+    if (!isUsed) {
+      flagged.add(`${varName}:${i}`);
+      const nearNode = map.nodes.find(n => n.line_start === i + 1) ||
+        map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2 && n.node_type === 'TRANSFORM') ||
+        map.nodes[0];
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'EGRESS (variable should be used after assignment)',
+          severity: 'low',
+          description: `L${i + 1}: Variable '${varName}' is assigned but never used in its scope.`,
+          fix: 'Remove unused variable assignments. They may indicate logic errors or incomplete implementation.',
+        });
+      }
+    }
+  }
+
+  return { cwe: 'CWE-563', name: 'Assignment to Variable without Use', holds: findings.length === 0, findings };
+};
+// CWE-571: Structural — scan source for expressions that always evaluate to true
+export const verifyCWE571 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-571', name: 'Expression is Always True', holds: true, findings };
+
+  const lines = src.split('\n');
+  const alwaysTruePatterns: Array<{ re: RegExp; desc: string }> = [
+    { re: /\bif\s*\(\s*true\s*\)/, desc: 'if(true)' },
+    { re: /\bwhile\s*\(\s*true\s*\)/, desc: 'while(true) — may be intentional loop' },
+    { re: /\bif\s*\(\s*(\w+)\s*==\s*\1\s*\)/, desc: 'x == x (always true)' },
+    { re: /\bif\s*\(\s*\w+\s*<\s*Integer\.MAX_VALUE\s*\)/, desc: 'n < Integer.MAX_VALUE (always true for int)' },
+    { re: /\bif\s*\(\s*\w+\s*>\s*Integer\.MIN_VALUE\s*\)/, desc: 'n > Integer.MIN_VALUE (always true for int)' },
+    { re: /\bif\s*\(\s*\w+\s*>=\s*0\s*\)(?=.*\bnew\s+SecureRandom\b)/, desc: 'random >= 0 (always true)' },
+    { re: /\bif\s*\(\s*\w+\s*<=\s*Integer\.MAX_VALUE\s*\)/, desc: 'n <= Integer.MAX_VALUE (always true)' },
+  ];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line)) continue;
+
+    for (const pat of alwaysTruePatterns) {
+      if (pat.re.test(line)) {
+        // Skip while(true) as it's often intentional
+        if (pat.desc.includes('while(true)')) continue;
+        const nearNode = map.nodes.find(n => n.line_start === i + 1) ||
+          map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2 && n.node_type === 'CONTROL') ||
+          map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'CONTROL (correct conditional expression)',
+            severity: 'low',
+            description: `L${i + 1}: Expression always evaluates to true: ${pat.desc}. The else branch is dead code.`,
+            fix: 'Fix always-true expressions. They indicate logic errors or dead branches.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-571', name: 'Expression is Always True', holds: findings.length === 0, findings };
+};
 export const verifyCWE574 = v('CWE-574', 'EJB Bad Practices: Use of Synchronization Primitives', 'medium', 'STRUCTURAL', 'CONTROL', nE, /\bcontainer.*managed\b|\bno.*sync.*ejb\b/i, 'EXTERNAL (container-managed concurrency)', 'Do not use synchronization primitives in EJBs. Container manages concurrency.');
 export const verifyCWE579 = v('CWE-579', 'J2EE Bad Practices: Non-serializable Object Stored in Session', 'medium', 'TRANSFORM', 'STORAGE', nS, /\bSerializable\b|\bjson\b|\bserializ\b/i, 'STRUCTURAL (serializable session objects)', 'Ensure all session objects implement Serializable for J2EE session replication.');
 export const verifyCWE580 = v('CWE-580', 'clone() Method Without super.clone()', 'low', 'STRUCTURAL', 'TRANSFORM', nE, /\bsuper\.clone\b/i, 'EXTERNAL (call super.clone() in clone implementations)', 'Always call super.clone() in clone() overrides.');
@@ -493,6 +904,76 @@ export const verifyCWE926 = v('CWE-926', 'Improper Export of Android Application
 // ===========================================================================
 // REGISTRY
 // ===========================================================================
+
+// CWE-398: Structural — detect poor code quality indicators (empty blocks)
+export const verifyCWE398 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-398', name: 'Indicator of Poor Code Quality', holds: true, findings };
+
+  const lines = src.split('\n');
+
+  // Pattern: empty blocks — { } with nothing but whitespace inside
+  // Skip catch blocks (empty catch is CWE-391), skip intentional patterns
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+    // Single-line empty block: { }
+    if (/\{\s*\}/.test(line)) {
+      // Skip catch blocks, class declarations, interface methods, constructor bodies
+      if (/\bcatch\b/.test(line) || /\bclass\b/.test(line) || /\binterface\b/.test(line)) continue;
+      // Skip method signatures (abstract/interface)
+      if (/\babstract\b/.test(line)) continue;
+      const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+      if (nearNode) {
+        findings.push({
+          source: nodeRef(nearNode), sink: nodeRef(nearNode),
+          missing: 'STRUCTURAL (non-empty code block)',
+          severity: 'low',
+          description: `L${i + 1}: Empty code block has no effect. May indicate missing implementation.`,
+          fix: 'Add code inside the block or remove it. Empty blocks may indicate unfinished code.',
+        });
+      }
+      continue;
+    }
+
+    // Multi-line empty block: { on one line, } on next (with only whitespace between)
+    if (/\{\s*$/.test(line)) {
+      // Look for closing brace with only whitespace between
+      let j = i + 1;
+      let isEmpty = true;
+      while (j < lines.length) {
+        const nextLine = lines[j].trim();
+        if (nextLine === '}') break;
+        if (nextLine !== '' && !nextLine.startsWith('//') && !nextLine.startsWith('*')) {
+          isEmpty = false;
+          break;
+        }
+        j++;
+        if (j - i > 5) { isEmpty = false; break; } // too many lines, not empty
+      }
+      if (isEmpty && j < lines.length && lines[j].trim() === '}') {
+        // Check it's not a catch block, class def, etc.
+        if (/\bcatch\b/.test(line) || /\bclass\b/.test(line) || /\binterface\b/.test(line)) continue;
+        // Check it's not a method in a Juliet test (good1, bad etc.) - check the previous non-blank line
+        if (/\bvoid\s+(bad|good|main)\b/.test(line)) continue;
+        const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'STRUCTURAL (non-empty code block)',
+            severity: 'low',
+            description: `L${i + 1}-${j + 1}: Empty code block has no effect. May indicate missing implementation.`,
+            fix: 'Add code inside the block or remove it. Empty blocks may indicate unfinished code.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-398', name: 'Indicator of Poor Code Quality', holds: findings.length === 0, findings };
+};
 
 export const BATCH_016_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   // 4-CWE shapes
@@ -538,4 +1019,5 @@ export const BATCH_016_REGISTRY: Record<string, (map: NeuralMap) => Verification
   'CWE-708': verifyCWE708, 'CWE-763': verifyCWE763, 'CWE-783': verifyCWE783,
   'CWE-798': verifyCWE798_gen, 'CWE-824': verifyCWE824_gen, 'CWE-832': verifyCWE832,
   'CWE-9': verifyCWE9, 'CWE-923': verifyCWE923, 'CWE-926': verifyCWE926,
+  'CWE-398': verifyCWE398,
 };

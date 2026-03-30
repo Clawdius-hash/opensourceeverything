@@ -11,7 +11,7 @@
  *   - prisma.findMany/findUnique/create/update/delete/etc → typescript.ts lines 139-159
  *   - prisma.$queryRaw/$executeRaw/$transaction/$connect/$disconnect → typescript.ts
  *   - $queryRaw/$queryRawUnsafe/$executeRaw/$executeRawUnsafe → calleePatterns.ts wildcard sets
- *   - NextRequest.*/NextResponse.*/cookies()/headers()/searchParams.* → typescript.ts lines 58-73
+ *   - NextRequest.{*}/NextResponse.{*}/cookies()/headers()/searchParams.{*} → typescript.ts lines 58-73
  *   - getServerSideProps/getStaticProps → manifest-generator.ts detection only (not phonemes)
  *   - redirect/notFound/revalidatePath/revalidateTag → typescript.ts direct calls
  */

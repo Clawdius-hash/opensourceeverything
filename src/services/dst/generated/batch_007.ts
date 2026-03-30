@@ -364,17 +364,20 @@ export const verifyCWE754 = createTransformTransformVerifier(
 /** CWE-329: Generation of Predictable IV/Nonce */
 export function verifyCWE329(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+  const reported = new Set<string>();
   const transforms = nodesOfType(map, 'TRANSFORM');
   const cryptoSinks = transforms.filter(n =>
     n.node_subtype.includes('encrypt') || n.node_subtype.includes('cipher') ||
     n.code_snapshot.match(/\b(createCipher|AES|CBC|encrypt|cipher|iv|nonce)\b/i) !== null
   );
 
+  // --- Strategy 1: Graph-based (TRANSFORM -> crypto TRANSFORM without CONTROL) ---
   for (const src of transforms) {
     for (const sink of cryptoSinks) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
         if (!IV_SAFE.test(src.code_snapshot) && !IV_SAFE.test(sink.code_snapshot)) {
+          reported.add(sink.id);
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
@@ -386,6 +389,38 @@ export function verifyCWE329(map: NeuralMap): VerificationResult {
               'Never reuse IVs. Never derive IVs from predictable values. Prefer GCM over CBC.',
           });
         }
+      }
+    }
+  }
+
+  // --- Strategy 2: Code snapshot scan for CBC/ECB without random IV ---
+  // Detects: Cipher.getInstance("DES/CBC/...") or Cipher.getInstance("AES/ECB/...")
+  // or cryptoAlg1 property (which resolves to DES/ECB/PKCS5Padding)
+  const CBC_WITHOUT_RANDOM_IV = /Cipher\.getInstance\s*\(\s*["'][^"']*(?:CBC|ECB)[^"']*["']/i;
+  const WEAK_CIPHER_PROPERTY = /\bgetProperty\s*\(\s*["']cryptoAlg1["']/i;
+  const WEAK_CIPHER_DIRECT = /Cipher\.getInstance\s*\(\s*["'](?:DES|DESede|RC4|RC2|Blowfish)(?:\/|\s*["'])/i;
+  const RANDOM_IV_SAFE = /\brandomBytes\b|\bgetRandomValues\b|\bSecureRandom\b.*\bgenerateSeed\b|\bIvParameterSpec\b.*\brandom\b/i;
+
+  for (const node of map.nodes) {
+    if (reported.has(node.id)) continue;
+    const snap = node.code_snapshot;
+    if (CBC_WITHOUT_RANDOM_IV.test(snap) || WEAK_CIPHER_PROPERTY.test(snap) || WEAK_CIPHER_DIRECT.test(snap)) {
+      // Check if there's a random IV being used in the same scope
+      const hasRandomIV = RANDOM_IV_SAFE.test(snap) ||
+        map.nodes.some(n => n.id !== node.id && RANDOM_IV_SAFE.test(n.code_snapshot) &&
+          /\bgenerateSeed\b|\brandomBytes\b/i.test(n.code_snapshot));
+      if (!hasRandomIV) {
+        reported.add(node.id);
+        findings.push({
+          source: nodeRef(node),
+          sink: nodeRef(node),
+          missing: 'CONTROL (random IV/nonce generation — use CSPRNG)',
+          severity: 'high',
+          description: `${node.label} uses a cipher mode (CBC/ECB) that requires a random IV. ` +
+            `No CSPRNG-based IV generation was detected. ECB mode is always unsafe.`,
+          fix: 'Generate IVs using SecureRandom.generateSeed() or crypto.randomBytes(). ' +
+            'Prefer AES-GCM over CBC. Never use ECB mode.',
+        });
       }
     }
   }
