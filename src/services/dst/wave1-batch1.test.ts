@@ -45,7 +45,7 @@ function scanFile(filePath: string): { cwe: string; holds: boolean }[] {
   resetSequence();
   const tree = parser.parse(code);
   const { map } = buildNeuralMap(tree, code, filePath, javaProfile);
-  return verifyAll(map);
+  return verifyAll(map, undefined, { noDedup: true });
 }
 
 function findResult(results: { cwe: string; holds: boolean }[], cweId: string): boolean | undefined {

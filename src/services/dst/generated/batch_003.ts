@@ -21,6 +21,7 @@
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, createGenericVerifier,
+  detectLanguage,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -579,15 +580,22 @@ export const verifyCWE463 = createTransformStorageVerifier(
 // G. INDIVIDUAL (1 CWE)
 // ===========================================================================
 
-/** CWE-588: Attempt to Access Child of a Non-structure Pointer */
-export const verifyCWE588 = createTransformStorageVerifier(
-  'CWE-588', 'Attempt to Access Child of a Non-structure Pointer', 'high',
-  bufferStorageNodes,
-  /\btypeof\b|\binstanceof\b|\bnull.*check\b|\bpointer.*valid\b|\bstruct.*check\b/i,
-  'CONTROL (type/structure validation before member access)',
-  'Validate that pointers reference valid structures before accessing members. ' +
-    'Use typeof/instanceof checks. Never dereference void* without casting to correct type.',
-);
+/** CWE-588: Attempt to Access Child of a Non-structure Pointer — C/C++ only */
+export const verifyCWE588 = (map: NeuralMap): VerificationResult => {
+  const lang = detectLanguage(map);
+  // This is a C/C++ pointer safety issue — not relevant to Java/JS/Python etc.
+  if (lang && !['c', 'cpp', 'c++'].some(l => lang.includes(l))) {
+    return { cwe: 'CWE-588', name: 'Attempt to Access Child of a Non-structure Pointer', holds: true, findings: [] };
+  }
+  return createTransformStorageVerifier(
+    'CWE-588', 'Attempt to Access Child of a Non-structure Pointer', 'high',
+    bufferStorageNodes,
+    /\btypeof\b|\binstanceof\b|\bnull.*check\b|\bpointer.*valid\b|\bstruct.*check\b/i,
+    'CONTROL (type/structure validation before member access)',
+    'Validate that pointers reference valid structures before accessing members. ' +
+      'Use typeof/instanceof checks. Never dereference void* without casting to correct type.',
+  )(map);
+};
 
 // ===========================================================================
 // REGISTRY

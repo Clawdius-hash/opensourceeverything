@@ -14,10 +14,31 @@ import {
   bfs_nC as nC, bfs_nT as nT, bfs_nCi as nCi, bfs_nA as nA,
   bfs_nTi as nTi, bfs_nM as nM,
   SP_V as V, SP_S as S, SP_A as A, SP_E as E, SP_L as L, SP_R as R, SP_I as I,
-  scanSourceLines, findNearestNode,
+  scanSourceLines, findNearestNode, detectLanguage,
   type BfsCheck,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
+
+// ---------------------------------------------------------------------------
+// Language-gated verifier factory — wraps makeVerifier with a language check.
+// Returns PASS immediately if the scanned file doesn't match the required language(s).
+// ---------------------------------------------------------------------------
+function langGated(
+  langs: string[],
+  cweId: string, cweName: string, severity: Severity,
+  sourceType: NodeType, sinkType: NodeType,
+  bfsCheck: BfsCheck, safePattern: RegExp,
+  missingDesc: string, fixDesc: string,
+): (map: NeuralMap) => VerificationResult {
+  const inner = v(cweId, cweName, severity, sourceType, sinkType, bfsCheck, safePattern, missingDesc, fixDesc);
+  return (map: NeuralMap): VerificationResult => {
+    const lang = detectLanguage(map);
+    if (lang && !langs.some(l => lang.includes(l))) {
+      return { cwe: cweId, name: cweName, holds: true, findings: [] };
+    }
+    return inner(map);
+  };
+}
 
 // ===========================================================================
 // INGRESS→CONTROL without CONTROL (9 CWEs)
@@ -159,11 +180,52 @@ export const verifyCWE606 = v('CWE-606', 'Unchecked Input for Loop Condition', '
 // INGRESS→TRANSFORM without AUTH (6 CWEs)
 // ===========================================================================
 export const verifyCWE345 = v('CWE-345', 'Insufficient Verification of Data Authenticity', 'high', 'INGRESS', 'TRANSFORM', nA, /\bsignature\b|\bHMAC\b|\bverif\b|\bintegrity\b|\bMAC\b/i, 'AUTH (data authenticity verification — signature/HMAC)', 'Verify data authenticity with HMAC or digital signatures before processing.');
-export const verifyCWE408 = v('CWE-408', 'Incorrect Behavior Order: Early Amplification', 'high', 'INGRESS', 'TRANSFORM', nA, /\bauth\b.*\bbefore\b|\bverif.*first\b|\brate.*limit\b/i, 'AUTH (authenticate before expensive operations)', 'Authenticate requests before performing expensive operations to prevent amplification DoS.');
-export const verifyCWE422 = v('CWE-422', 'Unprotected Windows Messaging Channel (Shatter)', 'high', 'INGRESS', 'TRANSFORM', nA, A, 'AUTH (message authentication for IPC)', 'Authenticate sources of Windows messages. Validate message origin before processing.');
+// CWE-408: Only flag when there's evidence of expensive operations (crypto, DB, network I/O)
+// before authentication — not on every INGRESS→TRANSFORM path.
+export const verifyCWE408 = (map: NeuralMap): VerificationResult => {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+  const expensiveSinks = map.nodes.filter(n =>
+    n.node_type === 'TRANSFORM' &&
+    /\bcrypto\b|\bhash\b|\bencrypt\b|\bdecrypt\b|\bquery\b|\bfetch\b|\bhttp\b|\brequest\b|\bspawn\b|\bexec\b/i.test(n.code_snapshot)
+  );
+  for (const src of ingress) {
+    for (const sink of expensiveSinks) {
+      if (src.id === sink.id) continue;
+      if (nA(map, src.id, sink.id)) {
+        if (!/\bauth\b.*\bbefore\b|\bverif.*first\b|\brate.*limit\b/i.test(sink.code_snapshot) &&
+            !/\bauth\b.*\bbefore\b|\bverif.*first\b|\brate.*limit\b/i.test(src.code_snapshot)) {
+          findings.push({
+            source: nodeRef(src), sink: nodeRef(sink),
+            missing: 'AUTH (authenticate before expensive operations)', severity: 'high',
+            description: `INGRESS at ${src.label} → TRANSFORM at ${sink.label} without controls. Vulnerable to Incorrect Behavior Order: Early Amplification.`,
+            fix: 'Authenticate requests before performing expensive operations to prevent amplification DoS.',
+          });
+        }
+      }
+    }
+  }
+  return { cwe: 'CWE-408', name: 'Incorrect Behavior Order: Early Amplification', holds: findings.length === 0, findings };
+};
+// CWE-422: Windows Shatter attack — only relevant to C/C++ Win32 code
+export const verifyCWE422 = langGated(['c', 'cpp', 'c++'], 'CWE-422', 'Unprotected Windows Messaging Channel (Shatter)', 'high', 'INGRESS', 'TRANSFORM', nA, A, 'AUTH (message authentication for IPC)', 'Authenticate sources of Windows messages. Validate message origin before processing.');
 export const verifyCWE603 = v('CWE-603', 'Use of Client-Side Authentication', 'critical', 'INGRESS', 'TRANSFORM', nA, /\bserver.*side\b|\bbackend.*auth\b|\bAPI.*auth\b/i, 'AUTH (server-side authentication — never client-only)', 'Always authenticate on the server. Client-side auth can be bypassed by modifying the client.');
-export const verifyCWE782 = v('CWE-782', 'Exposed IOCTL with Insufficient Access Control', 'high', 'INGRESS', 'TRANSFORM', nA, A, 'AUTH (IOCTL access control)', 'Restrict IOCTL access to authorized processes. Validate caller privileges.');
-export const verifyCWE925 = v('CWE-925', 'Improper Verification of Intent by Broadcast Receiver', 'high', 'INGRESS', 'TRANSFORM', nA, /\bpermission\b|\bexport.*false\b|\bverif.*intent\b/i, 'AUTH (broadcast receiver intent verification)', 'Verify intent sources. Set exported=false for internal receivers. Require permissions.');
+// CWE-782: IOCTL — only relevant to C/C++ kernel/driver code
+export const verifyCWE782 = langGated(['c', 'cpp', 'c++'], 'CWE-782', 'Exposed IOCTL with Insufficient Access Control', 'high', 'INGRESS', 'TRANSFORM', nA, A, 'AUTH (IOCTL access control)', 'Restrict IOCTL access to authorized processes. Validate caller privileges.');
+// CWE-925: Android BroadcastReceiver — only relevant to Java/Kotlin Android code
+export const verifyCWE925 = (map: NeuralMap): VerificationResult => {
+  const lang = detectLanguage(map);
+  // Only applies to Java/Kotlin AND must have Android-specific patterns
+  if (lang && !lang.includes('java') && !lang.includes('kotlin')) {
+    return { cwe: 'CWE-925', name: 'Improper Verification of Intent by Broadcast Receiver', holds: true, findings: [] };
+  }
+  const allCode = map.nodes.map(n => n.code_snapshot).join('\n');
+  // Must have Android BroadcastReceiver evidence
+  if (!/\bBroadcastReceiver\b|\bonReceive\b|\bregisterReceiver\b|\bIntentFilter\b/i.test(allCode)) {
+    return { cwe: 'CWE-925', name: 'Improper Verification of Intent by Broadcast Receiver', holds: true, findings: [] };
+  }
+  return v('CWE-925', 'Improper Verification of Intent by Broadcast Receiver', 'high', 'INGRESS', 'TRANSFORM', nA, /\bpermission\b|\bexport.*false\b|\bverif.*intent\b/i, 'AUTH (broadcast receiver intent verification)', 'Verify intent sources. Set exported=false for internal receivers. Require permissions.')(map);
+};
 
 // ===========================================================================
 // STORAGE→TRANSFORM without CONTROL (5 CWEs)

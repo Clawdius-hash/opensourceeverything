@@ -12,6 +12,9 @@
 import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from './types';
 import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate, scopeBasedTaintReaches } from './generated/_helpers.js';
 import { GENERATED_REGISTRY } from './generated/index.js';
+import { verifyCWE336_B2, verifyCWE614_B2, verifyCWE759_B2, verifyCWE760_B2 } from './generated/batch_crypto_B2.js';
+import { deduplicateResults } from './dedup.js';
+import { filterCWEsForLanguage } from './cwe-filter.js';
 
 // ---------------------------------------------------------------------------
 // Comment stripping — prevents comments from defeating safe-pattern detection
@@ -126,6 +129,8 @@ export interface Finding {
   description: string;
   /** Remediation guidance */
   fix: string;
+  /** CWEs collapsed into this finding by source-sink dedup (Layer 2) */
+  collapsed_cwes?: string[];
 }
 
 export interface NodeRef {
@@ -460,7 +465,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
-          /\bescape\s*\(|\bescapeHtml\b|\bencode\s*\(|\bencodeURI\b|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b/i
+          /\bescape\s*\(|\bescapeHtml\b|\bencode\s*\(|\bencodeURI\b|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i
         ) !== null;
 
         // JSON responses are not vulnerable to XSS — Content-Type: application/json
@@ -496,7 +501,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
           const isAttributeContext = /setAttribute\s*\(/i.test(sinkContextCode) || /attribute_context/i.test(sink.node_subtype);
 
           // Determine which encoding functions are actually used.
-          const hasHtmlEncoding = /\bescapeHtml\b|\bhtmlEncode\b|\bDOMPurify\b|\btextContent\b/i.test(combinedScope);
+          const hasHtmlEncoding = /\bescapeHtml\b|\bhtmlEncode\b|\bDOMPurify\b|\btextContent\b|\bencodeForHTML\b|\bESAPI\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i.test(combinedScope);
           const hasUrlEncoding = /\bencodeURIComponent\b|\bencodeURI\b/i.test(combinedScope);
           const hasJsEncoding = /\bJSON\.stringify\b|\bjsEscape\b|\bescapeJs\b/i.test(combinedScope);
 
@@ -1664,6 +1669,68 @@ function verifyCWE400(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Tertiary check: INGRESS → CONTROL/loop with tainted loop bounds.
+  // A for/while/do loop whose bound is user-controlled IS resource exhaustion (CPU).
+  // The mapper tags such loops with 'tainted_loop_bound' and creates DATA_FLOW edges.
+  if (findings.length === 0) {
+    const taintedLoops = map.nodes.filter(n =>
+      n.node_type === 'CONTROL' && n.node_subtype === 'loop' &&
+      (n.tags?.includes('tainted_loop_bound') || n.data_in.some((d: any) => d.tainted))
+    );
+    for (const loop of taintedLoops) {
+      // Check that the loop doesn't already have bounds validation
+      const scopeSnapshots = getContainingScopeSnapshots(map, loop.id);
+      const combined = stripComments(scopeSnapshots.join('\n') || loop.analysis_snapshot || loop.code_snapshot);
+      const isBounded = combined.match(
+        /\bmax\b|\blimit\b|\bcap\b|\bMAX_|\bLIMIT_|\bmaxSize|\bmaxLength|\bMath\.min\b/i
+      ) !== null;
+      if (isBounded) continue;
+      // Also check if the loop is wrapped by an if-statement that bounds the tainted variable.
+      // Pattern: if (var > 0 && var <= N) { for(...) } — Juliet goodB2G pattern.
+      const containingBranch400 = map.nodes.find(n =>
+        n.node_type === 'CONTROL' && n.node_subtype === 'branch' &&
+        n.line_start < loop.line_start && n.line_end >= loop.line_end &&
+        /\b\w+\s*(?:<=?|>=?)\s*\d+/.test(n.analysis_snapshot || n.code_snapshot)
+      );
+      if (containingBranch400) continue;
+
+      // Find the INGRESS source that taints this loop
+      const taintedIn = loop.data_in.find((d: any) => d.tainted);
+      const srcNodeId = taintedIn?.source;
+      let srcNode = srcNodeId ? map.nodes.find(n => n.id === srcNodeId) : null;
+      // Walk back to find an INGRESS node in the taint chain
+      if (srcNode && srcNode.node_type !== 'INGRESS') {
+        for (const ing of ingress) {
+          if (sharesFunctionScope(map, ing.id, loop.id)) {
+            srcNode = ing;
+            break;
+          }
+        }
+      }
+      if (!srcNode) {
+        // Fallback: use any INGRESS in the same function scope
+        for (const ing of ingress) {
+          if (sharesFunctionScope(map, ing.id, loop.id)) {
+            srcNode = ing;
+            break;
+          }
+        }
+      }
+      if (srcNode) {
+        findings.push({
+          source: nodeRef(srcNode),
+          sink: nodeRef(loop),
+          missing: 'CONTROL (input size validation or resource limit)',
+          severity: 'high',
+          description: `User input from ${srcNode.label} controls loop iteration count at ${loop.label} without bounds. ` +
+            `An attacker can exhaust server CPU resources causing denial of service.`,
+          fix: 'Validate and limit user input before using in loop condition. ' +
+            'Add upper bound: if (count > MAX_ALLOWED) count = MAX_ALLOWED. Always enforce maximum iteration limits.',
+        });
+      }
+    }
+  }
+
   return {
     cwe: 'CWE-400',
     name: 'Uncontrolled Resource Consumption',
@@ -2166,7 +2233,8 @@ function verifyCWE328(map: NeuralMap): VerificationResult {
   const ingress = nodesOfType(map, 'INGRESS');
 
   // Broad weak-hash regex — matches the algorithm name across languages
-  const WEAK_HASH_RE = /\b(MD5|SHA-?1|md5|sha1)\b|CC_MD5|Digest::MD5|Digest::SHA1|hashlib\.md5|hashlib\.sha1|md5\.New|sha1\.New|md5\.Sum|sha1\.Sum|MD5\.Create|SHA1\.Create/i;
+  // MD2 and MD4 are also cryptographically broken (Juliet uses MD2 in CWE328 test cases)
+  const WEAK_HASH_RE = /\b(MD[245]|SHA-?1|md[245]|sha1)\b|CC_MD5|Digest::MD5|Digest::SHA1|hashlib\.md5|hashlib\.sha1|md5\.New|sha1\.New|md5\.Sum|sha1\.Sum|MD5\.Create|SHA1\.Create/i;
 
   // Safe override — if the code also uses a strong algorithm, skip
   const STRONG_HASH_RE = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bSHA-?256\b|\bSHA-?384\b|\bSHA-?512\b|\bSHA3\b|\bblake2\b/i;
@@ -2267,9 +2335,9 @@ function verifyCWE328(map: NeuralMap): VerificationResult {
   // This catches patterns like getProperty("hashAlg1") which resolves to MD5 in the benchmark
   // properties file, and direct weak hash API calls that may not have a tainted path.
   {
-    const WEAK_HASH_LITERAL_C = /\bgetInstance\s*\(\s*["'](?:MD5|SHA-?1|sha-?1|md5)["']/i;
+    const WEAK_HASH_LITERAL_C = /\bgetInstance\s*\(\s*["'](?:MD[245]|SHA-?1|sha-?1|md[245])["']/i;
     const WEAK_HASH_PROPERTY_C = /\bgetProperty\s*\(\s*["']hashAlg1["']/i;
-    const WEAK_HASH_CREATE_C = /\bcreateHash\s*\(\s*["'](?:md5|sha-?1)["']/i;
+    const WEAK_HASH_CREATE_C = /\bcreateHash\s*\(\s*["'](?:md[245]|sha-?1)["']/i;
     const WEAK_HASH_HASHLIB_C = /\bhashlib\.(?:md5|sha1)\b/i;
     const reported = new Set<string>(findings.map(f => f.sink.id));
 
@@ -4590,6 +4658,54 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // --- Source-based detection: variable assigned null then dereferenced ---
+  // Catches the Juliet pattern: data = null; ... data.toString() without null check.
+  // The graph-based approach above misses this because the source (null literal) is not
+  // a nullable API call (find/get/query) — it's a direct null assignment.
+  if (findings.length === 0) {
+    const src476 = map.source_code || '';
+    if (src476) {
+      const lines = src476.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+        // Pattern: variable explicitly assigned null, then dereferenced without reassignment or null check
+        const nullAssign = line.match(/(\w+)\s*=\s*null\s*;/);
+        if (nullAssign) {
+          const varName = nullAssign[1];
+          let reassigned = false;
+          for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+            const ahead = lines[j];
+            if (/^\s*\/\//.test(ahead) || /^\s*\*/.test(ahead)) continue;
+            // Check if variable is reassigned to non-null
+            const reassignPat = new RegExp(`\\b${varName}\\s*=\\s*(?!null\\s*;|=)`);
+            if (reassignPat.test(ahead)) { reassigned = true; break; }
+            // Check if there's a null check
+            const nullCheckPat = new RegExp(`\\b${varName}\\s*!=\\s*null\\b|\\b${varName}\\s*==\\s*null\\b`);
+            if (nullCheckPat.test(ahead)) { reassigned = true; break; }
+            // Check if variable is dereferenced
+            const derefPat = new RegExp(`\\b${varName}\\.(\\w+)\\s*\\(`);
+            if (derefPat.test(ahead)) {
+              if (/&&/.test(ahead) && nullCheckPat.test(ahead)) { reassigned = true; break; }
+              const nearNode = map.nodes.find(n => Math.abs(n.line_start - (j + 1)) <= 2) || map.nodes[0];
+              if (nearNode) {
+                findings.push({
+                  source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                  missing: 'CONTROL (null check before dereference)',
+                  severity: 'medium',
+                  description: `L${j + 1}: Variable '${varName}' was assigned null at L${i + 1} and is dereferenced without a null check.`,
+                  fix: 'Add a null check before dereferencing. Ensure the variable is assigned a non-null value before use.',
+                });
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (findings.length === 0) {
     const unwrapNodes = map.nodes.filter(n =>
       UNSAFE_UNWRAP_RE.test(n.analysis_snapshot || n.code_snapshot) && !NULL_SAFE_RE.test(stripComments(n.analysis_snapshot || n.code_snapshot))
@@ -5007,6 +5123,47 @@ function verifyCWE759(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Strategy D: MessageDigest.digest() without hash.update() salt (Juliet CWE-759 pattern)
+  // Juliet: MessageDigest.getInstance("SHA-512") then hash.digest("data".getBytes())
+  // with NO hash.update(salt) before digest. Unsalted hashing of ANY data without salt.
+  {
+    const MD_GET_INSTANCE_759 = /\bMessageDigest\.getInstance\s*\(/;
+    const MD_DIGEST_759 = /\.digest\s*\(/;
+    const MD_UPDATE_759 = /\.update\s*\(/;
+    const SALT_OR_SECURE_759 = /\bSecureRandom\b|\bgenerateSeed\b|\bsalt\b|\brandomBytes\b|\burandom\b/i;
+    const PROPER_KDF_759 = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b/i;
+    const reported759d = new Set<string>(findings.map(f => f.sink.id));
+
+    for (const node of map.nodes) {
+      if (reported759d.has(node.id)) continue;
+      const snap = stripComments(node.analysis_snapshot || node.code_snapshot);
+      if (!MD_GET_INSTANCE_759.test(snap)) continue;
+      if (!MD_DIGEST_759.test(snap)) continue;
+      if (PROPER_KDF_759.test(snap)) continue;
+      if (SALT_OR_SECURE_759.test(snap)) continue;
+      // If there's a hash.update() present, check if the update is a salt
+      if (MD_UPDATE_759.test(snap)) continue;
+      // Check sibling nodes for salt
+      const siblings = map.nodes.filter(n => n.id !== node.id && sharesFunctionScope(map, node.id, n.id));
+      const siblingHasSalt = siblings.some(n => {
+        const ss = stripComments(n.analysis_snapshot || n.code_snapshot);
+        return SALT_OR_SECURE_759.test(ss) || (MD_UPDATE_759.test(ss) && /SecureRandom|generateSeed|randomBytes|urandom/i.test(ss));
+      });
+      if (siblingHasSalt) continue;
+
+      reported759d.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'TRANSFORM (salt the hash -- call hash.update(salt) with random salt before digest)',
+        severity: 'high',
+        description: `${node.label} uses MessageDigest.digest() without any salt. ` +
+          `Unsalted hashes are vulnerable to rainbow table and precomputation attacks.`,
+        fix: 'Add a random salt via hash.update(SecureRandom.generateSeed(32)) before calling digest(). ' +
+          'Better: use bcrypt, scrypt, or Argon2 which handle salting automatically.',
+      });
+    }
+  }
+
   return { cwe: 'CWE-759', name: 'Use of a One-Way Hash without a Salt', holds: findings.length === 0, findings };
 }
 
@@ -5050,6 +5207,45 @@ function verifyCWE760(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Time-based salt for password hashing at ${node.label}. Timestamps are predictable, reducing salt space.`,
         fix: 'Use cryptographically random salt: crypto.randomBytes(16). Timestamps have low entropy.',
+      });
+    }
+  }
+  // Strategy B: java.util.Random used as salt for MessageDigest (Juliet CWE-760 pattern)
+  {
+    const MD_760B = /\bMessageDigest\.getInstance\s*\(/;
+    const MD_UPDATE_760B = /\.update\s*\(/;
+    const WEAK_PRNG_760B = /\bnew\s+(?:java\.util\.)?Random\s*\(/;
+    const WEAK_PRNG_USE_760B = /\brandom\s*\.\s*(?:nextInt|nextLong|nextBytes|nextDouble|nextFloat|nextGaussian)\s*\(/i;
+    const SECURE_PRNG_760B = /\bSecureRandom\b|\bgenerateSeed\b|\brandomBytes\b|\burandom\b/i;
+    const reported760b = new Set(findings.map(f => f.sink.id));
+    for (const node of map.nodes) {
+      if (reported760b.has(node.id)) continue;
+      const snap = stripComments(node.analysis_snapshot || node.code_snapshot);
+      const hasMD = MD_760B.test(snap) || map.nodes.some(n =>
+        n.id !== node.id && sharesFunctionScope(map, node.id, n.id) &&
+        MD_760B.test(stripComments(n.analysis_snapshot || n.code_snapshot)));
+      if (!hasMD) continue;
+      const hasWeakPRNG = WEAK_PRNG_760B.test(snap) || map.nodes.some(n =>
+        n.id !== node.id && sharesFunctionScope(map, node.id, n.id) &&
+        WEAK_PRNG_760B.test(stripComments(n.analysis_snapshot || n.code_snapshot)));
+      if (!hasWeakPRNG) continue;
+      if (SECURE_PRNG_760B.test(snap)) continue;
+      const hasWeakUpdate = MD_UPDATE_760B.test(snap) && (WEAK_PRNG_USE_760B.test(snap) || WEAK_PRNG_760B.test(snap));
+      const siblingsHaveWeakUpdate = map.nodes.some(n => {
+        if (n.id === node.id) return false;
+        if (!sharesFunctionScope(map, node.id, n.id)) return false;
+        const ss = stripComments(n.analysis_snapshot || n.code_snapshot);
+        return MD_UPDATE_760B.test(ss) && (WEAK_PRNG_USE_760B.test(ss) || WEAK_PRNG_760B.test(ss));
+      });
+      if (!hasWeakUpdate && !siblingsHaveWeakUpdate) continue;
+      reported760b.add(node.id);
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'TRANSFORM (use SecureRandom for salt generation, not java.util.Random)',
+        severity: 'high',
+        description: `${node.label} uses java.util.Random for salt generation instead of SecureRandom. ` +
+          `Predictable salts reduce hash uniqueness and enable rainbow table attacks.`,
+        fix: 'Use SecureRandom instead of java.util.Random for generating salts.',
       });
     }
   }
@@ -5105,84 +5301,31 @@ function verifyCWE916(map: NeuralMap): VerificationResult {
 // ---------------------------------------------------------------------------
 
 /**
- * CWEs that only apply to specific platforms. When scanning web languages
- * (JavaScript, TypeScript, Python), these are skipped because their graph
- * patterns (e.g., INGRESS->TRANSFORM without AUTH) fire on generic web code
- * but the actual vulnerability class is OS/framework-specific.
+ * @deprecated Use `shouldSkipCWE()` from `./cwe-filter.ts` instead.
  *
- * This eliminates the 15-20% false positive rate from platform-irrelevant CWEs.
+ * This set is kept for backward compatibility but is no longer used by verifyAll().
+ * The old approach of filtering ALL platform CWEs for ALL "web languages" was broken:
+ * it incorrectly filtered J2EE CWEs from Java, .NET CWEs from C#, and Android CWEs
+ * from Kotlin. The new filter uses per-language platform overlap from MITRE CWE data.
+ *
+ * See: cwe-filter.ts, state/platform_cwe_mapping.md, state/platform_filter_edge_cases.md
  */
 export const PLATFORM_SPECIFIC_CWES: ReadonlySet<string> = new Set([
   // --- Windows ---
-  'CWE-422',  // Unprotected Windows Messaging Channel (Shatter)
-  'CWE-782',  // Exposed IOCTL with Insufficient Access Control
-  'CWE-781',  // Improper Address Validation in IOCTL with METHOD_NEITHER
-  'CWE-40',   // Path Traversal: Windows UNC
-  'CWE-39',   // Path Traversal: 'C:dirname'
-  'CWE-58',   // Path Equivalence: Windows 8.3 Filename
-  'CWE-64',   // Windows Shortcut Following (.LNK)
-  'CWE-65',   // Windows Hard Link
-  'CWE-67',   // Improper Handling of Windows Device Names
-  'CWE-69',   // Improper Handling of Windows ::DATA Alternate Data Stream
-
+  'CWE-422', 'CWE-782', 'CWE-781', 'CWE-40', 'CWE-39', 'CWE-58', 'CWE-64', 'CWE-65', 'CWE-67', 'CWE-69',
   // --- Android ---
-  'CWE-925',  // Improper Verification of Intent by Broadcast Receiver
-  'CWE-926',  // Improper Export of Android Application Components
-
+  'CWE-925', 'CWE-926',
   // --- .NET / ASP.NET ---
-  'CWE-11',   // ASP.NET Misconfiguration: Creating Debug Binary
-  'CWE-12',   // ASP.NET Misconfiguration: Missing Custom Error Page
-  'CWE-13',   // ASP.NET Misconfiguration: Password in Configuration File
-  'CWE-520',  // .NET Misconfiguration: Use of Impersonation
-  'CWE-554',  // ASP.NET Misconfiguration: Not Using Input Validation Framework
-  'CWE-556',  // ASP.NET Misconfiguration: Use of Identity Impersonation
-
+  'CWE-11', 'CWE-12', 'CWE-13', 'CWE-520', 'CWE-554', 'CWE-556',
   // --- J2EE / Struts / EJB ---
-  'CWE-5',    // J2EE Misconfiguration: Data Transmission Without Encryption
-  'CWE-6',    // J2EE Misconfiguration: Insufficient Session-ID Length
-  'CWE-7',    // J2EE Misconfiguration: Missing Custom Error Handling
-  'CWE-8',    // J2EE Misconfiguration: Entity Bean Declared Remote
-  'CWE-9',    // J2EE Misconfiguration: Weak Access Permissions for EJB Methods
-  'CWE-102',  // Struts: Duplicate Validation Forms
-  'CWE-103',  // Struts: Incomplete validate() Method Definition
-  'CWE-104',  // Struts: Form Bean Does Not Extend Validation Class
-  'CWE-105',  // Struts: Form Field Without Validator
-  'CWE-106',  // Struts: Plug-in Framework Not In Use
-  'CWE-107',  // Struts: Unused Validation Form
-  'CWE-108',  // Struts: Unverified Action Form
-  'CWE-109',  // Struts: Validator Turned Off
-  'CWE-110',  // Struts: Validator Without Form Field
-  'CWE-111',  // Direct Use of Unsafe JNI
-  'CWE-245',  // J2EE Bad Practices: Direct Management of Connections
-  'CWE-246',  // J2EE Bad Practices: Direct Use of Sockets
-  'CWE-382',  // J2EE Bad Practices: Use of System.exit()
-  'CWE-383',  // J2EE Bad Practices: Direct Use of Threads
-  'CWE-555',  // J2EE Misconfiguration: Plaintext Password in Configuration File
-  'CWE-574',  // EJB Bad Practices: Use of Synchronization Primitives
-  'CWE-575',  // EJB Bad Practices: Use of AWT Swing
-  'CWE-576',  // EJB Bad Practices: Use of Java I/O
-  'CWE-577',  // EJB Bad Practices: Use of Sockets
-  'CWE-578',  // EJB Bad Practices: Use of Class Loader
-  'CWE-579',  // J2EE Bad Practices: Non-serializable Object Stored in Session
-  'CWE-594',  // J2EE Framework: Saving Unserializable Objects to Disk
-  'CWE-600',  // Uncaught Exception in Servlet
-  'CWE-608',  // Struts: Non-private Field in ActionForm Class
-
+  'CWE-5', 'CWE-6', 'CWE-7', 'CWE-8', 'CWE-9',
+  'CWE-102', 'CWE-103', 'CWE-104', 'CWE-105', 'CWE-106', 'CWE-107', 'CWE-108', 'CWE-109', 'CWE-110',
+  'CWE-111', 'CWE-245', 'CWE-246', 'CWE-382', 'CWE-383', 'CWE-555',
+  'CWE-574', 'CWE-575', 'CWE-576', 'CWE-577', 'CWE-578', 'CWE-579', 'CWE-594', 'CWE-600', 'CWE-608',
   // --- ActiveX / COM ---
-  'CWE-618',  // Exposed Unsafe ActiveX Method
-  'CWE-623',  // Unsafe ActiveX Control Marked Safe For Scripting
-
+  'CWE-618', 'CWE-623',
   // --- Servlet ---
-  'CWE-536',  // Exposure of Information Through Servlet Runtime Error Message
-]);
-
-/**
- * Languages where platform-specific CWEs should be suppressed.
- * These are web/scripting languages that cannot contain Windows kernel code,
- * Android broadcast receivers, J2EE beans, or ActiveX controls.
- */
-const WEB_LANGUAGES: ReadonlySet<string> = new Set([
-  'javascript', 'python',
+  'CWE-536',
 ]);
 
 
@@ -5910,14 +6053,17 @@ function verifyCWE377(map: NeuralMap): VerificationResult {
 /**
  * CWE-378: Creation of Temporary File With Insecure Permissions
  *
- * Temp files created with overly permissive modes (world-readable/writable).
- * Even with safe names, bad permissions let other users read/modify the file.
+ * Temp files created with overly permissive modes (world-readable/writable),
+ * OR temp files created without ANY permission-setting calls afterward.
+ * The Juliet pattern: File.createTempFile() without setReadable/setWritable.
  */
 function verifyCWE378(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const TEMP_CREATE = /\b(mkstemp|mkdtemp|tempfile|tmpfile|createTempFile|GetTempFileName|NamedTemporaryFile|TemporaryFile|fs\.mkdtemp|os\.tmpdir|tmp\.file|tmp\.dir)\b/i;
   const INSECURE_PERMS = /\b(0o?777|0o?766|0o?755|0o?666|0o?664|0o?644|chmod\s*\(\s*[^,]+,\s*0o?7|umask\s*\(\s*0+\s*\)|world.?read|world.?writ|S_IROTH|S_IWOTH|FileMode\s*\(\s*0o?[67])/i;
   const SAFE_PERMS = /\b(0o?600|0o?700|0o?400|0o?500|S_IRUSR|S_IWUSR|owner.?only|FileAttribute|PosixFilePermission.*OWNER|mode\s*=\s*0o?[0-6]00)\b/i;
+  // Java/general: setReadable/setWritable/setExecutable calls = permission management
+  const PERM_SETTER = /\bset(?:Readable|Writable|Executable)\s*\(/i;
 
   const allNodes = map.nodes.filter(n =>
     (n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL' || n.node_type === 'TRANSFORM') &&
@@ -5925,6 +6071,8 @@ function verifyCWE378(map: NeuralMap): VerificationResult {
   );
   for (const node of allNodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+
+    // Strategy 1: Explicit insecure permissions set on temp file
     if (INSECURE_PERMS.test(code) && !SAFE_PERMS.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
@@ -5932,6 +6080,32 @@ function verifyCWE378(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Temporary file at ${node.label} created with overly permissive permissions. Other users on the system can read or modify it.`,
         fix: 'Set permissions to 0600 (owner read/write only) or 0700 (owner only). Use umask(0077) before creation. In Python, use NamedTemporaryFile which defaults to 0600.',
+      });
+      continue;
+    }
+
+    // Strategy 2: createTempFile with NO permission-setting calls in same function scope
+    // (Juliet CWE-378 pattern: File.createTempFile() without setReadable/setWritable)
+    if (SAFE_PERMS.test(code) || PERM_SETTER.test(code)) continue;
+
+    // Check sibling nodes in the same function scope for permission-setting calls
+    const siblingNodes = map.nodes.filter(sib =>
+      sib.id !== node.id && sharesFunctionScope(map, node.id, sib.id)
+    );
+    const siblingCode = siblingNodes.map(sib =>
+      stripComments(sib.analysis_snapshot || sib.analysis_snapshot || sib.code_snapshot)
+    ).join('\n');
+    const hasScopePerms = SAFE_PERMS.test(siblingCode) || PERM_SETTER.test(siblingCode);
+
+    if (!hasScopePerms) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (file permissions never set after temp file creation)',
+        severity: 'medium',
+        description: `Temporary file at ${node.label} created without any permission-setting calls. ` +
+          `Default permissions may allow other users on the system to read or modify it.`,
+        fix: 'After creating the temp file, call setReadable(true, true), setWritable(true, true), and setExecutable(false) ' +
+          'to restrict to owner-only. Or use Files.createTempFile with PosixFilePermissions, or set umask(0077) before creation.',
       });
     }
   }
@@ -5949,12 +6123,17 @@ function verifyCWE379(map: NeuralMap): VerificationResult {
   const INSECURE_DIR = /["'`](\/tmp\/|\/var\/tmp\/|\\temp\\|C:\\Windows\\Temp|\/dev\/shm\/|System\.IO\.Path\.GetTempPath)\b/i;
   const HARDCODED_DIR = /["'`](\/tmp|\/var\/tmp|\\temp|C:\\Temp|C:\\Windows\\Temp)["'`]/i;
   const SAFE_DIR = /\b(mkdtemp|TemporaryDirectory|tempDir.*mode.*0o?700|private.*tmp|app.?data|XDG_RUNTIME_DIR|user.?specific|per.?user)\b/i;
+  // Java: 2-arg createTempFile uses default (insecure) temp dir; 3-arg passes explicit dir
+  const TWO_ARG_CREATE_TEMP = /\bcreate[Tt]emp[Ff]ile\s*\(\s*(?:"[^"]*"|'[^']*'|\w+)\s*,\s*(?:"[^"]*"|'[^']*'|\w+)\s*\)/;
+  const DIR_PERM_SETTER = /\bset(?:Readable|Writable|Executable)\s*\(/i;
 
   const allNodes = map.nodes.filter(n =>
     (n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL' || n.node_type === 'TRANSFORM')
   );
   for (const node of allNodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+
+    // Strategy 1: Hardcoded insecure directories
     if ((INSECURE_DIR.test(code) || HARDCODED_DIR.test(code)) && !SAFE_DIR.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
@@ -5963,8 +6142,58 @@ function verifyCWE379(map: NeuralMap): VerificationResult {
         description: `File operation at ${node.label} uses a shared temp directory. Other users can manipulate files via symlink or race attacks.`,
         fix: 'Use mkdtemp() to create a private subdirectory, or use XDG_RUNTIME_DIR / app-specific directories. Set sticky bit is not sufficient — use per-user dirs.',
       });
+      continue;
+    }
+
+    // Strategy 2: Java 2-arg createTempFile (uses system default temp dir)
+    if (TWO_ARG_CREATE_TEMP.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (secure directory argument for temp file creation)',
+        severity: 'medium',
+        description: `Temporary file at ${node.label} created with 2-arg createTempFile, which uses the system ` +
+          `default temp directory. This directory is shared and other users may manipulate files via symlink or race attacks.`,
+        fix: 'Use the 3-arg form File.createTempFile(prefix, suffix, secureDir) with a directory that has owner-only permissions, ' +
+          'or use Files.createTempFile(dir, prefix, suffix, attrs) with PosixFilePermissions.',
+      });
+      continue;
     }
   }
+
+  // Strategy 3: mkdir()/mkdirs() without permission-setting on directory, before createTempFile
+  const mkdirNodes = map.nodes.filter(n => {
+    const c = n.analysis_snapshot || n.code_snapshot;
+    return /\b(?:mkdir|mkdirs)\s*\(\s*\)/.test(c);
+  });
+  for (const dirNode of mkdirNodes) {
+    // Check if there's a createTempFile in the same function scope
+    const siblingNodes = map.nodes.filter(sib =>
+      sib.id !== dirNode.id && sharesFunctionScope(map, dirNode.id, sib.id)
+    );
+    const hasCreateTemp = siblingNodes.some(sib =>
+      /\bcreateTemp[Ff]ile\b/.test(sib.analysis_snapshot || sib.code_snapshot)
+    );
+    if (!hasCreateTemp) continue;
+
+    // Check if directory permissions are set BEFORE the mkdir call
+    const dirLine = dirNode.line_start;
+    const preNodes = siblingNodes.filter(sib =>
+      sib.line_start < dirLine &&
+      DIR_PERM_SETTER.test(stripComments(sib.analysis_snapshot || sib.analysis_snapshot || sib.code_snapshot))
+    );
+    if (preNodes.length === 0) {
+      findings.push({
+        source: nodeRef(dirNode), sink: nodeRef(dirNode),
+        missing: 'CONTROL (set directory permissions before creating temp files in it)',
+        severity: 'medium',
+        description: `Directory at ${dirNode.label} created without permission-setting before temp file creation. ` +
+          `Other users can manipulate the directory contents via symlink or race attacks.`,
+        fix: 'Set directory permissions (setWritable(true, true), setReadable(true, true)) before mkdir, ' +
+          'or use a per-user private directory.',
+      });
+    }
+  }
+
   return { cwe: 'CWE-379', name: 'Temp File in Insecure Directory', holds: findings.length === 0, findings };
 }
 
@@ -7149,6 +7378,8 @@ function verifyCWE674(map: NeuralMap): VerificationResult {
       /\bfunc\s+(\w+)\s*\(/,                             // Go: func name(
       /(\w+)\s*=\s*function\s+\w*\s*\([^)]*\)\s*\{/,    // JS: name = function [...](...)  {
       /(\w+)\s*=\s*\([^)]*\)\s*=>/,                      // JS: name = (...) =>
+      // Java/C#/Kotlin: [modifiers] returnType methodName(params) {
+      /(?:(?:public|private|protected|static|final|abstract|synchronized|native)\s+)*\w+\s+(\w+)\s*\([^)]*\)\s*(?:throws\s+\w[\w.,\s]*\s*)?\{/,
     ];
     for (const pat of DECL_PATTERNS) {
       const m = code.match(pat);
@@ -7171,7 +7402,10 @@ function verifyCWE674(map: NeuralMap): VerificationResult {
   // Explicit recursion keywords/patterns — but NOT `this.method()` alone, which is
   // typically calling a DIFFERENT method on the same object, not recursion.
   const RECURSION_INDICATOR = /\brecursi|self\.\w+\s*\(.*?\/\/.*recursi|this\.\w+\s*\(.*?\/\/.*recursi|\brecur\b|\barguments\.callee/i;
-  const DEPTH_GUARD = /\b(maxDepth|max_depth|MAX_DEPTH|depth\s*[><=!]+|level\s*[><=!]+|count\s*[><=!]+|limit|MAX_RECURSION|RECURSION_LIMIT|sys\.setrecursionlimit|stack.?size|depth.*return|if\s*\(\s*depth|if\s*\(\s*level|base.?case)\b/i;
+  // Depth guard must compare against a named limit or non-zero value.
+  // `level == 0` alone is NOT a sufficient guard (Juliet: Long.MAX_VALUE recursion depth).
+  // A real guard: `level > MAX_DEPTH`, `depth >= LIMIT`, `count > maxRecursion`, etc.
+  const DEPTH_GUARD = /\b(maxDepth|max_depth|MAX_DEPTH|MAX_RECURSION|RECURSION_LIMIT|RECURSION_\w*MAX|sys\.setrecursionlimit|stack.?size|base.?case)\b|(?:depth|level|count)\s*(?:>|>=|<|<=)\s*(?:[A-Z_]{2,}|\w*[Mm]ax\w*|\w*[Ll]imit\w*|\w*[Dd]epth\w*|[1-9]\d*)|\blimit\b/i;
 
   const structuralNodes = nodesOfType(map, 'STRUCTURAL');
   const allCallable = [...structuralNodes, ...nodesOfType(map, 'TRANSFORM')];
@@ -10163,7 +10397,7 @@ function verifyCWE511(map: NeuralMap): VerificationResult {
   const DATE_TRIGGER_RE = /\b(new\s+Date|Date\.now|Date\.parse|moment|dayjs|luxon|Instant\.now|LocalDate|datetime\.now|time\.time|Time\.now)\b.*(?:[><=!]+\s*(?:new\s+Date\s*\(\s*['"]|Date\.parse\s*\(\s*['"]|\d{10,13}|\d{4}[-/]\d{2}))/i;
   const HARDCODED_DATE_RE = /(?:['"]20\d{2}[-/]\d{2}[-/]\d{2}['"]|Date\s*\(\s*['"]20\d{2})|getTime\s*\(\s*\)\s*[><=]+\s*\d{10,13}/i;
   const COUNTER_TRIGGER_RE = /\b(count|counter|attempts|tries|iteration|cycle|run_count|execution_count|invoke_count)\b\s*(?:[><=!]+|>=|<=)\s*\d+/i;
-  const DESTRUCTIVE_OPS_RE = /\b(delete|remove|drop|truncate|wipe|destroy|shutdown|exit|kill|format|unlink|rmdir|rm\s+-rf|corrupt|overwrite|disable|lock.?out|revoke|suspend|terminate)/i;
+  const DESTRUCTIVE_OPS_RE = /\b(delete|remove|drop|truncate|wipe|destroy|shutdown|exit|kill|format|unlink|rmdir|rm\s+-rf|corrupt|overwrite|disable|lock.?out|revoke|suspend|terminate|exec|Runtime)/i;
 
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
@@ -11573,6 +11807,50 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Strategy C: Java new Cookie() + addCookie() without setSecure(true) (Juliet CWE-614 pattern)
+  // The Juliet pattern: `new Cookie("name","value")` -> `response.addCookie(cookie)` with NO setSecure(true) call.
+  // Scan per-function: if a function creates a Cookie and adds it but never calls setSecure(true), flag it.
+  {
+    const ADD_COOKIE_RE614 = /\.addCookie\s*\(/;
+    for (const node of map.nodes) {
+      if (reported614.has(node.id)) continue;
+      const snap = stripComments(node.analysis_snapshot || node.code_snapshot);
+      if (!JAVA_COOKIE_RE.test(snap)) continue;
+      if (!ADD_COOKIE_RE614.test(snap)) {
+        const siblings = map.nodes.filter(n => n.id !== node.id && sharesFunctionScope(map, node.id, n.id));
+        const siblingHasAddCookie = siblings.some(n =>
+          ADD_COOKIE_RE614.test(stripComments(n.analysis_snapshot || n.code_snapshot))
+        );
+        if (!siblingHasAddCookie) continue;
+        const allHasSecure = SET_SECURE_TRUE_RE.test(snap) ||
+          siblings.some(n => SET_SECURE_TRUE_RE.test(stripComments(n.analysis_snapshot || n.code_snapshot)));
+        if (!allHasSecure) {
+          reported614.add(node.id);
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'CONTROL (cookie.setSecure(true) before addCookie)',
+            severity: 'high',
+            description: `${node.label} creates a Cookie and adds it to the response without calling setSecure(true). ` +
+              `The cookie will be transmitted over unencrypted HTTP, exposing it to interception.`,
+            fix: 'Call cookie.setSecure(true) before response.addCookie(cookie) to ensure the cookie is only sent over HTTPS.',
+          });
+        }
+      } else {
+        if (!SET_SECURE_TRUE_RE.test(snap)) {
+          reported614.add(node.id);
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'CONTROL (cookie.setSecure(true) before addCookie)',
+            severity: 'high',
+            description: `${node.label} creates a Cookie and adds it to the response without calling setSecure(true). ` +
+              `The cookie will be transmitted over unencrypted HTTP, exposing it to interception.`,
+            fix: 'Call cookie.setSecure(true) before response.addCookie(cookie) to ensure the cookie is only sent over HTTPS.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-614', name: 'Sensitive Cookie in HTTPS Session Without Secure Attribute', holds: findings.length === 0, findings };
 }
 
@@ -12466,8 +12744,18 @@ function verifyCWE456(map: NeuralMap): VerificationResult {
  */
 function verifyCWE457(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
-  // Variable used before init patterns
-  const UNINIT_USE_RE = /\b(int|char|short|long|float|double|unsigned|signed|size_t|uint\d+_t|int\d+_t)\s*\**\s+(\w+)\s*(\[\d*\])?\s*;[^=]*\b\2\b/;
+
+  // This CWE applies to C/C++ (indeterminate values) and Java/Kotlin (local variables
+  // are NOT auto-initialized — only fields get defaults). JavaScript, Go, Rust, Python
+  // etc. all require or enforce initialization. Skip for those languages.
+  const lang = inferMapLanguage(map);
+  const CWE457_LANGS = new Set(['c', 'c++', 'cpp', 'java', 'kotlin']);
+  if (lang && !CWE457_LANGS.has(lang)) {
+    return { cwe: 'CWE-457', name: 'Use of Uninitialized Variable', holds: true, findings };
+  }
+
+  // Variable used before init patterns — C/C++ types + Java primitive/reference types
+  const UNINIT_USE_RE = /\b(int|char|short|long|float|double|unsigned|signed|size_t|uint\d+_t|int\d+_t|boolean|byte|String|Object)\s*\**\s+(\w+)\s*(\[\d*\])?\s*;[^=]*\b\2\b/;
   // Conditional init — variable initialized only in some branches
   const CONDITIONAL_INIT_RE = /\bif\b[^{]*\{[^}]*=\s*[^;]+;[^}]*\}(?!\s*else)/;
   // Patterns that prevent uninitialized use
@@ -12908,8 +13196,11 @@ function verifyCWE480(map: NeuralMap): VerificationResult {
 
 /**
  * CWE-561: Dead Code
- * Detects unreachable code after return/throw/break/continue, code inside
- * always-false conditions, and code after process exit calls.
+ * Detects:
+ *   1. Unreachable code after return/throw/break/continue
+ *   2. Code inside always-false conditions
+ *   3. Code after process exit calls
+ *   4. Unused private methods (dead methods never called within the class)
  *
  * SECOND PASS NOTE: evaluateControlEffectiveness() already checks for
  * always-true conditions on CONTROL nodes (dead control). CWE-561 benefits
@@ -12928,6 +13219,51 @@ function verifyCWE561(map: NeuralMap): VerificationResult {
 
   // Pattern 3: Code after System.exit / process.exit / os._exit
   const EXIT_BEFORE_CODE = /\b(System\.exit|process\.exit|os\._exit|exit)\s*\([^)]*\)\s*;[^\n]*\n\s*\S+/;
+
+  // Pattern 4: Unused private methods (Java/C#/TS)
+  // Collect all private method names and check if they're called anywhere in the same file
+  const PRIVATE_METHOD_DECL = /\bprivate\s+(?:static\s+)?(?:\w+(?:\s*<[^>]*>)?\s+)?(\w+)\s*\(/g;
+  const fullCode = map.nodes.map(n => stripComments(n.analysis_snapshot || n.code_snapshot)).join('\n');
+  const privateMethodNames: string[] = [];
+  let pmMatch: RegExpExecArray | null;
+  while ((pmMatch = PRIVATE_METHOD_DECL.exec(fullCode)) !== null) {
+    const name = pmMatch[1];
+    // Skip constructors, common boilerplate names, and very short names
+    if (name === 'main' || name === 'toString' || name === 'hashCode' || name === 'equals' ||
+        name === 'clone' || name === 'finalize' || name === 'compareTo' ||
+        name.length <= 1) continue;
+    privateMethodNames.push(name);
+  }
+
+  // Check which private methods are actually called somewhere in the file
+  for (const methodName of privateMethodNames) {
+    // Look for the method being called (methodName followed by '(' but not in its declaration)
+    const callPattern = new RegExp(`(?<!private\\s+(?:static\\s+)?(?:\\w+(?:\\s*<[^>]*>)?\\s+)?)\\b${methodName}\\s*\\(`, 'g');
+    const allMatches = [...fullCode.matchAll(callPattern)];
+    // The declaration itself will match too, so we need at least 1 match beyond the declaration
+    // Actually, with the negative lookbehind, declarations won't match.
+    // But let's also exclude method references, annotations, etc.
+    if (allMatches.length === 0) {
+      // This private method is never called — it's dead code
+      // Find the node that contains this method declaration
+      for (const node of map.nodes) {
+        const nodeCode = stripComments(node.analysis_snapshot || node.code_snapshot);
+        if (new RegExp(`\\bprivate\\s+(?:static\\s+)?(?:\\w+(?:\\s*<[^>]*>)?\\s+)?${methodName}\\s*\\(`).test(nodeCode)) {
+          findings.push({
+            source: nodeRef(node),
+            sink: nodeRef(node),
+            missing: 'STRUCTURAL (remove dead code or fix control flow)',
+            severity: 'low',
+            description: `Dead code at ${node.label}: private method "${methodName}" is never called within the class. ` +
+              `Unused methods increase the attack surface and maintenance burden.`,
+            fix: 'Remove the unused private method, or add a call to it if it was meant to be used. ' +
+              'Dead code increases attack surface and makes the codebase harder to audit.',
+          });
+          break;
+        }
+      }
+    }
+  }
 
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
@@ -13099,6 +13435,66 @@ function verifyCWE563(map: NeuralMap): VerificationResult {
     }
   }
 
+  // --- Strategy 3: Scope-aware source scan (merged from generated) ---
+  // Catches Juliet patterns: int data; data = 5; /* never used */
+  const src563 = map.source_code || '';
+  if (src563 && findings.length === 0) {
+    const lines563 = src563.split('\n');
+    const javaAssign563 = /^\s*(?:final\s+)?(?:int|long|float|double|boolean|char|byte|short|String|Object|\w+(?:<[^>]+>)?)\s+(\w+)\s*=\s*(.+);/;
+    const jsAssign563 = /^\s*(?:let|const|var)\s+(\w+)\s*=\s*(.+);/;
+    const bareAssign563 = /^\s*(\w+)\s*=\s*(?!=)(.+);/;
+    const declaredVars563 = new Set<string>();
+    for (const ln of lines563) {
+      const dm = ln.match(/^\s*(?:final\s+)?(?:int|long|float|double|boolean|char|byte|short|String|Object|\w+(?:<[^>]+>)?)\s+(\w+)\s*;/);
+      if (dm) declaredVars563.add(dm[1]);
+      const di = javaAssign563.exec(ln) || jsAssign563.exec(ln);
+      if (di) declaredVars563.add(di[1]);
+    }
+    const flagged563 = new Set<string>();
+    for (let i = 0; i < lines563.length; i++) {
+      const ln = lines563[i];
+      if (/^\s*\/\//.test(ln) || /^\s*\*/.test(ln) || /^\s*\/\*/.test(ln)) continue;
+      let vn563: string | null = null;
+      const tm = javaAssign563.exec(ln) || jsAssign563.exec(ln);
+      if (tm) { vn563 = tm[1]; } else {
+        const bm = bareAssign563.exec(ln);
+        if (bm && declaredVars563.has(bm[1])) vn563 = bm[1];
+      }
+      if (!vn563) continue;
+      if (['i','j','k','args','e','ex','err','_','this'].includes(vn563)) continue;
+      if (/\bfor\s*\(/.test(ln)) continue;
+      if (flagged563.has(`${vn563}:${i}`)) continue;
+      let se563 = lines563.length - 1, bd563 = 0;
+      for (let j = i; j < lines563.length; j++) {
+        for (const ch of lines563[j]) { if (ch === '{') bd563++; if (ch === '}') bd563--; }
+        if (bd563 < 0) { se563 = j; break; }
+      }
+      let used563 = false;
+      const vp563 = new RegExp(`\\b${vn563}\\b`);
+      for (let j = i + 1; j <= se563; j++) {
+        const cl = lines563[j];
+        if (/^\s*\/\//.test(cl) || /^\s*\*/.test(cl) || /^\s*\/\*/.test(cl)) continue;
+        const st = cl.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        if (vp563.test(st)) {
+          if (!(new RegExp(`^\\s*${vn563}\\s*=\\s*(?!=)`)).test(st)) { used563 = true; break; }
+        }
+      }
+      if (!used563) {
+        flagged563.add(`${vn563}:${i}`);
+        const nn = map.nodes.find(n => n.line_start === i + 1) ||
+          map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2 && n.node_type === 'TRANSFORM') ||
+          map.nodes[0];
+        if (nn) {
+          findings.push({ source: nodeRef(nn), sink: nodeRef(nn),
+            missing: 'EGRESS (variable should be used after assignment)', severity: 'low',
+            description: `L${i + 1}: Variable '${vn563}' is assigned but never used in its scope.`,
+            fix: 'Remove unused variable assignments. They may indicate logic errors or incomplete implementation.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-563', name: 'Assignment to Variable without Use', holds: findings.length === 0, findings };
 }
 
@@ -13157,6 +13553,76 @@ function verifyCWE570(map: NeuralMap): VerificationResult {
           '(feature flag), use a named constant or config value instead of a literal false. ' +
           'Run static analysis (ESLint no-constant-condition, gcc -Wtype-limits) to catch these.',
       });
+    }
+  }
+
+  // --- Strategy 2: Source-scan (merged from generated) ---
+  // Catches Juliet getClass().equals() patterns and other source-level always-false expressions
+  const src570 = map.source_code || '';
+  if (src570 && findings.length === 0) {
+    const lines570 = src570.split('\n');
+    const alwaysFalsePatterns570: Array<{ re: RegExp; desc: string }> = [
+      { re: /\bif\s*\(\s*false\s*\)/, desc: 'if(false)' },
+      { re: /\bwhile\s*\(\s*false\s*\)/, desc: 'while(false)' },
+      { re: /\bif\s*\(\s*(\w+)\s*!=\s*\s*\)/, desc: 'x != x (always false)' },
+      { re: /\bif\s*\(\s*(\w+)\s*>\s*Integer\.MAX_VALUE\s*\)/, desc: 'n > Integer.MAX_VALUE (always false)' },
+      { re: /\bif\s*\(\s*(\w+)\s*<\s*Integer\.MIN_VALUE\s*\)/, desc: 'n < Integer.MIN_VALUE (always false)' },
+      { re: /\bif\s*\(\s*(\w+)\s*==\s*\(\s*\s*-\s*1\s*\)\s*\)/, desc: 'n == (n - 1) (always false)' },
+      { re: /\bif\s*\(\s*(\w+)\s*==\s*\(\s*\s*\+\s*1\s*\)\s*\)/, desc: 'n == (n + 1) (always false)' },
+    ];
+    // Detect different-type getClass().equals() — always false when comparing different concrete types
+    // Juliet pattern: random.getClass().equals(secureRandom.getClass()) where types differ
+    const CLASS_EQUALS_FALSE = /\bif\s*\(\s*(\w+)\.getClass\(\)\.equals\(\s*(\w+)\.getClass\(\)\s*\)\s*\)/;
+
+    for (let i = 0; i < lines570.length; i++) {
+      const line = lines570[i];
+      if (/^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line)) continue;
+
+      for (const pat of alwaysFalsePatterns570) {
+        if (pat.re.test(line)) {
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'CONTROL (correct conditional expression)',
+              severity: 'low',
+              description: `L${i + 1}: Expression always evaluates to false: ${pat.desc}. Dead code follows.`,
+              fix: 'Fix always-false expressions. They indicate logic errors or dead code.',
+            });
+          }
+        }
+      }
+
+      // Check getClass().equals() with different-type variables
+      const classMatch = CLASS_EQUALS_FALSE.exec(line);
+      if (classMatch) {
+        const var1 = classMatch[1];
+        const var2 = classMatch[2];
+        if (var1 !== var2) {
+          // Look up declarations to see if they are different types
+          let type1 = '', type2 = '';
+          for (const prevLine of lines570) {
+            const declRe1 = new RegExp(`\\b(\\w+(?:<[^>]+>)?)\\s+${var1}\\s*[=;]`);
+            const declRe2 = new RegExp(`\\b(\\w+(?:<[^>]+>)?)\\s+${var2}\\s*[=;]`);
+            const m1 = declRe1.exec(prevLine);
+            const m2 = declRe2.exec(prevLine);
+            if (m1) type1 = m1[1];
+            if (m2) type2 = m2[1];
+          }
+          if (type1 && type2 && type1 !== type2) {
+            const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'CONTROL (correct conditional expression)',
+                severity: 'low',
+                description: `L${i + 1}: getClass().equals() comparison between ${type1} and ${type2} is always false — different concrete types.`,
+                fix: 'Fix always-false expressions. Comparing getClass() of different types always returns false.',
+              });
+            }
+          }
+        }
+      }
     }
   }
 
@@ -13219,6 +13685,74 @@ function verifyCWE571(map: NeuralMap): VerificationResult {
           'If used as a feature flag, replace with a named constant from config. ' +
           'If used as an intentional infinite loop, add a break condition and timeout.',
       });
+    }
+  }
+
+  // --- Strategy 2: Source-scan (merged from generated) ---
+  // Catches Juliet !getClass().equals() patterns and other source-level always-true expressions
+  const src571 = map.source_code || '';
+  if (src571 && findings.length === 0) {
+    const lines571 = src571.split('\n');
+    const alwaysTruePatterns571: Array<{ re: RegExp; desc: string }> = [
+      { re: /\bif\s*\(\s*true\s*\)/, desc: 'if(true)' },
+      { re: /\bif\s*\(\s*(\w+)\s*==\s*\s*\)/, desc: 'x == x (always true)' },
+      { re: /\bif\s*\(\s*\w+\s*<\s*Integer\.MAX_VALUE\s*\)/, desc: 'n < Integer.MAX_VALUE (always true for int)' },
+      { re: /\bif\s*\(\s*\w+\s*>\s*Integer\.MIN_VALUE\s*\)/, desc: 'n > Integer.MIN_VALUE (always true for int)' },
+      { re: /\bif\s*\(\s*\w+\s*<=\s*Integer\.MAX_VALUE\s*\)/, desc: 'n <= Integer.MAX_VALUE (always true)' },
+    ];
+    // Detect negated different-type getClass().equals() — always true when comparing different concrete types
+    // Juliet pattern: !random.getClass().equals(secureRandom.getClass()) where types differ
+    const NEG_CLASS_EQUALS_TRUE = /\bif\s*\(\s*!(\w+)\.getClass\(\)\.equals\(\s*(\w+)\.getClass\(\)\s*\)\s*\)/;
+
+    for (let i = 0; i < lines571.length; i++) {
+      const line = lines571[i];
+      if (/^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line)) continue;
+
+      for (const pat of alwaysTruePatterns571) {
+        if (pat.re.test(line)) {
+          if (pat.desc.includes('while(true)')) continue;
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'CONTROL (correct conditional expression)',
+              severity: 'low',
+              description: `L${i + 1}: Expression always evaluates to true: ${pat.desc}. The else branch is dead code.`,
+              fix: 'Fix always-true expressions. They indicate logic errors or dead branches.',
+            });
+          }
+        }
+      }
+
+      // Check negated getClass().equals() with different-type variables
+      const classMatch571 = NEG_CLASS_EQUALS_TRUE.exec(line);
+      if (classMatch571) {
+        const var1 = classMatch571[1];
+        const var2 = classMatch571[2];
+        if (var1 !== var2) {
+          let type1 = '', type2 = '';
+          for (const prevLine of lines571) {
+            const declRe1 = new RegExp(`\\b(\\w+(?:<[^>]+>)?)\\s+${var1}\\s*[=;]`);
+            const declRe2 = new RegExp(`\\b(\\w+(?:<[^>]+>)?)\\s+${var2}\\s*[=;]`);
+            const m1 = declRe1.exec(prevLine);
+            const m2 = declRe2.exec(prevLine);
+            if (m1) type1 = m1[1];
+            if (m2) type2 = m2[1];
+          }
+          if (type1 && type2 && type1 !== type2) {
+            const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'CONTROL (correct conditional expression)',
+                severity: 'low',
+                description: `L${i + 1}: !getClass().equals() comparison between ${type1} and ${type2} is always true — different concrete types.`,
+                fix: 'Fix always-true expressions. Negated getClass() comparison of different types always returns true.',
+              });
+            }
+          }
+        }
+      }
     }
   }
 
@@ -13678,14 +14212,44 @@ function verifyCWE482(map: NeuralMap): VerificationResult {
     }
   }
 
+  // --- Source-based detection: if((var == (expr)) == true) pattern ---
+  // Catches the Juliet pattern where == is used inside an if-condition where = was intended.
+  // Example: if((isZero == (zeroOrOne == 0)) == true) should be if((isZero = (zeroOrOne == 0)) == true)
+  if (findings.length === 0) {
+    const src482 = map.source_code || '';
+    if (src482) {
+      const lines = src482.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+        // Pattern: if((boolVar == (expr)) == true) — the outer == before (expr) should be =
+        if (/\bif\s*\(\s*\(\s*\w+\s*==\s*\([^)]+\)\s*\)\s*==\s*true\s*\)/.test(line)) {
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'TRANSFORM (use = for assignment, not == for comparison)',
+              severity: 'medium',
+              description: `L${i + 1}: Comparison (==) used where assignment (=) was likely intended inside if-condition.`,
+              fix: 'Use = for assignment, == for comparison. The == operator does not modify the variable.',
+            });
+          }
+          break;
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-482', name: 'Comparing Instead of Assigning', holds: findings.length === 0, findings };
 }
 
 /**
  * CWE-483: Incorrect Block Delimitation
- * Pattern: Control flow statement (if/for/while) without braces where indentation
- * suggests multiple statements should be in the block, but only the first is controlled.
- * Classic: `if (cond)\n  stmt1;\n  stmt2;` — stmt2 always executes.
+ * Detects three patterns:
+ *   1. Multiline: `if (cond)\n  stmt1;\n  stmt2;` — indentation suggests both are in the block but only stmt1 is.
+ *   2. Semicolon: `if (cond);` — semicolon creates an empty body, the braced block below always executes.
+ *   3. Single-line: `if (cond) stmt1; stmt2;` — stmt2 is NOT in the if block despite being on the same line.
  */
 function verifyCWE483(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
@@ -13693,12 +14257,55 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
     const lines = code.split('\n');
+    let found = false;
 
-    for (let i = 0; i < lines.length - 2; i++) {
+    for (let i = 0; i < lines.length; i++) {
+      if (found) break;
       const line = lines[i];
       const trimmed = line.trim();
 
-      // Match if/for/while/else without opening brace on same or next line
+      // --- Pattern 2: Semicolon after control statement: `if (cond);` ---
+      // The semicolon creates an empty body; the braced block that follows always executes.
+      const semicolonMatch = trimmed.match(/^(if\s*\([^)]*\)|for\s*\([^)]*\)|while\s*\([^)]*\))\s*;\s*$/);
+      if (semicolonMatch) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'CONTROL (proper block delimitation with braces)',
+          severity: 'medium',
+          description: `${node.label} has a control statement (${semicolonMatch[1].split('(')[0].trim()}) immediately followed by a semicolon. ` +
+            `The semicolon acts as an empty body — the block that follows always executes regardless of the condition.`,
+          fix: 'Remove the erroneous semicolon and use braces: `if (cond) { ... }`. The semicolon after a control statement creates an empty body.',
+        });
+        found = true;
+        break;
+      }
+
+      // --- Pattern 3: Single-line multiple statements: `if (cond) stmt1; stmt2;` ---
+      // Match a control keyword with condition, then look for two or more semicolons after
+      const singleLineMatch = trimmed.match(/^(if\s*\([^)]*\)|else\s+if\s*\([^)]*\)|for\s*\([^)]*\)|while\s*\([^)]*\))\s+(.+)$/);
+      if (singleLineMatch) {
+        const body = singleLineMatch[2];
+        // Count statements by splitting on ; — if there are 2+ statements, only the first is controlled
+        // But skip if the body starts with { (proper braces)
+        if (!body.startsWith('{')) {
+          const stmts = body.split(';').filter(s => s.trim().length > 0);
+          if (stmts.length >= 2) {
+            findings.push({
+              source: nodeRef(node), sink: nodeRef(node),
+              missing: 'CONTROL (proper block delimitation with braces)',
+              severity: 'medium',
+              description: `${node.label} has a control statement (${singleLineMatch[1].split('(')[0].trim()}) on a single line with multiple statements. ` +
+                `Only the first statement is controlled — subsequent statements always execute regardless of the condition.`,
+              fix: 'Always use braces {} with control flow statements. Separate statements onto their own lines inside a block.',
+            });
+            found = true;
+            break;
+          }
+        }
+      }
+
+      // --- Pattern 1: Multiline indentation mismatch (original) ---
+      if (i >= lines.length - 2) continue;
       const controlMatch = trimmed.match(/^(if\s*\(.*\)|else\s+if\s*\(.*\)|else|for\s*\(.*\)|while\s*\(.*\))\s*$/);
       if (!controlMatch) continue;
 
@@ -13726,7 +14333,74 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
             `subsequent statements always execute regardless of the condition.`,
           fix: 'Always use braces {} with control flow statements, even for single-line bodies. This prevents misleading indentation bugs.',
         });
+        found = true;
         break;
+      }
+    }
+  }
+
+  // --- Source-based detection: scan raw source_code for multiline indentation mismatch ---
+  // The node-level code_snapshot may not preserve multi-line indentation structure.
+  // Scanning the full source catches the Juliet pattern where if(cond)\n  stmt1;\n  stmt2;
+  // has stmt2 at the same indent as stmt1 but outside the if block.
+  if (findings.length === 0) {
+    const src483 = map.source_code || '';
+    if (src483) {
+      const srcLines = src483.split('\n');
+      for (let i = 0; i < srcLines.length - 2; i++) {
+        const line = srcLines[i];
+        const trimmed = line.trim();
+        if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+        // Semicolon after control: if (cond);
+        const semiMatch = trimmed.match(/^(if\s*\([^)]*\)|for\s*\([^)]*\)|while\s*\([^)]*\))\s*;\s*$/);
+        if (semiMatch) {
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'CONTROL (proper block delimitation with braces)',
+              severity: 'medium',
+              description: `L${i + 1}: Control statement followed by semicolon creates empty body.`,
+              fix: 'Remove the erroneous semicolon and use braces: if (cond) { ... }.',
+            });
+          }
+          break;
+        }
+
+        // Multiline indentation mismatch
+        const controlMatch = trimmed.match(/^(if\s*\(.*\)|else\s+if\s*\(.*\)|else|for\s*\(.*\)|while\s*\(.*\))\s*$/);
+        if (!controlMatch) continue;
+
+        const nextLine = srcLines[i + 1];
+        if (!nextLine || nextLine.trim() === '{' || nextLine.trim() === '') continue;
+
+        const nextIndent = nextLine.match(/^(\s*)/)?.[1]?.length ?? 0;
+        const controlIndent = line.match(/^(\s*)/)?.[1]?.length ?? 0;
+        if (nextIndent <= controlIndent) continue;
+
+        const afterLine = srcLines[i + 2];
+        if (!afterLine) continue;
+        const afterIndent = afterLine.match(/^(\s*)/)?.[1]?.length ?? 0;
+        const afterTrimmed = afterLine.trim();
+
+        if (!afterTrimmed || afterTrimmed.startsWith('//') || afterTrimmed.startsWith('#')) continue;
+
+        if (afterIndent >= nextIndent && afterTrimmed !== '}' && !afterTrimmed.startsWith('else') &&
+            !afterTrimmed.startsWith('catch') && !afterTrimmed.startsWith('finally')) {
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 3) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'CONTROL (proper block delimitation with braces)',
+              severity: 'medium',
+              description: `L${i + 1}: Control statement (${controlMatch[1].split('(')[0].trim()}) without braces, ` +
+                `followed by multiple indented statements. Only the first is controlled.`,
+              fix: 'Always use braces {} with control flow statements.',
+            });
+          }
+          break;
+        }
       }
     }
   }
@@ -13794,7 +14468,7 @@ function verifyCWE484(map: NeuralMap): VerificationResult {
         hasBody = true;
       }
 
-      if (/\b(break|return|throw|continue|goto)\b/.test(trimmed)) {
+      if (/\b(break|return|throw|continue|goto)\b/.test(stripComments(trimmed))) {
         hasTerminator = true;
       }
 
@@ -14083,6 +14757,109 @@ function verifyCWE499(map: NeuralMap): VerificationResult {
   }
 
   return { cwe: 'CWE-499', name: 'Serializable Class Containing Sensitive Data', holds: findings.length === 0, findings };
+}
+
+/**
+ * CWE-500: Public Static Field Not Marked Final
+ * Java: `public static String field = ...` without `final`.
+ * Any code can reassign the field, leading to unexpected global state mutations.
+ * Fix: add `final` modifier or make the field private.
+ */
+function verifyCWE500(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Match public static <type> <name> NOT preceded by final
+  // Handles: public static String x, public static int x, public static MyType x
+  // Must NOT match: public static final ..., public final static ..., final public static ...
+  const PSF_NOT_FINAL = /\bpublic\s+static\s+(?!final\b)(\w+(?:\s*<[^>]*>)?)\s+(\w+)\s*[=;]/;
+  const STATIC_PUBLIC_NOT_FINAL = /\bstatic\s+public\s+(?!final\b)(\w+(?:\s*<[^>]*>)?)\s+(\w+)\s*[=;]/;
+  // Also catch: public <type> that is actually "public static" split across analysis
+  const FINAL_ANYWHERE = /\bfinal\b/;
+
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (/\b(test|spec|mock|stub|describe\s*\(|it\s*\()\b/i.test(node.label)) continue;
+
+    // Check each line individually for the pattern
+    const lines = code.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      let match = trimmed.match(PSF_NOT_FINAL) || trimmed.match(STATIC_PUBLIC_NOT_FINAL);
+      if (!match) continue;
+      // Make sure 'final' isn't elsewhere on the same line (e.g., "public static final" with odd spacing)
+      if (FINAL_ANYWHERE.test(trimmed)) continue;
+
+      const fieldType = match[1];
+      const fieldName = match[2];
+
+      // Skip main method signatures and other non-field patterns
+      if (/\bvoid\b|\bclass\b|\binterface\b|\benum\b/.test(fieldType)) continue;
+
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (add final modifier to public static field)',
+        severity: 'medium',
+        description: `${node.label} declares a public static field "${fieldName}" of type "${fieldType}" without the final modifier. ` +
+          `Any code with access to the class can reassign this field, leading to unexpected global state mutations ` +
+          `and potential security bypasses (e.g., overwriting a default error message or config value).`,
+        fix: 'Add the final modifier: `public static final`. If the field must be mutable, make it private ' +
+          'and provide controlled access through getter/setter methods with appropriate validation.',
+      });
+      break; // One finding per node is sufficient
+    }
+  }
+
+  return { cwe: 'CWE-500', name: 'Public Static Field Not Marked Final', holds: findings.length === 0, findings };
+}
+
+/**
+ * CWE-582: Array Declared Public, Final, and Static
+ * Java: `public static final int[] arr = {...}` or `public final static int arr[] = {...}`
+ * The reference is final (can't reassign), but array CONTENTS are mutable.
+ * Any code can do `ClassName.arr[0] = evil`. Fix: make private, return copies.
+ */
+function verifyCWE582(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Match public static final <type>[] name or public final static <type>[] name
+  // Also handles: <type> name[] (C-style array declaration)
+  const ARRAY_PSF_JAVA = /\bpublic\s+(?:static\s+final|final\s+static)\s+(\w+)\s*\[\s*\]\s+(\w+)|public\s+(?:static\s+final|final\s+static)\s+(\w+)\s+(\w+)\s*\[\s*\]/;
+  // Also: static public final, final public static, etc.
+  const ARRAY_PSF_ALT = /\b(?:static\s+public\s+final|final\s+public\s+static|final\s+static\s+public|static\s+final\s+public)\s+(\w+)\s*(?:\[\s*\]\s+(\w+)|(\w+)\s*\[\s*\])/;
+
+  // Safe patterns: defensive copy, unmodifiable, or clone
+  const SAFE_ARRAY = /\b(\.clone\(\)|Arrays\.copyOf|System\.arraycopy|Collections\.unmodifiable|List\.of|private\s+(?:static\s+)?final)\b/i;
+
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (/\b(test|spec|mock|stub|describe\s*\(|it\s*\()\b/i.test(node.label)) continue;
+
+    const lines = code.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      let match = trimmed.match(ARRAY_PSF_JAVA) || trimmed.match(ARRAY_PSF_ALT);
+      if (!match) continue;
+
+      // Extract type and name from whichever capture group matched
+      const fieldType = match[1] || match[3] || 'unknown';
+      const fieldName = match[2] || match[4] || 'unknown';
+
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CONTROL (make array private, return defensive copies)',
+        severity: 'medium',
+        description: `${node.label} declares a public static final array "${fieldName}" of type "${fieldType}[]". ` +
+          `While the array reference cannot be reassigned (final), the array contents are mutable — any code ` +
+          `can modify elements via ${node.label.split('/').pop()}.${fieldName}[i] = newValue.`,
+        fix: 'Make the array private and provide a public method that returns a defensive copy: ' +
+          '`private static final int[] ARR = {...}; public static int[] getArr() { return ARR.clone(); }`. ' +
+          'Alternatively, use an immutable collection: Collections.unmodifiableList(Arrays.asList(...)).',
+      });
+      break;
+    }
+  }
+
+  return { cwe: 'CWE-582', name: 'Array Declared Public, Final, and Static', holds: findings.length === 0, findings };
 }
 
 // ---------------------------------------------------------------------------
@@ -15506,6 +16283,55 @@ function verifyCWE597(map: NeuralMap): VerificationResult {
     }
   }
 
+  // --- Strategy 2: Source-scan with String variable tracking (merged from generated) ---
+  // Catches Juliet patterns: String s1 = readLine(); String s2 = readLine(); if (s1 == s2)
+  const src597 = map.source_code || '';
+  const isJava597 = /\bpackage\s+\w|import\s+java\.|public\s+class\b/.test(src597);
+  if (src597 && isJava597 && findings.length === 0) {
+    const lines597 = src597.split('\n');
+    // Collect known String variable names
+    const stringVars597 = new Set<string>();
+    for (const ln of lines597) {
+      const decl = ln.match(/\bString\s+(\w+)\s*[=;]/);
+      if (decl) stringVars597.add(decl[1]);
+      const paramRe = /\bString\s+(\w+)\s*[,)]/g;
+      let pm;
+      while ((pm = paramRe.exec(ln)) !== null) stringVars597.add(pm[1]);
+      const rl = ln.match(/(\w+)\s*=\s*\w+\.readLine\(\)/);
+      if (rl) stringVars597.add(rl[1]);
+    }
+
+    for (let i = 0; i < lines597.length; i++) {
+      const line = lines597[i];
+      if (/^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line)) continue;
+      // Skip null checks
+      if (/==\s*null|null\s*==|!=\s*null|null\s*!=/.test(line)) continue;
+
+      for (const sv of stringVars597) {
+        // Pattern: sv == otherVar or sv == "literal"
+        const eqRe = new RegExp(`\\b${sv}\\s*==\\s*(?:(\\w+)\\b|("(?:[^"\\\\]|\\\\.)*"))`);
+        const m = eqRe.exec(line);
+        if (m) {
+          const other = m[1] || m[2];
+          if (other === 'null' || other === 'true' || other === 'false') continue;
+          if (stringVars597.has(other) || m[2] !== undefined) {
+            const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'TRANSFORM (use .equals() for String comparison)',
+                severity: 'medium',
+                description: `L${i + 1}: String comparison uses == operator instead of .equals(). '${sv} == ${other}' compares object references, not string contents.`,
+                fix: 'Use String.equals() for content comparison. The == operator compares object references in Java.',
+              });
+            }
+            break; // One finding per line is enough
+          }
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-597', name: 'Use of Wrong Operator in String Comparison', holds: findings.length === 0, findings };
 }
 
@@ -15540,7 +16366,10 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
   }
 
   const loopNodes = map.nodes.filter(n =>
-    (n.node_type === 'TRANSFORM' || n.node_type === 'STRUCTURAL') &&
+    (n.node_type === 'TRANSFORM' || n.node_type === 'STRUCTURAL' ||
+     // CONTROL/loop nodes ARE loop nodes — include them for taint path analysis.
+     // This is needed for Java where for/while/do are classified as CONTROL/loop.
+     (n.node_type === 'CONTROL' && n.node_subtype === 'loop')) &&
     LOOP_CONDITION.test(n.analysis_snapshot || n.code_snapshot) &&
     !BOUNDS_SAFE.test(stripComments(n.analysis_snapshot || n.code_snapshot)) &&
     !CAPPED.test(stripComments(n.analysis_snapshot || n.code_snapshot))
@@ -15549,7 +16378,30 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const loop of loopNodes) {
       if (src.id === loop.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, loop.id)) {
+      // For CONTROL/loop nodes: check if tainted data flows INTO the loop
+      // (via data_in or the tainted_loop_bound tag set by the mapper).
+      // We can't use hasTaintedPathWithoutControl here because the loop IS a CONTROL node
+      // and the BFS would see it as a gate. Instead, check the loop's data_in directly.
+      let loopHasTaint = false;
+      if (loop.node_type === 'CONTROL' && loop.node_subtype === 'loop') {
+        loopHasTaint = loop.data_in.some((d: any) => d.tainted) ||
+                       loop.tags?.includes('tainted_loop_bound');
+      } else {
+        loopHasTaint = hasTaintedPathWithoutControl(map, src.id, loop.id);
+      }
+      if (loopHasTaint) {
+        // Check if the loop is already guarded by bounds validation.
+        // Look for containing branch nodes (if-statements) that check numeric bounds.
+        const containingBranch606 = map.nodes.find(n =>
+          n.node_type === 'CONTROL' && n.node_subtype === 'branch' &&
+          n.line_start < loop.line_start && n.line_end >= loop.line_end &&
+          /\b\w+\s*(?:<=?|>=?)\s*\d+/.test(n.analysis_snapshot || n.code_snapshot)
+        );
+        if (containingBranch606) continue;
+        // Also check for bounds keywords in the containing scope
+        const scopeSnaps606 = getContainingScopeSnapshots(map, loop.id);
+        const scopeText606 = stripComments(scopeSnaps606.join('\n') || loop.analysis_snapshot || loop.code_snapshot);
+        if (BOUNDS_SAFE.test(scopeText606) || CAPPED.test(scopeText606)) continue;
         if (!findings.some(f => f.sink.id === loop.id)) {
           findings.push({
             source: nodeRef(src), sink: nodeRef(loop),
@@ -15575,10 +16427,11 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
 function verifyCWE607(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
-  const JAVA_PSF_MUTABLE = /public\s+static\s+final\s+(?:List|ArrayList|LinkedList|Set|HashSet|TreeSet|Map|HashMap|TreeMap|Collection|Vector|Stack|Queue|Deque|Date|Calendar|StringBuilder|StringBuffer|int\[\]|String\[\]|byte\[\]|Object\[\]|\w+\[\])\s*(?:<[^>]*>)?\s+(\w+)/;
+  // Match any ordering of public/static/final with a mutable type
+  const JAVA_PSF_MUTABLE = /\bpublic\s+(?:static\s+final|final\s+static)\s+(?:List|ArrayList|LinkedList|Set|HashSet|TreeSet|Map|HashMap|TreeMap|Collection|Vector|Stack|Queue|Deque|Date|Calendar|StringBuilder|StringBuffer|int\[\]|String\[\]|byte\[\]|Object\[\]|\w+\[\])\s*(?:<[^>]*>)?\s+(\w+)/;
   const JS_CONST_MUTABLE = /export\s+const\s+([A-Z_][A-Z0-9_]*)\s*(?::\s*\w+(?:<[^>]*>)?\s*)?=\s*(?:\{|\[|new\s+(?:Map|Set|Date|Array|WeakMap|WeakSet))/;
   const PY_CLASS_MUTABLE = /^\s*([A-Z_][A-Z0-9_]*)\s*(?::\s*\w+)?\s*=\s*(?:\[|\{|set\(|dict\(|list\(|defaultdict\()/m;
-  const SAFE_IMMUTABLE = /\b(Collections\.unmodifiable|List\.of\(|Set\.of\(|Map\.of\(|Map\.copyOf|List\.copyOf|Set\.copyOf|ImmutableList|ImmutableSet|ImmutableMap|freeze|Object\.freeze|deepFreeze|readonly|ReadonlyArray|Readonly<|as\s+const|frozenset|tuple\(|MappingProxyType)\b/i;
+  const SAFE_IMMUTABLE = /\b(Collections\.unmodifiable\w*|List\.of\s*\(|Set\.of\s*\(|Map\.of\s*\(|Map\.copyOf|List\.copyOf|Set\.copyOf|ImmutableList|ImmutableSet|ImmutableMap|freeze|Object\.freeze|deepFreeze|readonly|ReadonlyArray|Readonly<|as\s+const|frozenset|tuple\s*\(|MappingProxyType)/i;
 
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
@@ -15706,18 +16559,33 @@ function verifyCWE617(map: NeuralMap): VerificationResult {
 
     if (!reachable && node.node_type !== 'STRUCTURAL') {
       const isProductionCode = !SAFE_ASSERT.test(node.file || '');
-      if (isProductionCode && /\bassert\s*\(/.test(code)) {
-        const hasErrorPath = /\b(catch|error|except|fail|invalid|unexpected)\b/i.test(code);
-        if (hasErrorPath) {
+      if (isProductionCode && /\bassert\s*\(|\bassert\s+(?:false|true|\w)/.test(code)) {
+        // Detect always-failing assertions: assert(false), assert false, assert(0), assert 0
+        // These are guaranteed to trigger whenever reached (Juliet CWE-617 pattern)
+        const ALWAYS_FAIL_ASSERT = /\bassert\s*\(\s*(?:false|0|False|FALSE)\s*\)|\bassert\s+(?:false|0|False|FALSE)\s*;/;
+        if (ALWAYS_FAIL_ASSERT.test(code)) {
           findings.push({
             source: nodeRef(node), sink: nodeRef(node),
-            missing: 'CONTROL (proper error handling instead of assert in error path)',
-            severity: 'low',
-            description: `${node.label} uses assert() in an error handling path. If this code is reachable in production ` +
-              `(assertions not compiled out), a failed assertion will crash the process instead of handling the error gracefully.`,
-            fix: 'Replace assert with proper error handling (throw, return error code, log and recover). ' +
-              'Reserve assertions for truly impossible conditions, and ensure they are compiled out in production (NDEBUG).',
+            missing: 'CONTROL (remove always-failing assertion or replace with proper error handling)',
+            severity: 'high',
+            description: `${node.label} has an assertion that ALWAYS fails (assert false). ` +
+              `If this code is reachable and assertions are enabled, it will unconditionally crash the process.`,
+            fix: 'Remove the always-failing assert, or replace with proper error handling (throw, return error). ' +
+              'If this is meant as unreachable-code marker, use a throw statement instead.',
           });
+        } else {
+          const hasErrorPath = /\b(catch|error|except|fail|invalid|unexpected)\b/i.test(code);
+          if (hasErrorPath) {
+            findings.push({
+              source: nodeRef(node), sink: nodeRef(node),
+              missing: 'CONTROL (proper error handling instead of assert in error path)',
+              severity: 'low',
+              description: `${node.label} uses assert() in an error handling path. If this code is reachable in production ` +
+                `(assertions not compiled out), a failed assertion will crash the process instead of handling the error gracefully.`,
+              fix: 'Replace assert with proper error handling (throw, return error code, log and recover). ' +
+                'Reserve assertions for truly impossible conditions, and ensure they are compiled out in production (NDEBUG).',
+            });
+          }
         }
       }
     }
@@ -18227,6 +19095,18 @@ function verifyCWE1054(map: NeuralMap): VerificationResult {
     return { cwe: 'CWE-1054', name: 'Invocation of Control Element at Unnecessarily Deep Horizontal Layer', holds: true, findings };
   }
 
+  // Per-language call depth thresholds: Java/Kotlin naturally have deeper call chains
+  // (servlet→service→validator→rules→pattern is 4 levels and normal).
+  // JS/TS/Python tend to be flatter. C/C++ varies but leans toward direct calls.
+  const lang = inferMapLanguage(map);
+  const DEPTH_THRESHOLDS: Record<string, number> = {
+    java: 6, kotlin: 6,          // Framework-heavy, deep chains are normal
+    javascript: 4, typescript: 4, // Flat architectures, 4 is already deep
+    python: 4, ruby: 4,          // Similar to JS
+    c: 4, 'c++': 4, cpp: 4,     // Direct call patterns
+  };
+  const depthThreshold = DEPTH_THRESHOLDS[lang] ?? 5; // Default 5 for unknown languages
+
   const ingress = nodesOfType(map, 'INGRESS');
   const controls = nodesOfType(map, 'CONTROL');
   const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
@@ -18256,7 +19136,7 @@ function verifyCWE1054(map: NeuralMap): VerificationResult {
         }
       }
 
-      if (minCallDepth >= 4) {
+      if (minCallDepth >= depthThreshold) {
         const hasEarlyControl = controls.some(ec => {
           if (ec.id === ctrl.id) return false;
           const ev = new Set<string>();
@@ -22467,12 +23347,17 @@ function verifyCWE1125(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Only report unprotected endpoints that are actually dangerous (write/admin)
+  // or when the attack surface is truly excessive (many unprotected endpoints).
+  // A simple servlet with 1-2 request handlers (doGet, doPost) reading cookies/params is normal.
   for (const ep of unprotectedEndpoints) {
     const code = ep.analysis_snapshot || (ep.analysis_snapshot || ep.code_snapshot);
     const isWrite = /\b(?:POST|PUT|PATCH|DELETE|INSERT|UPDATE|CREATE|WRITE|REMOVE)\b/i.test(code) ||
                     /\b(?:post|put|patch|delete)\s*\(/i.test(ep.label);
     const isAdmin = /\b(?:admin|manage|config|setting|internal|debug|diagnostic)\b/i.test(ep.label + ' ' + code);
 
+    // Only flag write/admin endpoints individually — generic read endpoints
+    // are only flagged in the aggregate check below (>50% unprotected with >=5 endpoints)
     if (isWrite || isAdmin) {
       findings.push({
         source: nodeRef(ep), sink: nodeRef(ep),
@@ -22484,17 +23369,10 @@ function verifyCWE1125(map: NeuralMap): VerificationResult {
         fix: 'Add authentication middleware (verify JWT/session) and authorization checks (verify role/permissions) ' +
           'before processing the request. If this is intentionally public, document why with a security comment.',
       });
-    } else {
-      findings.push({
-        source: nodeRef(ep), sink: nodeRef(ep),
-        missing: 'CONTROL (input validation or rate limiting for exposed endpoint)',
-        severity: 'medium',
-        description: `${ep.label} is an exposed endpoint with no CONTROL or AUTH in its data flow path. ` +
-          `Even read-only public endpoints need rate limiting and input validation to prevent abuse.`,
-        fix: 'Add rate limiting middleware and input validation. If authentication is not required, ' +
-          'still validate all inputs and apply request throttling.',
-      });
     }
+    // Removed: generic "read-only endpoint needs rate limiting" findings — these are the #1 FP source
+    // for CWE-1125. Servlet request params, cookies, etc. are all INGRESS nodes that trivially
+    // have no CONTROL/AUTH in their data flow path. Only the aggregate check below matters.
   }
 
   if (ingress.length > 0 && unprotectedEndpoints.length > ingress.length * 0.5 && ingress.length >= 5) {
@@ -23772,6 +24650,44 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
           fix: 'Use AES-256-GCM or AES-256-CBC instead of DES. Update the properties file to use strong algorithms.',
         });
       }
+    }
+  }
+
+  // Strategy C: Juliet/NIST pattern — variable assigned a hardcoded string, then .getBytes() passed
+  // to SecretKeySpec. Catches: String data = "literal"; ... new SecretKeySpec(data.getBytes("UTF-8"), "AES");
+  if (findings.length === 0 && map.source_code) {
+    const src = map.source_code;
+    // Find all hardcoded string assignments (both combined decl+assign and bare reassignment)
+    const assignRe321a = /(?:String|string)\s+(\w+)\s*=\s*["']([^"']{2,})["']\s*;/g;
+    const assignRe321b = /^\s*(\w+)\s*=\s*["']([^"']{2,})["']\s*;/gm;
+    let m321: RegExpExecArray | null;
+    const hardcodedVars321 = new Map<string, string>();
+    for (const re321 of [assignRe321a, assignRe321b]) {
+      re321.lastIndex = 0;
+      while ((m321 = re321.exec(src)) !== null) {
+        const vName = m321[1];
+        const vVal = m321[2];
+        if (/^(https?:|jdbc:|select |insert |data-)/i.test(vVal)) continue;
+        if (/^(if|else|for|while|return|try|catch|throw|new|this|super|class|import|package)$/.test(vName)) continue;
+        const lineCtx = src.slice(Math.max(0, src.lastIndexOf('\n', m321.index)), src.indexOf('\n', m321.index + m321[0].length));
+        if (/readLine|getenv|getProperty|System\.in|process\.env|vault|secretManager/i.test(lineCtx)) continue;
+        hardcodedVars321.set(vName, vVal);
+      }
+    }
+
+    // Check if any hardcoded var's bytes flow into SecretKeySpec
+    const secretKeyRe = /new\s+SecretKeySpec\s*\(\s*(\w+)\.getBytes/;
+    const skMatch = secretKeyRe.exec(src);
+    if (skMatch && hardcodedVars321.has(skMatch[1])) {
+      findings.push({
+        source: { id: 'src-hardcoded-key-var', label: `${skMatch[1]} = "${hardcodedVars321.get(skMatch[1])}"`, line: 0, code: `${skMatch[1]} = "${hardcodedVars321.get(skMatch[1])}"` },
+        sink:   { id: 'sink-secret-key-spec', label: skMatch[0].trim(), line: 0, code: skMatch[0].trim() },
+        missing: 'META (externally managed cryptographic key -- use KMS, vault, or env vars)',
+        severity: 'critical',
+        description: `Variable "${skMatch[1]}" is assigned a hardcoded string and then used as a cryptographic key in SecretKeySpec. ` +
+          `Keys embedded in source code cannot be rotated without redeployment.`,
+        fix: 'Load cryptographic keys from environment variables or a key management service.',
+      });
     }
   }
 
@@ -26143,6 +27059,28 @@ function verifyCWE325(map: NeuralMap): VerificationResult {
           'Never use SHA-256/MD5 for passwords.',
       });
     }
+    // Detect KeyGenerator.getInstance() without .init() before .generateKey()
+    // The Juliet pattern: KeyGenerator.getInstance("AES") followed by generateKey() without init()
+    const KEY_GEN_RE = /KeyGenerator\.getInstance\s*\(/;
+    const KEY_GEN_INIT_RE = /\.init\s*\(\s*\d/;
+    const KEY_GEN_GENERATE_RE = /\.generateKey\s*\(/;
+    if (KEY_GEN_RE.test(code) && KEY_GEN_GENERATE_RE.test(code) && !KEY_GEN_INIT_RE.test(code)) {
+      // Check sibling nodes in same scope for init() call
+      const siblings = map.nodes.filter(n => n.id !== node.id && sharesFunctionScope(map, node.id, n.id));
+      const hasInit = siblings.some(n => KEY_GEN_INIT_RE.test(stripComments(n.analysis_snapshot || n.code_snapshot)));
+      if (!hasInit) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'TRANSFORM (KeyGenerator.init() — explicit key size initialization)',
+          severity: 'high',
+          description: `KeyGenerator used without explicit init() at ${node.label}. ` +
+            `Without init(), the crypto provider chooses a default key size which may be insufficient ` +
+            `and causes interoperability issues across providers.`,
+          fix: 'Call KeyGenerator.init(keySize) before generateKey(). For AES, use init(256) for maximum security. ' +
+            'Always explicitly specify key size rather than relying on provider defaults.',
+        });
+      }
+    }
   }
   return { cwe: 'CWE-325', name: 'Missing Cryptographic Step', holds: findings.length === 0, findings };
 }
@@ -26273,6 +27211,53 @@ function verifyCWE329(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Strategy C: Juliet/NIST pattern -- hardcoded byte array used as IV via IvParameterSpec.
+  // Catches: byte[] initializationVector = {0x00,...}; ... new IvParameterSpec(initializationVector);
+  if (findings.length === 0 && map.source_code) {
+    const src329 = map.source_code;
+    const hasCBC329 = /AES\/CBC\/|DES\/CBC\/|Cipher\.getInstance\s*\(\s*["'][^"']*CBC[^"']*["']/i.test(src329);
+    if (hasCBC329) {
+      // Find hardcoded byte arrays and their positions
+      const byteArrayRe329 = /byte\s*\[\s*\]\s+(\w+)\s*=\s*\{([^}]+)\}/g;
+      let ba329: RegExpExecArray | null;
+      const hardcodedIVEntries329: Array<{name: string; content: string; pos: number}> = [];
+      while ((ba329 = byteArrayRe329.exec(src329)) !== null) {
+        const vn329 = ba329[1];
+        const ac329 = ba329[2].trim();
+        const vals329 = ac329.split(',').map((v: string) => v.trim());
+        const allHC329 = vals329.every((v: string) => /^0x[0-9a-fA-F]+$|^\d+$|^\(byte\)\s*0x[0-9a-fA-F]+$/.test(v));
+        if (allHC329 && vals329.length >= 8) {
+          hardcodedIVEntries329.push({name: vn329, content: ac329.slice(0, 60), pos: ba329.index});
+        }
+      }
+      // Find all IvParameterSpec usages and their positions
+      const ivSpecReG329 = /new\s+IvParameterSpec\s*\(\s*(\w+)\s*\)/g;
+      let ivM329: RegExpExecArray | null;
+      while ((ivM329 = ivSpecReG329.exec(src329)) !== null) {
+        const ivVarName329 = ivM329[1];
+        // Find matching hardcoded array entry
+        const entry329 = hardcodedIVEntries329.find(e => e.name === ivVarName329);
+        if (!entry329) continue;
+        // Check for SecureRandom.nextBytes(var) only between the array decl and IvParameterSpec usage
+        const scopeSlice329 = src329.slice(entry329.pos, ivM329.index + ivM329[0].length);
+        const srFill329 = new RegExp('SecureRandom[^;]*\\.nextBytes\\s*\\(\\s*' + ivVarName329 + '\\s*\\)', 'i');
+        if (!srFill329.test(scopeSlice329)) {
+          findings.push({
+            source: { id: 'src-hardcoded-iv', label: 'byte[] ' + ivVarName329 + ' = {' + entry329.content + '...}', line: 0, code: 'byte[] ' + ivVarName329 + ' = {' + entry329.content + '...}' },
+            sink:   { id: 'sink-iv-param-spec', label: ivM329[0].trim(), line: 0, code: ivM329[0].trim() },
+            missing: 'TRANSFORM (cryptographically random IV for CBC)',
+            severity: 'high',
+            description: 'Hardcoded byte array "' + ivVarName329 + '" is used as the IV in CBC mode via IvParameterSpec. ' +
+              'A static IV makes the first block equivalent to ECB, leaking whether two messages share the same prefix.',
+            fix: 'Generate a random IV per encryption using SecureRandom.nextBytes(). Prepend IV to ciphertext. ' +
+              'Better: switch to AES-GCM which handles nonces more safely.',
+          });
+          break; // One finding is enough
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-329', name: 'Generation of Predictable IV with CBC Mode', holds: findings.length === 0, findings };
 }
 
@@ -26382,6 +27367,45 @@ function verifyCWE336(map: NeuralMap): VerificationResult {
           fix: 'Use java.security.SecureRandom instead of java.util.Random. ' +
             'SecureRandom provides cryptographically strong random values.',
         });
+      }
+    }
+  }
+
+  // Strategy C: SecureRandom.setSeed() with hardcoded/constant seed (Juliet CWE-336 pattern)
+  // Detects: secureRandom.setSeed(CONSTANT) or secureRandom.setSeed(new byte[]{...})
+  // A SecureRandom seeded with a constant produces the same output every run.
+  {
+    const SET_SEED_RE336 = /\.setSeed\s*\(/;
+    const SECURE_RANDOM_INST_RE336 = /\bnew\s+SecureRandom\s*\(/;
+    const reported336c = new Set<string>(findings.map(f => f.sink.id));
+
+    for (const node of map.nodes) {
+      if (reported336c.has(node.id)) continue;
+      const snap = stripComments(node.analysis_snapshot || node.code_snapshot);
+      // Must have setSeed in this node
+      if (!SET_SEED_RE336.test(snap)) continue;
+      // Check if SecureRandom exists anywhere in the file (may be in same or different node)
+      const hasSecureRandom = SECURE_RANDOM_INST_RE336.test(snap) ||
+        map.nodes.some(n => SECURE_RANDOM_INST_RE336.test(stripComments(n.analysis_snapshot || n.code_snapshot)));
+      if (!hasSecureRandom) continue;
+      // Extract the seed argument
+      const seedArgMatch = snap.match(/\.setSeed\s*\(\s*([^)]+)\)/);
+      if (seedArgMatch) {
+        const seedArg = seedArgMatch[1].trim();
+        // Safe seeds: SecureRandom.generateSeed(), crypto random bytes
+        const isSafeSeed = /SecureRandom|generateSeed|randomBytes|urandom|crypto\.random/i.test(seedArg);
+        if (!isSafeSeed) {
+          reported336c.add(node.id);
+          findings.push({
+            source: nodeRef(node), sink: nodeRef(node),
+            missing: 'TRANSFORM (do not seed SecureRandom with hardcoded/constant values)',
+            severity: 'high',
+            description: `${node.label} seeds SecureRandom with a hardcoded/constant value via setSeed(). ` +
+              `This makes the PRNG output predictable and reproducible across runs.`,
+            fix: 'Do not call setSeed() with hardcoded values on SecureRandom. ' +
+              'Let SecureRandom self-seed from the OS entropy source, or use SecureRandom.generateSeed() if reseeding.',
+          });
+        }
       }
     }
   }
@@ -27078,10 +28102,16 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
   const EMPTY_CATCH = /catch\s*\([^)]*\)\s*\{\s*\}|catch\s*\([^)]*\)\s*\{\s*\/\/[^\n]*\s*\}|catch\s*\([^)]*\)\s*\{\s*\/\*[^*]*\*\/\s*\}|except\s*(?:\w+\s*(?:as\s+\w+)?\s*)?:\s*(?:\n\s*)?pass\b|rescue\s*(?:=>?\s*\w+)?\s*;\s*(?:nil|next|retry)\b/i;
   const LOG_ONLY_CATCH = /catch\s*\([^)]*\)\s*\{[^}]*(?:console\.(?:log|warn|error|info)|log(?:ger)?\.(?:error|warn|info|debug)|print(?:ln)?|System\.(?:out|err)\.print|NSLog|syslog|Log\.(?:e|w|d|i))\s*\([^)]*\)\s*;?\s*\}/i;
   const CORRECTIVE_ACTION = /\b(throw|rethrow|raise|panic|return\s+(?:false|null|nil|None|err|error|Result\.err|Err\()|process\.exit|sys\.exit|os\.Exit|abort|reject\(|callback\s*\(\s*err|next\s*\(\s*err|res\.status\s*\(\s*[45]\d\d|rollback|retry|compensat|revert|undo|cleanup|fallback|default\s*:|recover)\b/i;
+  // Error-returning calls: methods that return boolean/error status. If their return value
+  // is checked in an if() but the if-body is empty, that's CWE-390.
+  const ERROR_RETURNING_CALL = /\b(mkdirs?|delete|renameTo|createNewFile|setReadable|setWritable|setExecutable|mkdir|exists|canRead|canWrite)\s*\(\s*\)/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
-    if (EMPTY_CATCH.test(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot)) {
+    const rawCode = node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot;
+    const code = stripComments(rawCode);
+
+    // Strategy 1: Empty catch blocks
+    if (EMPTY_CATCH.test(rawCode)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'CONTROL (error handling logic in catch block)',
@@ -27093,7 +28123,7 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
           'or at minimum log it AND set an error state. If the exception truly cannot occur, ' +
           'add a comment explaining why and consider an assertion.',
       });
-    } else if (LOG_ONLY_CATCH.test(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot) && !CORRECTIVE_ACTION.test(code)) {
+    } else if (LOG_ONLY_CATCH.test(rawCode) && !CORRECTIVE_ACTION.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'CONTROL (corrective action after error detection)',
@@ -27104,6 +28134,43 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
         fix: 'After logging, take corrective action: return an error code, set a flag, ' +
           'use a fallback value, retry the operation, or re-throw for upstream handling.',
       });
+    }
+
+    // Strategy 2: Empty if-block after error-returning call
+    // Juliet pattern: if (!x.mkdirs()) { /* comment only */ }
+    if (node.node_type === 'CONTROL' && node.node_subtype === 'branch') {
+      // Check if the condition involves an error-returning call
+      const condMatch = rawCode.match(/^if\s*\(([^)]*(?:\([^)]*\))*[^)]*)\)\s*\{/s);
+      if (condMatch && ERROR_RETURNING_CALL.test(condMatch[1])) {
+        // Extract the if-body (after the opening brace)
+        const braceStart = rawCode.indexOf('{');
+        if (braceStart !== -1) {
+          const afterBrace = rawCode.slice(braceStart + 1);
+          // Find the matching closing brace (handle nested braces)
+          let depth = 1;
+          let bodyEnd = -1;
+          for (let i = 0; i < afterBrace.length; i++) {
+            if (afterBrace[i] === '{') depth++;
+            else if (afterBrace[i] === '}') { depth--; if (depth === 0) { bodyEnd = i; break; } }
+          }
+          if (bodyEnd !== -1) {
+            const body = afterBrace.slice(0, bodyEnd);
+            const strippedBody = stripComments(body).trim();
+            if (strippedBody === '' && !CORRECTIVE_ACTION.test(body)) {
+              findings.push({
+                source: nodeRef(node), sink: nodeRef(node),
+                missing: 'CONTROL (error handling logic in if-block after error check)',
+                severity: 'medium',
+                description: `Error condition detected at ${node.label} but no action taken. ` +
+                  `The error-returning call result is checked but the if-body is empty — ` +
+                  `the program continues as if the operation succeeded.`,
+                fix: 'Handle the error: throw an exception, return an error code, log and set error state, ' +
+                  'or take corrective action (retry, fallback). Do not silently ignore error conditions.',
+              });
+            }
+          }
+        }
+      }
     }
   }
   return { cwe: 'CWE-390', name: 'Detection of Error Condition Without Action', holds: findings.length === 0, findings };
@@ -27360,7 +28427,7 @@ function verifyCWE396(map: NeuralMap): VerificationResult {
 
 function verifyCWE397(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
-  const GENERIC_THROWS = /\b(?:throws|throw)\s+(?:Exception|Throwable|Error|RuntimeException|BaseException)\s*(?:,|\{|$)/im;
+  const GENERIC_THROWS = /\b(?:throws|throw)\s+(?:Exception|Throwable|Error|RuntimeException|BaseException)\s*(?:\/[\/*].*)?(?:,|\{|$)/im;
   const CSHARP_GENERIC = /<exception\s+cref\s*=\s*"(?:System\.)?Exception"/i;
   const PY_GENERIC_RAISE = /raise\s+(?:Exception|BaseException)\s*\(/i;
   const LEGITIMATE_THROWS = /\b(main\s*\(|@(?:Test|Override|Bean)|test_\w+|def\s+test_|it\s*\(\s*['"]|describe\s*\(\s*['"]|@Deprecated)\b/i;
@@ -29315,7 +30382,7 @@ function verifyCWE539(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const COOKIE_SET_RE = /\b(Set-Cookie|setCookie|setcookie|res\.cookie|response\.set_cookie|addCookie|cookies\.set|Cookie\(|http\.SetCookie|setHeader\s*\(\s*['"]Set-Cookie|document\.cookie\s*=)\b/i;
   const PERSISTENT_RE = /\b(expires|max-age|maxAge|Max-Age|setMaxAge|max_age|expiry|\.setExpires|\.setMaxAge\s*\(\s*(?!0\s*\))|maxAge\s*[:=]\s*(?!0\b|false|null|undefined))\b/i;
-  const SENSITIVE_COOKIE_RE = /\b(session|token|auth|user|login|credential|password|jwt|bearer|access.?token|refresh.?token|api.?key|remember.?me|identity|account|role|permission|privilege)\b/i;
+  const SENSITIVE_COOKIE_RE = /\b(session|token|auth|user|login|credential|password|jwt|bearer|access.?token|refresh.?token|api.?key|remember.?me|identity|account|role|permission|privilege|secret)\b/i;
   const SAFE_RE = /\b(encrypt|cipher|signed.?cookie|httpOnly|HttpOnly|secure|Secure|sameSite|SameSite|session.?cookie|\.sign\(|crypto\.|jwt\.sign|maxAge\s*[:=]\s*0\b|setMaxAge\s*\(\s*0\s*\)|expires\s*[:=]\s*(?:0|new\s+Date\s*\(\s*0|'Thu, 01 Jan 1970))\b/i;
 
   for (const node of map.nodes) {
@@ -29350,6 +30417,53 @@ function verifyCWE539(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // --- Source-based detection: Java Cookie with setMaxAge pattern ---
+  // The Juliet pattern spans multiple lines: new Cookie("name", "value") on one line
+  // then cookie.setMaxAge(large_number) on another. The node-level scan misses this
+  // because the cookie creation and the setMaxAge call may be in different code_snapshots.
+  if (findings.length === 0) {
+    const src539 = map.source_code || '';
+    if (src539) {
+      const lines = src539.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+        // Find: new Cookie("name", "value") — track the variable name
+        const cookieMatch = line.match(/(\w+)\s*=\s*new\s+Cookie\s*\(/);
+        if (cookieMatch) {
+          const cookieVar = cookieMatch[1];
+          // Look ahead for setMaxAge with a positive value (persistent cookie)
+          for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
+            const ahead = lines[j];
+            if (/^\s*\/\//.test(ahead) || /^\s*\*/.test(ahead)) continue;
+            // Match: cookie.setMaxAge(positive_number) but not setMaxAge(0) or setMaxAge(-1)
+            const maxAgeMatch = ahead.match(new RegExp(`\\b${cookieVar}\\.setMaxAge\\s*\\(\\s*(.+?)\\s*\\)`));
+            if (maxAgeMatch) {
+              const ageArg = maxAgeMatch[1].trim();
+              // If the argument is 0 or negative, it's safe (session cookie or deletion)
+              if (/^-?\d+$/.test(ageArg) && parseInt(ageArg, 10) <= 0) continue;
+              if (ageArg === '0' || ageArg.startsWith('-')) continue;
+              // Persistent cookie detected
+              const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 3) || map.nodes[0];
+              if (nearNode) {
+                findings.push({
+                  source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                  missing: 'CONTROL (use session cookies for sensitive data — no Expires/Max-Age)',
+                  severity: 'medium',
+                  description: `L${i + 1}: Cookie '${cookieVar}' created and made persistent with setMaxAge at L${j + 1}. ` +
+                    'Persistent cookies survive browser restarts and are accessible on shared/public computers.',
+                  fix: 'Use session cookies (setMaxAge(-1)) for sensitive data. Set Secure, HttpOnly, and SameSite flags.',
+                });
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-539', name: 'Persistent Cookies With Sensitive Info', holds: findings.length === 0, findings };
 }
 
@@ -29494,7 +30608,7 @@ function verifyCWE544(map: NeuralMap): VerificationResult {
       }
     }
 
-    if (inlineHandlerCount >= 2 || inconsistentCount > 0) {
+    if (inlineHandlerCount >= 4 || inconsistentCount > 0) {
       const sample = errorHandlerNodes.slice(0, 3);
       for (const node of sample) {
         findings.push({
@@ -29570,6 +30684,86 @@ function verifyCWE546(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // --- Strategy 2: Source-scan (from generated) — catches non-security-relevant nodes ---
+  // This fires on ANY comment with BUG/FIXME/HACK/KLUDGE/XXX/WORKAROUND/BROKEN regardless
+  // of node classification, which is what Juliet tests expect.
+  const src546 = map.source_code || '';
+  if (src546 && findings.length === 0) {
+    const suspiciousKeywords = /\b(BUG|FIXME|HACK|KLUDGE|XXX|WORKAROUND|BROKEN)\b/;
+    const lines546 = src546.split('\n');
+    const reportedLines = new Set<number>();
+
+    for (let i = 0; i < lines546.length; i++) {
+      const line = lines546[i];
+      // Check single-line comments
+      const slComment = line.match(/\/\/(.*)$/);
+      if (slComment && suspiciousKeywords.test(slComment[1])) {
+        const keyword = slComment[1].match(suspiciousKeywords)![1];
+        if (/\bFLAW\b|\bFIX\b|\bINCIDENTAL\b/.test(slComment[1])) continue;
+        reportedLines.add(i + 1);
+        const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'META (resolve suspicious comments before release)',
+            severity: 'low',
+            description: `L${i + 1}: Suspicious comment contains '${keyword}': ${line.trim().slice(0, 100)}`,
+            fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+          });
+        }
+      }
+      // Check block comments on this line
+      const blockComments = line.match(/\/\*([^*]|\*(?!\/))*\*\//g);
+      if (blockComments) {
+        for (const bc of blockComments) {
+          if (suspiciousKeywords.test(bc)) {
+            const keyword = bc.match(suspiciousKeywords)![1];
+            if (/\bFLAW\b|\bFIX\b|\bINCIDENTAL\b/.test(bc)) continue;
+            if (/TEMPLATE GENERATED|@description|Label Definition|Template File|Flow Variant/i.test(bc)) continue;
+            if (reportedLines.has(i + 1)) continue;
+            reportedLines.add(i + 1);
+            const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'META (resolve suspicious comments before release)',
+                severity: 'low',
+                description: `L${i + 1}: Suspicious comment contains '${keyword}': ${bc.slice(0, 100)}`,
+                fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Multi-line block comments spanning multiple lines
+    const multiLineComments546 = src546.match(/\/\*[\s\S]*?\*\//g);
+    if (multiLineComments546) {
+      for (const mc of multiLineComments546) {
+        if (!mc.includes('\n') && mc.includes('*/')) continue;
+        if (suspiciousKeywords.test(mc) && !/\bFLAW\b|\bFIX\b|\bINCIDENTAL\b/.test(mc)) {
+          const idx = src546.indexOf(mc);
+          const lineNum = src546.slice(0, idx).split('\n').length;
+          if (/TEMPLATE GENERATED|@description|Label Definition|Template File|Flow Variant/i.test(mc)) continue;
+          if (reportedLines.has(lineNum)) continue;
+          if (findings.some(f => Math.abs(f.source.line - lineNum) <= 2)) continue;
+          const keyword = mc.match(suspiciousKeywords)![1];
+          const nearNode = map.nodes.find(n => Math.abs(n.line_start - lineNum) <= 2) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'META (resolve suspicious comments before release)',
+              severity: 'low',
+              description: `L${lineNum}: Suspicious multi-line comment contains '${keyword}'`,
+              fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+            });
+          }
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-546', name: 'Suspicious Comment', holds: findings.length === 0, findings };
 }
 
@@ -29770,6 +30964,7 @@ function verifyCWE584(map: NeuralMap): VerificationResult {
  */
 function verifyCWE588(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+  const mapLang = inferMapLanguage(map);
 
   // Library code accesses deeply nested properties on known internal structures — not external data
   if (isLibraryCode(map)) {
@@ -29809,7 +31004,9 @@ function verifyCWE588(map: NeuralMap): VerificationResult {
       matched = true;
       detail = 'chains method call on .get() result without null check — NPE if key missing';
     } else if (JS_DEEP_ACCESS.test(code) && !JS_OPTIONAL_CHAIN.test(code) && !JS_GUARD.test(code) &&
-               /\b(?:req\.|params|query|body|config|data|response|result)\b/.test(code)) {
+               /\b(?:req\.|params|query|body|config|data|response|result)\b/.test(code) &&
+               // Only flag for JS/TS/Python — Java method chaining is normal, not a CWE-588 pattern
+               (['javascript', 'typescript', 'python', ''].some(l => mapLang === l))) {
       matched = true;
       detail = 'deeply nested property access on external data without optional chaining or null guard';
     } else if (PY_NESTED_DICT.test(code) && !PY_SAFE.test(code)) {
@@ -30925,13 +32122,128 @@ function verifyCWE636(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-636', name: 'Not Failing Securely (Failing Open)', holds: findings.length === 0, findings };
 }
 
+/**
+ * CWE-477: Use of Obsolete Function
+ * Source scan for deprecated Java API calls. These APIs have known issues:
+ * - Thread.stop/suspend/resume — unsafe thread manipulation
+ * - Runtime.runFinalizersOnExit — finalization is broken by design
+ * - DataInputStream.readLine — mishandles Unicode (deprecated since JDK 1.1)
+ * - Date.parse — superseded by DateFormat.parse
+ * - String.getBytes(int,int,byte[],int) — mishandles non-ASCII (deprecated since JDK 1.1)
+ * - URLEncoder.encode(String) — uses platform default encoding, not UTF-8
+ */
+function verifyCWE477(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Deprecated Java APIs: method name + context pattern + replacement guidance
+  const OBSOLETE_APIS: Array<{ pattern: RegExp; name: string; fix: string }> = [
+    { pattern: /\bThread\s*\.\s*stop\s*\(/, name: 'Thread.stop()', fix: 'Use Thread.interrupt() and cooperative cancellation instead of Thread.stop().' },
+    { pattern: /\bThread\s*\.\s*suspend\s*\(/, name: 'Thread.suspend()', fix: 'Use wait/notify or Lock/Condition instead of Thread.suspend().' },
+    { pattern: /\bThread\s*\.\s*resume\s*\(/, name: 'Thread.resume()', fix: 'Use wait/notify or Lock/Condition instead of Thread.resume().' },
+    { pattern: /\bRuntime\s*\.\s*runFinalizersOnExit\s*\(/, name: 'Runtime.runFinalizersOnExit()', fix: 'Use shutdown hooks (Runtime.addShutdownHook) or try-with-resources instead.' },
+    { pattern: /\bSystem\s*\.\s*runFinalizersOnExit\s*\(/, name: 'System.runFinalizersOnExit()', fix: 'Use shutdown hooks (Runtime.addShutdownHook) or try-with-resources instead.' },
+    { pattern: /\bDataInputStream\b[\s\S]*?\.readLine\s*\(/, name: 'DataInputStream.readLine()', fix: 'Use BufferedReader.readLine() instead of DataInputStream.readLine(). The deprecated method incorrectly converts bytes to characters.' },
+    { pattern: /\bDate\s*\.\s*parse\s*\(/, name: 'Date.parse()', fix: 'Use DateFormat.parse() or java.time.LocalDate.parse() instead of the deprecated Date.parse().' },
+    { pattern: /\.getBytes\s*\(\s*\d+\s*,/, name: 'String.getBytes(int,int,byte[],int)', fix: 'Use String.getBytes(charset) instead of the deprecated 4-argument getBytes. Specify charset explicitly (e.g., "UTF-8").' },
+    { pattern: /\bURLEncoder\s*\.\s*encode\s*\(\s*[^,)]+\)/, name: 'URLEncoder.encode(String)', fix: 'Use URLEncoder.encode(s, "UTF-8") instead of the single-argument form, which uses platform default encoding.' },
+  ];
+
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+
+    for (const api of OBSOLETE_APIS) {
+      if (api.pattern.test(code)) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: `STRUCTURAL (replace obsolete API: ${api.name})`,
+          severity: 'medium',
+          description: `Obsolete function ${api.name} used at ${node.label}. ` +
+            `Deprecated APIs may have known bugs, security vulnerabilities, or undefined behavior.`,
+          fix: api.fix,
+        });
+      }
+    }
+  }
+
+  return { cwe: 'CWE-477', name: 'Use of Obsolete Function', holds: findings.length === 0, findings };
+}
+
+/**
+ * CWE-549: Missing Password Field Masking
+ * Source scan for password fields that are not masked:
+ * - HTML password inputs using type="text" instead of type="password"
+ * - JPasswordField.getText() instead of getPassword()
+ * The Juliet pattern: Servlet writing HTML with <input name="password" type="text">
+ */
+function verifyCWE549(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Pattern 1: HTML password field with type="text" (the Juliet Servlet pattern)
+  // Matches: <input ... name="password" ... type="text" ...> or reverse order
+  // Handles both plain quotes and backslash-escaped quotes (Java source has \" in string literals)
+  const Q = `(?:\\\\?["'])`;  // matches " or ' or \" or \'
+  const PASSWORD_FIELD_TEXT_RE = new RegExp(
+    `name\\s*=\\s*${Q}password${Q}[^>]*type\\s*=\\s*${Q}text${Q}|type\\s*=\\s*${Q}text${Q}[^>]*name\\s*=\\s*${Q}password${Q}`, 'i'
+  );
+
+  // Pattern 2: JPasswordField.getText() — deprecated, returns password as String (stays in memory)
+  const JPASSWORD_GET_TEXT_RE = /JPasswordField\b[\s\S]*?\.getText\s*\(/;
+
+  // Pattern 3: HTML form with password field sent via GET method
+  const FORM_GET_PASSWORD_RE = new RegExp(
+    `method\\s*=\\s*${Q}get${Q}[\\s\\S]*?name\\s*=\\s*${Q}password${Q}|name\\s*=\\s*${Q}password${Q}[\\s\\S]*?method\\s*=\\s*${Q}get${Q}`, 'i'
+  );
+
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+
+    if (PASSWORD_FIELD_TEXT_RE.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'TRANSFORM (password field masking — type="password")',
+        severity: 'medium',
+        description: `Password field rendered with type="text" at ${node.label}. ` +
+          `The password is visible on screen, enabling shoulder-surfing attacks.`,
+        fix: 'Use type="password" for all password input fields. This masks the entered characters ' +
+          'and prevents the password from being visible to bystanders.',
+      });
+    }
+
+    if (JPASSWORD_GET_TEXT_RE.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'TRANSFORM (use getPassword() instead of getText())',
+        severity: 'medium',
+        description: `JPasswordField.getText() used at ${node.label}. ` +
+          `getText() returns a String which stays in memory until GC. getPassword() returns char[] that can be zeroed.`,
+        fix: 'Use JPasswordField.getPassword() instead of getText(). After using the char[], ' +
+          'zero it with Arrays.fill(password, \'\\0\') to minimize the time the password is in memory.',
+      });
+    }
+
+    if (FORM_GET_PASSWORD_RE.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'TRANSFORM (use POST method for password forms)',
+        severity: 'high',
+        description: `Password field in a form using GET method at ${node.label}. ` +
+          `GET puts the password in the URL, visible in browser history, server logs, and referrer headers.`,
+        fix: 'Use method="post" for forms containing password fields. Never send passwords via GET — ' +
+          'they appear in URLs, browser history, proxy logs, and HTTP Referer headers.',
+      });
+    }
+  }
+
+  return { cwe: 'CWE-549', name: 'Missing Password Field Masking', holds: findings.length === 0, findings };
+}
+
 // Registry — CWE → verification function
 // ---------------------------------------------------------------------------
 
 const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
-  // Generated verifiers first — hand-written overrides below take precedence
+  // Generated-only verifiers (hand-written overlaps already filtered out in generated/index.ts)
   ...GENERATED_REGISTRY,
-  // Hand-written verifiers override generated where both exist (e.g. CWE-798)
+  // Hand-written verifiers — these are the authoritative versions for their CWEs
   'CWE-89': verifyCWE89,
   'CWE-79': verifyCWE79,
   'CWE-22': verifyCWE22,
@@ -31042,6 +32354,8 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-495': verifyCWE495,
   'CWE-496': verifyCWE496,
   'CWE-499': verifyCWE499,
+  'CWE-500': verifyCWE500,
+  'CWE-582': verifyCWE582,
   // Dead code, always-true/false, thread bugs, pointer misuse CWEs
   'CWE-561': verifyCWE561,
   'CWE-562': verifyCWE562,
@@ -31061,8 +32375,8 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-347': verifyCWE347,
   'CWE-354': verifyCWE354,
   'CWE-757': verifyCWE757,
-  'CWE-759': verifyCWE759,
-  'CWE-760': verifyCWE760,
+  'CWE-759': verifyCWE759_B2,
+  'CWE-760': verifyCWE760_B2,
   'CWE-916': verifyCWE916,
   // Concurrency, temp file, and search path CWEs
   'CWE-362': verifyCWE362,
@@ -31216,7 +32530,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-573': verifyCWE573,
   'CWE-579': verifyCWE579,
   'CWE-580': verifyCWE580,
-  'CWE-614': verifyCWE614,
+  'CWE-614': verifyCWE614_B2,
   // Trust boundary & authorization bypass CWEs
   'CWE-602': verifyCWE602,
   'CWE-603': verifyCWE603,
@@ -31417,7 +32731,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-326': verifyCWE326,
   'CWE-329': verifyCWE329,
   'CWE-335': verifyCWE335,
-  'CWE-336': verifyCWE336,
+  'CWE-336': verifyCWE336_B2,
   'CWE-337': verifyCWE337,
   'CWE-339': verifyCWE339,
   'CWE-340': verifyCWE340,
@@ -31475,6 +32789,9 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-605': verifyCWE605,
   'CWE-612': verifyCWE612,
   'CWE-613': verifyCWE613,
+  // Obsolete functions, password masking — source scan CWEs
+  'CWE-477': verifyCWE477,
+  'CWE-549': verifyCWE549,
 };
 
 // ---------------------------------------------------------------------------
@@ -31526,25 +32843,36 @@ const ALWAYS_CHECK_CWES: ReadonlySet<string> = new Set([
   'CWE-200', 'CWE-209',
 ]);
 
+/** Options for verifyAll() */
+export interface VerifyAllOptions {
+  /** When true, skip source-sink dedup and return raw results (for Juliet scoring, debugging) */
+  noDedup?: boolean;
+}
+
 /**
  * Verify all registered CWEs against a neural map.
  *
- * When `language` is provided and is a web language (javascript, python),
- * platform-specific CWEs (Windows, Android, .NET, J2EE, ActiveX, etc.)
- * are automatically skipped to prevent false positives.
+ * When `language` is provided, CWEs are filtered by platform overlap using
+ * MITRE CWE data. Each CWE is only skipped when its applicable platforms
+ * have ZERO overlap with the language's target platforms. This correctly:
+ * - Keeps J2EE/Struts/EJB/Servlet CWEs for Java and Kotlin scans
+ * - Keeps .NET/ASP.NET CWEs for C# scans
+ * - Keeps Android CWEs for Java and Kotlin scans
+ * - Skips Windows kernel CWEs for all non-C/C++ languages
+ * - Skips J2EE CWEs for JavaScript/Python/Go/etc.
  *
  * When the code is detected as library/framework code, only injection/crypto/auth
  * CWEs are checked — code-quality and architecture CWEs are skipped to prevent FPs.
+ *
+ * By default, results are deduplicated by (source, sink, missingCategory) to collapse
+ * CWE family explosions. Pass `{ noDedup: true }` to get raw results.
  */
-export function verifyAll(map: NeuralMap, language?: string): VerificationResult[] {
-  const skipPlatform = language != null && WEB_LANGUAGES.has(language);
+export function verifyAll(map: NeuralMap, language?: string, options?: VerifyAllOptions): VerificationResult[] {
   const isLibrary = isLibraryCode(map);
   let cwes = Object.keys(CWE_REGISTRY);
 
-  // Filter out platform-specific CWEs for web languages
-  if (skipPlatform) {
-    cwes = cwes.filter(cwe => !PLATFORM_SPECIFIC_CWES.has(cwe));
-  }
+  // Filter CWEs by language-platform overlap (MITRE-sourced, replaces WEB_LANGUAGES gate)
+  cwes = filterCWEsForLanguage(cwes, language);
 
   // For library code, only check injection/crypto/auth CWEs
   // (hand-written verifiers also have individual library guards as defense-in-depth)
@@ -31590,6 +32918,104 @@ export function verifyAll(map: NeuralMap, language?: string): VerificationResult
     }
   }
 
+  // ── THIRD PASS: Scope-based threat-control mismatch ────────────────
+  // For Java/multi-language patterns where BFS doesn't create rich DATA_FLOW
+  // paths, check if INGRESS→STORAGE pairs in the same scope have controls
+  // that address the wrong threat class. This is the CWE-566 detector.
+  //
+  // Pattern: parameterized query (injection control) present, but no
+  // ownership check (authorization control) in scope.
+  const SQL_PK_RE_3P = /(?:WHERE\s+(?:uid|id|user_id|pk|primary_key)\s*=\s*\?|\bfindById\b|\bfindByPk\b|\bget_object_or_404\b|\.get\s*\(\s*pk\b)/i;
+  const INJECTION_CONTROL_RE_3P = /\b(preparedStatement|PreparedStatement|prepared_statement|parameteriz|\.setInt|\.setString|\.setLong|\.setDouble|\.setFloat|\.setBoolean|\.setDate|\.setTimestamp|\.setObject)\b/i;
+  const OWNERSHIP_AUTH_RE_3P = /\b(session\.getAttribute|getSession\s*\(\s*\)\s*\.\s*getAttribute|session\.user[_.]?id|request\.getUserPrincipal|SecurityContext|getRemoteUser|getUserName|currentUser|req\.user\.id|req\.user\b|user_id\s*===?\s*|AND\s+(?:user_id|owner_id|created_by)\s*=|owned_by|belongs_to|checkOwnership|isOwner|verifyOwner|authorize[!]?|hasPermission|can\?\s*:|ability\.can|@PreAuthorize|@Secured|@RolesAllowed|\.where\s*\(.*(?:user_id|owner_id|created_by))/i;
+  // Only INGRESS nodes that carry user-controlled data (not just type declarations)
+  const USER_INPUT_RE_3P = /\b(getParameter|getHeader|getCookies|getInputStream|getReader|getQueryString|getPathInfo|getRequestURI|getRequestURL|req\.params|req\.query|req\.body|request\.args|request\.form|request\.GET|request\.POST|\$_GET|\$_POST|@PathVariable|@RequestParam|@RequestBody|@RequestHeader)\b/i;
+
+  // Track which functions have already been flagged to avoid duplicate findings per function
+  const flaggedFunctions = new Set<string>();
+
+  for (const src of ingress) {
+    // Only flag INGRESS nodes that carry user data extraction (e.g., request.getParameter),
+    // NOT just HttpServletRequest parameter type declarations. A method that receives
+    // HttpServletRequest but only uses hardcoded data (like Juliet's good() variant)
+    // should NOT be flagged.
+    const srcCode = stripComments(src.analysis_snapshot || src.code_snapshot);
+    const srcIsDataExtraction = USER_INPUT_RE_3P.test(srcCode);
+    if (!srcIsDataExtraction) continue;
+
+    for (const sink of dangerousSinks) {
+      if (src.id === sink.id) continue;
+      if (sink.node_type !== 'STORAGE') continue;
+
+      // Only flag the STORAGE node that has the actual SQL PK lookup
+      const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
+      if (!SQL_PK_RE_3P.test(sinkCode)) continue;
+
+      // Check if source and sink share a function scope
+      if (!sharesFunctionScope(map, src.id, sink.id)) continue;
+
+      // Get the scope code to check for injection control
+      const sinkScopeSnaps = getContainingScopeSnapshots(map, sink.id);
+      const fullScopeCode = stripComments(sinkScopeSnaps.join('\n') + '\n' + sinkCode);
+
+      // Is there an injection control in scope (parameterized query)?
+      if (!INJECTION_CONTROL_RE_3P.test(fullScopeCode)) continue;
+
+      // Deduplicate by containing function — one finding per (function, src INGRESS)
+      const functionKey = sinkScopeSnaps[0]?.slice(0, 40) + ':' + src.id;
+      if (flaggedFunctions.has(functionKey)) continue;
+
+      // Is there an ownership/authorization check in scope?
+      const hasOwnershipCheck = map.nodes.some(n => {
+        if (!sharesFunctionScope(map, n.id, sink.id)) return false;
+        const nodeCode = n.code_snapshot + ' ' + (n.analysis_snapshot || '');
+        return OWNERSHIP_AUTH_RE_3P.test(nodeCode);
+      });
+
+      if (!hasOwnershipCheck) {
+        flaggedFunctions.add(functionKey);
+
+        // CWE-566: Parameterized query present (injection control) but no ownership check
+        let cwe566Result = results.find(r => r.cwe === 'CWE-566');
+        if (!cwe566Result) {
+          cwe566Result = { cwe: 'CWE-566', name: 'Authorization Bypass Through User-Controlled SQL Primary Key', holds: true, findings: [] };
+          results.push(cwe566Result);
+        }
+
+        // Avoid duplicating if the first-pass CWE-566 verifier already found this pair
+        const alreadyFound = cwe566Result.findings.some(f =>
+          f.source.id === src.id && f.sink.id === sink.id
+        );
+        if (!alreadyFound) {
+          cwe566Result.holds = false;
+          cwe566Result.findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'EFFECTIVE_CONTROL (control addresses injection, not authorization — missing ownership check)',
+            severity: 'high',
+            description: `User input from ${src.label} flows to SQL query at ${sink.label}. ` +
+              `A parameterized query prevents injection, but no ownership check verifies that ` +
+              `the authenticated user is authorized to access the queried record. ` +
+              `The control addresses the wrong threat class (injection vs authorization).`,
+            fix: 'Add ownership verification: WHERE uid = ? AND user_id = :currentUserId. ' +
+              'Or verify session.getAttribute("user_id") == queried_id after fetch. ' +
+              'The parameterized query is necessary but insufficient — it only prevents SQL injection, ' +
+              'not authorization bypass (IDOR).',
+          });
+        }
+      }
+    }
+  }
+
+  // ── LAYER 2: Source-sink dedup ─────────────────────────────────────
+  // Collapse findings that share (source, sink, missingCategory) across
+  // different CWEs. Keeps highest severity, lowest CWE number.
+  // EFFECTIVE_CONTROL findings are excluded from dedup.
+  if (!options?.noDedup) {
+    const { results: deduped } = deduplicateResults(results);
+    return deduped;
+  }
+
   return results;
 }
 
@@ -31617,6 +33043,9 @@ export function formatReport(results: VerificationResult[]): string {
         lines.push(`    Sink:   ${f.sink.label} (line ${f.sink.line})`);
         lines.push(`    Missing: ${f.missing}`);
         lines.push(`    Fix: ${f.fix}`);
+        if (f.collapsed_cwes && f.collapsed_cwes.length > 0) {
+          lines.push(`    Also covers: ${f.collapsed_cwes.join(', ')}`);
+        }
         lines.push('');
       }
     }

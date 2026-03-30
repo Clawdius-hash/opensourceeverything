@@ -68,9 +68,9 @@ function cookieEgressNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe pattern constants
 // ---------------------------------------------------------------------------
 
-const HTML_ENCODE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bhtmlEntities\b|\bhtmlspecialchars\b|\bencodeHtml\b/i;
+const HTML_ENCODE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bhtmlEntities\b|\bhtmlspecialchars\b|\bencodeHtml\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b|\bOwasp\b.*\bencode\b/i;
 const CRLF_SAFE = /\bstrip.*crlf\b|\breplace.*\\r\\n\b|\bstrip.*newline\b|\bcrlf.*reject\b|\bsanitize.*header\b|\bencodeURI\b/i;
-const NEUTRALIZE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bneutralize\s*\(|\bparameterize\b|\bstrip\s*\(|\b\.filter\s*\(/i;
+const NEUTRALIZE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bneutralize\s*\(|\bparameterize\b|\bstrip\s*\(|\b\.filter\s*\(|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i;
 const ENCRYPT_SAFE = /\bencrypt\s*\(|\bcrypto\.\w|\bAES\b|\bhttps\b|\bSecure\b|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b/i;
 const NORMALIZE_SAFE = /\bnormalize\s*\(|\bcanonicalize\s*\(|\bstrip\s*\(|\bencode\s*\(|\bsanitize\s*\(/i;
 
@@ -396,10 +396,14 @@ export const verifyCWE444 = createOutputVerifier(
   /\bContent-Length\b.*\breject\b|\bTransfer-Encoding\b.*\bnormalize\b|\bHTTP\/2\b/i,
 );
 
-/** CWE-549: Missing Password Field Masking */
+/** CWE-549: Missing Password Field Masking — only fires when password-related fields are present */
 export const verifyCWE549 = createOutputVerifier(
   'CWE-549', 'Missing Password Field Masking', 'medium',
-  htmlEgressNodes,
+  (map) => map.nodes.filter(n =>
+    n.node_type === 'EGRESS' &&
+    /\bpassword\b|\bpasswd\b|\bsecret\b|\bcredential\b/i.test(n.code_snapshot) &&
+    !n.code_snapshot.match(/\bres\.json\s*\(/i)
+  ),
   /\btype\s*=\s*['"]password['"]\b|\btype.*password\b|\bmask\b|\b\*\*\*\b/i,
   'TRANSFORM (password field masking — type="password")',
   'Use type="password" for all password input fields. This prevents shoulder surfing ' +

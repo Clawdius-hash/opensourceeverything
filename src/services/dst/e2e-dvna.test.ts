@@ -141,8 +141,8 @@ app.listen(3000);
       edges: [],
     }));
 
-    // Run ALL verifications
-    const results = verifyAll(map);
+    // Run ALL verifications (noDedup for per-CWE scoring assertions)
+    const results = verifyAll(map, undefined, { noDedup: true });
     const report = formatReport(results);
 
     // Print the full report

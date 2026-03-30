@@ -435,6 +435,59 @@ export const verifyCWE259 = (map: NeuralMap): VerificationResult => {
     }
   }
 
+  // --- Strategy 3: Juliet/NIST pattern — variable with ANY name assigned a hardcoded string,
+  // then passed to a credential sink (DriverManager.getConnection, PasswordAuthentication, KerberosKey).
+  // This catches: String data = "7e5tc4s3"; ... DriverManager.getConnection(url, "root", data);
+  if (findings.length === 0 && map.source_code) {
+    const src = map.source_code;
+    // Find all hardcoded string assignments (both combined decl+assign and bare reassignment)
+    const assignReA = /(?:String|string)\s+(\w+)\s*=\s*["']([^"']{2,})["']\s*;/g;
+    const assignReB = /^\s*(\w+)\s*=\s*["']([^"']{2,})["']\s*;/gm;
+    let assignMatch: RegExpExecArray | null;
+    const hardcodedVars = new Map<string, string>(); // varName -> value
+    for (const assignRe of [assignReA, assignReB]) {
+      assignRe.lastIndex = 0;
+      while ((assignMatch = assignRe.exec(src)) !== null) {
+        const varName = assignMatch[1];
+        const value = assignMatch[2];
+        // Skip if the value looks like a URL, SQL, or non-secret
+        if (/^(https?:|jdbc:|select |insert |data-)/i.test(value)) continue;
+        if (/^(if|else|for|while|return|try|catch|throw|new|this|super|class|import|package)$/.test(varName)) continue;
+        // Skip if the assignment comes from console/env (readLine, getenv, etc.)
+        const lineStart = src.lastIndexOf('\n', assignMatch.index);
+        const lineEnd = src.indexOf('\n', assignMatch.index);
+        const line = src.slice(lineStart, lineEnd);
+        if (/readLine|getenv|getProperty|System\.in|process\.env|vault|secretManager/i.test(line)) continue;
+        hardcodedVars.set(varName, value);
+      }
+    }
+
+    // Check if any hardcoded var flows into credential sinks
+    const CRED_SINKS = [
+      /DriverManager\.getConnection\s*\([^)]*,\s*(\w+)\s*\)/,
+      /new\s+PasswordAuthentication\s*\([^,]+,\s*(\w+)/,
+      /new\s+KerberosKey\s*\([^,]+,\s*(\w+)/,
+      /\.setPassword\s*\(\s*(\w+)\s*\)/,
+      /\.connect\s*\([^,]*,\s*["'][^"']*["']\s*,\s*(\w+)\s*\)/,
+    ];
+
+    for (const sinkRe of CRED_SINKS) {
+      const sinkMatch = sinkRe.exec(src);
+      if (sinkMatch && hardcodedVars.has(sinkMatch[1])) {
+        findings.push({
+          source: { id: 'src-hardcoded-var', label: `${sinkMatch[1]} = "${hardcodedVars.get(sinkMatch[1])}"`, line: 0, code: `${sinkMatch[1]} = "${hardcodedVars.get(sinkMatch[1])}"` },
+          sink:   { id: 'sink-credential-api', label: sinkMatch[0].trim(), line: 0, code: sinkMatch[0].trim() },
+          missing: 'CONTROL (no hard-coded passwords -- use env/vault)',
+          severity: 'critical',
+          description: `Variable "${sinkMatch[1]}" is assigned a hardcoded string and then passed as a credential to ${sinkMatch[0].split('(')[0].trim()}. ` +
+            `Hard-coded credentials cannot be rotated and are exposed in source control.`,
+          fix: 'Never hard-code passwords. Read credentials from environment variables, secret managers, or vaults.',
+        });
+        break;
+      }
+    }
+  }
+
   return { cwe: 'CWE-259', name: 'Use of Hard-coded Password', holds: findings.length === 0, findings };
 };
 export const verifyCWE286 = v('CWE-286', 'Incorrect User Management', 'high', 'STRUCTURAL', 'AUTH', nA, A, 'AUTH (correct user management — proper provisioning/deprovisioning)', 'Implement proper user lifecycle management. Deactivate unused accounts.');
@@ -604,8 +657,16 @@ export const verifyCWE531 = v('CWE-531', 'Inclusion of Sensitive Information in 
 export const verifyCWE540 = v('CWE-540', 'Inclusion of Sensitive Information in Source Code', 'medium', 'META', 'EGRESS', nA, /\benv\b|\bvault\b|\bno.*hardcode\b/i, 'AUTH (no sensitive data in source code)', 'Move sensitive data to environment variables or secret managers.');
 // CWE-544: scope-aware — check containing function scope for error handling patterns before firing
 export const verifyCWE544 = (map: NeuralMap): VerificationResult => {
-  const safePattern = /\btry\b|\bcatch\b|\berror.*handler\b|\bmiddleware\b/i;
+  const safePattern = /\btry\b|\bcatch\b|\berror.*handler\b|\bmiddleware\b|\bfinally\b|\bexception\b|\bthrows\b/i;
   const findings: Finding[] = [];
+
+  // Check the entire source for standardized error handling first.
+  // If the file-level code has try/catch or error middleware, it has error handling.
+  const allCode = map.source_code || map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+  if (safePattern.test(stripComments(allCode))) {
+    return { cwe: 'CWE-544', name: 'Missing Standardized Error Handling Mechanism', holds: true, findings };
+  }
+
   const controls = nodesOfType(map, 'CONTROL');
   const egresses = nodesOfType(map, 'EGRESS');
   for (const src of controls) {
@@ -613,13 +674,9 @@ export const verifyCWE544 = (map: NeuralMap): VerificationResult => {
       if (src.id === sink.id) continue;
       if (nS(map, src.id, sink.id)) {
         if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-          // Check the containing function scope for both src and sink.
-          // If the function that contains either node has proper error handling
-          // (try/catch/middleware), suppress — the scope IS handled.
           const sinkScopeSnapshots = getContainingScopeSnapshots(map, sink.id);
           const srcScopeSnapshots = getContainingScopeSnapshots(map, src.id);
           const allScopes = [...sinkScopeSnapshots, ...srcScopeSnapshots];
-          // Also check the CONTAINS parent node's own analysis_snapshot (the function body)
           const sinkParentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === sink.id);
           const srcParentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === src.id);
           if (sinkParentEdge) {

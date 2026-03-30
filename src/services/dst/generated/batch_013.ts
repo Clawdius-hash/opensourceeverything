@@ -15,7 +15,7 @@
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, hasPathWithoutTransform,
-  hasPathWithoutIntermediateType,
+  hasPathWithoutIntermediateType, detectLanguage,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -183,7 +183,7 @@ export const verifyCWE838 = createEgressVerifier('CWE-838', 'Inappropriate Encod
 export const verifyCWE201 = createEgressVerifier('CWE-201', 'Insertion of Sensitive Information Into Sent Data', 'high', 'STORAGE', noTransform, REDACT_SAFE, 'TRANSFORM (sensitive data filtering/redaction before output)', 'Filter sensitive data from responses. Use allowlist of fields to include, not blocklist.');
 export const verifyCWE212 = createEgressVerifier('CWE-212', 'Improper Removal of Sensitive Information Before Storage or Transfer', 'high', 'STORAGE', noTransform, REDACT_SAFE, 'TRANSFORM (scrubbing sensitive data before transfer)', 'Scrub sensitive data (metadata, hidden fields, comments) before sharing or transferring.');
 export const verifyCWE375 = createEgressVerifier('CWE-375', 'Returning a Mutable Object to an Untrusted Caller', 'medium', 'STORAGE', noTransform, /\bclone\b|\bcopy\b|\bfreeze\b|\bslice\b|\bspread\b|\bstructuredClone\b/i, 'TRANSFORM (defensive copy before returning internal data)', 'Return defensive copies of internal objects. Use Object.freeze() or structuredClone().');
-export const verifyCWE457 = createEgressVerifier('CWE-457', 'Use of Uninitialized Variable', 'medium', 'STORAGE', noTransform, /\binit\b|\bdefault\b|\b=\s*(?:null|0|''|false|\[\]|\{\})\b/i, 'TRANSFORM (initialization before use)', 'Initialize all variables before use. Use default values. Enable strict mode.');
+export const verifyCWE457 = createEgressVerifier('CWE-457', 'Use of Uninitialized Variable', 'medium', 'STORAGE', noTransform, /\binit\b|\bdefault\b|\b=\s*(?:null|0|''|""|false|\[\]|\{\})\b|\b=\s*new\b|\b=\s*\w+\.\w+\(|\bString\s+\w+\s*=|\bint\s+\w+\s*=|\bvar\s+\w+\s*=/i, 'TRANSFORM (initialization before use)', 'Initialize all variables before use. Use default values. Enable strict mode.');
 export const verifyCWE495 = createEgressVerifier('CWE-495', 'Private Data Structure Returned From A Public Method', 'medium', 'STORAGE', noTransform, /\bclone\b|\bcopy\b|\bfreeze\b|\bslice\b/i, 'TRANSFORM (defensive copy of private data)', 'Return copies, not references, of private data structures from public methods.');
 export const verifyCWE539 = createEgressVerifier('CWE-539', 'Use of Persistent Cookies Containing Sensitive Information', 'medium', 'STORAGE', noTransform, ENCRYPT_SAFE, 'TRANSFORM (encryption/expiry for sensitive cookies)', 'Encrypt sensitive cookie data. Use session cookies (no Expires). Set Secure and HttpOnly flags.');
 export const verifyCWE562 = createEgressVerifier('CWE-562', 'Return of Stack Variable Address', 'critical', 'STORAGE', noTransform, /\bheap\b|\bmalloc\b|\bnew\b|\bstatic\b|\bglobal\b/i, 'TRANSFORM (heap allocation for returned data — not stack)', 'Never return pointers/references to stack-allocated variables. Use heap allocation for returned data.');
@@ -204,7 +204,22 @@ export const verifyCWE582 = createEgressVerifier('CWE-582', 'Array Declared Publ
 
 export const verifyCWE451 = createEgressVerifier('CWE-451', 'User Interface (UI) Misrepresentation of Critical Information', 'medium', 'EXTERNAL', noTransform, /\bvalidate.*display\b|\bverify.*ui\b|\bindicator\b|\bicon\b.*\bsecure\b/i, 'TRANSFORM (UI representation validation / clear security indicators)', 'Clearly represent security state in UI. Show lock icons for HTTPS. Do not obscure certificate warnings.');
 export const verifyCWE535 = createEgressVerifier('CWE-535', 'Exposure of Information Through Shell Error Message', 'medium', 'EXTERNAL', noTransform, /\bgeneric.*error\b|\bredirect.*stderr\b|\b2>\/dev\/null\b/i, 'TRANSFORM (shell error message filtering)', 'Capture and filter shell error messages. Do not expose command output to users.');
-export const verifyCWE536 = createEgressVerifier('CWE-536', 'Exposure of Information Through Servlet Runtime Error Message', 'medium', 'EXTERNAL', noTransform, ERROR_SAFE, 'TRANSFORM (custom error pages — no runtime details)', 'Configure custom error pages. Do not expose stack traces or runtime errors to users.');
+// CWE-536: Servlet-specific — only fire on Java servlet code that exposes exception details
+export const verifyCWE536 = (map: NeuralMap): VerificationResult => {
+  const lang = detectLanguage(map);
+  // Only relevant to Java servlets
+  if (lang && lang !== 'java') {
+    return { cwe: 'CWE-536', name: 'Exposure of Information Through Servlet Runtime Error Message', holds: true, findings: [] };
+  }
+  // Check if code actually exposes exception messages to responses
+  const allCode = map.nodes.map(n => n.code_snapshot).join('\n');
+  const exposesException = /\be\.getMessage\s*\(\s*\)|\be\.toString\s*\(\s*\)|\bprintStackTrace\s*\(\s*\)/.test(allCode) &&
+    /\bgetWriter\b|\bprintln\b|\bsendError\b/.test(allCode);
+  if (!exposesException) {
+    return { cwe: 'CWE-536', name: 'Exposure of Information Through Servlet Runtime Error Message', holds: true, findings: [] };
+  }
+  return createEgressVerifier('CWE-536', 'Exposure of Information Through Servlet Runtime Error Message', 'medium', 'EXTERNAL', noTransform, ERROR_SAFE, 'TRANSFORM (custom error pages — no runtime details)', 'Configure custom error pages. Do not expose stack traces or runtime errors to users.')(map);
+};
 export const verifyCWE537 = createEgressVerifier('CWE-537', 'Exposure of Information Through Java Runtime Error Message', 'medium', 'EXTERNAL', noTransform, ERROR_SAFE, 'TRANSFORM (generic error responses — no Java exception details)', 'Catch exceptions and return generic messages. Log full details server-side only.');
 export const verifyCWE550 = createEgressVerifier('CWE-550', 'Server-generated Error Message Containing Sensitive Information', 'medium', 'EXTERNAL', noTransform, ERROR_SAFE, 'TRANSFORM (generic server error messages)', 'Return generic error messages in production. Do not expose paths, queries, or stack traces.');
 

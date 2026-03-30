@@ -345,7 +345,7 @@ describe('CWE Factory Pattern Verification', () => {
         node_type: 'INGRESS',
         id: 'ing1',
         label: 'user input',
-        code_snapshot: 'req.body.xml',
+        code_snapshot: 'import org.apache.struts.action.ActionForm; req.body.xml',
         edges: [{ target: 'xf1', edge_type: 'DATA_FLOW', conditional: false, async: false }],
       });
       const transform = createNode({

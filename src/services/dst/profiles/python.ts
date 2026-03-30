@@ -898,6 +898,39 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
       return value ? extractTaintSources(value, ctx) : [];
     }
 
+    // -- Expression list: a, b, c (RHS of tuple unpacking) --
+    case 'expression_list': {
+      const sources: TaintSourceResult[] = [];
+      for (let i = 0; i < expr.namedChildCount; i++) {
+        const child = expr.namedChild(i);
+        if (child) sources.push(...extractTaintSources(child, ctx));
+      }
+      return sources;
+    }
+
+    // -- Generator/comprehension expressions: (x for x in TAINTED), [x for x in TAINTED] --
+    case 'generator_expression':
+    case 'list_comprehension':
+    case 'dict_comprehension':
+    case 'set_comprehension': {
+      const sources: TaintSourceResult[] = [];
+      for (let i = 0; i < expr.namedChildCount; i++) {
+        const child = expr.namedChild(i);
+        if (child) sources.push(...extractTaintSources(child, ctx));
+      }
+      return sources;
+    }
+
+    // -- for_in_clause: for x in ITERABLE --
+    case 'for_in_clause': {
+      const sources: TaintSourceResult[] = [];
+      for (let i = 0; i < expr.namedChildCount; i++) {
+        const child = expr.namedChild(i);
+        if (child) sources.push(...extractTaintSources(child, ctx));
+      }
+      return sources;
+    }
+
     // -- Default: unknown expression type --
     default:
       return [];
@@ -944,6 +977,58 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
       if (sourceVar) {
         tainted = sourceVar.tainted;
         producingNodeId = sourceVar.producingNodeId;
+      }
+    }
+  }
+
+  // Deep taint extraction fallback: if the producing node is NOT tainted
+  // (e.g., lastCreatedNodeId points to a CONTROL/branch from a conditional
+  // expression, or a non-tainted node in a tuple), use extractTaintSources
+  // to recursively scan the RHS value expression for embedded taint sources.
+  // This catches patterns like:
+  //   path, query = self.path.split('?', 1) if cond else (self.path, "")
+  //   params = dict(... urllib.parse.unquote(..., query) ...)
+  // where tainted data flows through complex expressions.
+  if (!tainted) {
+    const valueNode = node.childForFieldName('right');
+    if (valueNode) {
+      const deepSources = extractTaintSources(valueNode, ctx);
+      if (deepSources.length > 0) {
+        tainted = true;
+        producingNodeId = deepSources[0].nodeId;
+
+        // For augmented assignments (content += tainted_expr), create a
+        // TRANSFORM/assignment node with DATA_FLOW edges so the BFS can
+        // traverse from INGRESS through to EGRESS. The classifyNode handler
+        // for augmented_assignment is never reached (value-first early return),
+        // so this is the only place these edges can be created.
+        if (node.type === 'augmented_assignment') {
+          const augN = createNode({
+            label: (nameNode.text?.slice(0, 40) ?? '?') + ' +=',
+            node_type: 'TRANSFORM',
+            node_subtype: 'assignment',
+            language: 'python',
+            file: ctx.neuralMap.source_file,
+            line_start: node.startPosition.row + 1,
+            line_end: node.endPosition.row + 1,
+            code_snapshot: node.text.slice(0, 200),
+            analysis_snapshot: node.text.slice(0, 2000),
+          });
+          for (const source of deepSources) {
+            ctx.addDataFlow(source.nodeId, augN.id, source.name, 'unknown', true);
+          }
+          augN.data_out.push({
+            name: 'result',
+            source: augN.id,
+            data_type: 'unknown',
+            tainted: true,
+            sensitivity: 'NONE',
+          });
+          ctx.neuralMap.nodes.push(augN);
+          ctx.lastCreatedNodeId = augN.id;
+          ctx.emitContainsIfNeeded(augN.id);
+          producingNodeId = augN.id;
+        }
       }
     }
   }

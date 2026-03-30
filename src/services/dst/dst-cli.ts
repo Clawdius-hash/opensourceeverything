@@ -5,10 +5,11 @@
  * No regex shortcuts. No confidence scores. Pass or fail.
  *
  * Usage:
- *   npx tsx src/services/dst/dst-cli.ts <file.js>        # scan a file
- *   npx tsx src/services/dst/dst-cli.ts --demo            # run against built-in vulnerable app
- *   npx tsx src/services/dst/dst-cli.ts --demo --json     # output as JSON
- *   npx tsx src/services/dst/dst-cli.ts <file.js> --json  # scan file, output JSON
+ *   npx tsx src/services/dst/dst-cli.ts <file.js>             # scan a file (deduped)
+ *   npx tsx src/services/dst/dst-cli.ts --demo                # run against built-in vulnerable app
+ *   npx tsx src/services/dst/dst-cli.ts --demo --json         # output as JSON
+ *   npx tsx src/services/dst/dst-cli.ts <file.js> --json      # scan file, output JSON
+ *   npx tsx src/services/dst/dst-cli.ts <file.js> --no-dedup  # raw output, no CWE dedup
  */
 
 import { Parser, Language } from 'web-tree-sitter';
@@ -460,8 +461,10 @@ function printSummary(allResults: FileResult[], elapsed: number): void {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const jsonOutput = args.includes('--json');
+  const noDedup = args.includes('--no-dedup');
   const target = args.find(a => !a.startsWith('--'));
   const isDemo = args.includes('--demo') || !target;
+  const verifyOptions = noDedup ? { noDedup: true } : undefined;
 
   const startTime = Date.now();
 
@@ -474,7 +477,7 @@ async function main(): Promise<void> {
     const map = await analyzeWithRealMapper(DEMO_CODE, 'demo-vulnerable-app.js');
     printMapStats(map);
 
-    const results = verifyAll(map, 'javascript');
+    const results = verifyAll(map, 'javascript', verifyOptions);
 
     if (jsonOutput) {
       console.log(JSON.stringify(results, null, 2));
@@ -513,7 +516,7 @@ async function main(): Promise<void> {
     const map = await analyzeWithRealMapper(source, target!);
     printMapStats(map);
 
-    const results = verifyAll(map, langConfig.profileImport);
+    const results = verifyAll(map, langConfig.profileImport, verifyOptions);
 
     if (jsonOutput) {
       console.log(JSON.stringify(results, null, 2));
@@ -560,7 +563,7 @@ async function main(): Promise<void> {
         const source = fs.readFileSync(file, 'utf-8');
         const fileLangConfig = detectLanguage(file);
         const map = await analyzeWithRealMapper(source, file);
-        const results = verifyAll(map, fileLangConfig.profileImport);
+        const results = verifyAll(map, fileLangConfig.profileImport, verifyOptions);
         const findings = results.filter(r => !r.holds).reduce((s, r) => s + r.findings.length, 0);
 
         allResults.push({ filename: shortName, map, results });
@@ -617,7 +620,7 @@ async function main(): Promise<void> {
           langCounts.set(lang, (langCounts.get(lang) ?? 0) + 1);
         }
         const dominantLang = [...langCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'javascript';
-        const mergedResults = verifyAll(crossFileResult.mergedMap, dominantLang);
+        const mergedResults = verifyAll(crossFileResult.mergedMap, dominantLang, verifyOptions);
         const mergedFindings = mergedResults.filter(r => !r.holds).reduce((s, r) => s + r.findings.length, 0);
 
         crossFileFindings = {

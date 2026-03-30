@@ -27,12 +27,17 @@ export type { VerificationResult, Finding, NodeRef };
 
 function fileStorageNodes(map: NeuralMap): NeuralMapNode[] {
   return map.nodes.filter(n =>
-    n.node_type === 'STORAGE' &&
-    (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
-     n.node_subtype.includes('path') || n.attack_surface.includes('file_access') ||
-     n.code_snapshot.match(
-       /\b(readFile|writeFile|createReadStream|createWriteStream|open|unlink|readdir|rename|copyFile|stat|lstat|mkdir|rmdir|appendFile|chmod|chown|access|fopen|fread|fwrite|include|require_once)\b/i
-     ) !== null)
+    // Primary: STORAGE nodes with file-related subtypes
+    (n.node_type === 'STORAGE' &&
+     (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
+      n.node_subtype.includes('path') || n.attack_surface.includes('file_access') ||
+      n.code_snapshot.match(
+        /\b(readFile|writeFile|createReadStream|createWriteStream|open|unlink|readdir|rename|copyFile|stat|lstat|mkdir|rmdir|appendFile|chmod|chown|access|fopen|fread|fwrite|include|require_once)\b/i
+      ) !== null)) ||
+    // Fallback: INGRESS/file_read (e.g. Python open(), or legacy mistyped Java File constructors)
+    (n.node_type === 'INGRESS' && n.node_subtype === 'file_read') ||
+    // Fallback: EGRESS/file_write (e.g. Java FileOutputStream, Files.write) with user-controlled path
+    (n.node_type === 'EGRESS' && (n.node_subtype === 'file_write' || n.node_subtype === 'file_serve'))
   );
 }
 

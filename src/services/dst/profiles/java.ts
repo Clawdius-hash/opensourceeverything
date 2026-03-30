@@ -552,32 +552,45 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
     const typeNode = node.childForFieldName('type');
     if (typeNode) {
       const typeName = typeNode.text;
-      const chain = [typeName];
-      const pattern = _lookupJavaCallee(chain);
+      // Use [ClassName, 'new'] chain so phoneme table entries like 'File.new',
+      // 'FileInputStream.new' etc. resolve correctly as STORAGE/file_access sinks
+      // rather than falling through to wrong hardcoded INGRESS classification.
+      const ctorChain = [typeName, 'new'];
+      const pattern = _lookupJavaCallee(ctorChain);
       if (pattern) {
         return {
           nodeType: pattern.nodeType,
           subtype: pattern.subtype,
           tainted: pattern.tainted,
-          chain,
+          chain: ctorChain,
         };
       }
 
-      // Check specific dangerous constructors
+      // Fallback: also try bare class name for backward compat with entries
+      // that don't use the .new convention
+      const bareChain = [typeName];
+      const barePattern = _lookupJavaCallee(bareChain);
+      if (barePattern) {
+        return {
+          nodeType: barePattern.nodeType,
+          subtype: barePattern.subtype,
+          tainted: barePattern.tainted,
+          chain: bareChain,
+        };
+      }
+
+      // Check specific dangerous constructors (only those NOT in phoneme table)
       if (typeName === 'ObjectInputStream') {
-        return { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true, chain };
+        return { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true, chain: bareChain };
       }
       if (typeName === 'ProcessBuilder') {
-        return { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false, chain };
-      }
-      if (typeName === 'File' || typeName === 'FileInputStream' || typeName === 'FileOutputStream') {
-        return { nodeType: 'INGRESS', subtype: 'file_read', tainted: false, chain };
+        return { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false, chain: bareChain };
       }
       if (typeName === 'URL' || typeName === 'URI') {
-        return { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false, chain };
+        return { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false, chain: bareChain };
       }
       if (typeName === 'Scanner') {
-        return { nodeType: 'INGRESS', subtype: 'user_input', tainted: true, chain };
+        return { nodeType: 'INGRESS', subtype: 'user_input', tainted: true, chain: bareChain };
       }
     }
     return null;
@@ -1950,6 +1963,20 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'for_statement': {
       const forN = createNode({ label: 'for', node_type: 'CONTROL', node_subtype: 'loop', language: 'java', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(forN); ctx.lastCreatedNodeId = forN.id; ctx.emitContainsIfNeeded(forN.id);
+      // Taint propagation: if the loop condition uses tainted variables,
+      // create DATA_FLOW edges from the taint source to the loop node.
+      // This enables CWE-400/606 detection for tainted loop bounds.
+      const forCondition = node.childForFieldName('condition');
+      if (forCondition) {
+        const condTaint = extractTaintSources(forCondition, ctx);
+        for (const src of condTaint) {
+          ctx.addDataFlow(src.nodeId, forN.id, src.name, 'unknown', true);
+        }
+        if (condTaint.length > 0) {
+          forN.data_out.push({ name: 'loop_bound', source: forN.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE' });
+          forN.tags.push('tainted_loop_bound');
+        }
+      }
       break;
     }
     case 'enhanced_for_statement': {
@@ -1960,11 +1987,35 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'while_statement': {
       const whileN = createNode({ label: 'while', node_type: 'CONTROL', node_subtype: 'loop', language: 'java', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(whileN); ctx.lastCreatedNodeId = whileN.id; ctx.emitContainsIfNeeded(whileN.id);
+      // Taint propagation for while loop conditions
+      const whileCondition = node.childForFieldName('condition');
+      if (whileCondition) {
+        const condTaint = extractTaintSources(whileCondition, ctx);
+        for (const src of condTaint) {
+          ctx.addDataFlow(src.nodeId, whileN.id, src.name, 'unknown', true);
+        }
+        if (condTaint.length > 0) {
+          whileN.data_out.push({ name: 'loop_bound', source: whileN.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE' });
+          whileN.tags.push('tainted_loop_bound');
+        }
+      }
       break;
     }
     case 'do_statement': {
       const doN = createNode({ label: 'do-while', node_type: 'CONTROL', node_subtype: 'loop', language: 'java', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(doN); ctx.lastCreatedNodeId = doN.id; ctx.emitContainsIfNeeded(doN.id);
+      // Taint propagation for do-while loop conditions
+      const doCondition = node.childForFieldName('condition');
+      if (doCondition) {
+        const condTaint = extractTaintSources(doCondition, ctx);
+        for (const src of condTaint) {
+          ctx.addDataFlow(src.nodeId, doN.id, src.name, 'unknown', true);
+        }
+        if (condTaint.length > 0) {
+          doN.data_out.push({ name: 'loop_bound', source: doN.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE' });
+          doN.tags.push('tainted_loop_bound');
+        }
+      }
       break;
     }
     case 'switch_expression': {

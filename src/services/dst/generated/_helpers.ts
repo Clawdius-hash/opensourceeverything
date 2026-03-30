@@ -386,7 +386,240 @@ export function evaluateControlEffectiveness(
         }
       }
     }
+
+    // Check 7: Control-threat mismatch — control addresses the wrong threat class
+    // A parameterized query prevents INJECTION but says nothing about AUTHORIZATION.
+    // A lock prevents RACE CONDITIONS but says nothing about INPUT VALIDATION.
+    const mismatchFindings = controlThreatMismatch(map, ctrl, sourceId, sinkId);
+    findings.push(...mismatchFindings);
   }
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// THREAT-CONTROL MISMATCH DETECTOR (Check #7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Threat classes that controls can address.
+ * Each control technique has a primary threat class it mitigates.
+ */
+type ThreatClass =
+  | 'injection'        // SQL injection, command injection, XSS
+  | 'authorization'    // ownership checks, RBAC, ABAC, row-level access
+  | 'authentication'   // identity verification, session management
+  | 'cryptography'     // encryption, hashing, key management
+  | 'input_validation' // format checks, range checks, type checks
+  | 'resource_mgmt'    // locks, transactions, resource limits
+  | 'path_traversal'   // path canonicalization, chroot
+  | 'unknown';
+
+/**
+ * Patterns that identify what threat class a CONTROL node addresses.
+ * Ordered by specificity — first match wins.
+ */
+const CONTROL_THREAT_PATTERNS: Array<{ threat: ThreatClass; pattern: RegExp; label: string }> = [
+  // Injection controls
+  { threat: 'injection', label: 'parameterized query',
+    pattern: /\b(preparedStatement|PreparedStatement|prepared_statement|parameteriz|\.setInt|\.setString|\.setLong|\.setDouble|\.setFloat|\.setBoolean|\.setDate|\.setTimestamp|\.setObject|placeholder|\$\d+|:\w+)\b/i },
+  { threat: 'injection', label: 'SQL escaping',
+    pattern: /\b(mysql_real_escape|pg_escape|escape_string|quote_ident|quote_literal|sanitize_sql|sql_escape)\b/i },
+  { threat: 'injection', label: 'HTML encoding',
+    pattern: /\b(htmlspecialchars|htmlentities|escapeHtml|encodeURIComponent|DOMPurify|sanitizeHtml|bleach\.clean|xss_clean|strip_tags)\b/i },
+  { threat: 'injection', label: 'command escaping',
+    pattern: /\b(escapeshellarg|escapeshellcmd|shlex\.quote|ProcessBuilder)\b/i },
+
+  // Authorization controls
+  { threat: 'authorization', label: 'ownership check',
+    pattern: /\b(session\.user[_.]?id|session\.getAttribute.*user|request\.getUserPrincipal|SecurityContext|currentUser|req\.user\.id|user_id\s*===?\s*|owned_by|belongs_to|checkOwnership|isOwner|verifyOwner|authorize[!]?|hasPermission|can\?\s*:|ability\.can|@PreAuthorize|@Secured|@RolesAllowed|\.where\s*\(.*(?:user_id|owner_id|created_by)|\.filter\s*\(.*(?:owner|user))\b/i },
+  { threat: 'authorization', label: 'RBAC/role check',
+    pattern: /\b(hasRole|isAdmin|checkRole|requireRole|role\s*===?\s*|isAuthorized|policy\.\w+|permit\?|authorize_resource)\b/i },
+
+  // Authentication controls
+  { threat: 'authentication', label: 'auth verification',
+    pattern: /\b(isAuthenticated|requireAuth|verifyToken|jwt\.verify|passport\.authenticate|checkAuth|session\.isValid|validateSession)\b/i },
+  { threat: 'authentication', label: 'password/credential check',
+    pattern: /\b(bcrypt\.compare|password_verify|checkPassword|validateCredentials|authenticate)\b/i },
+
+  // Cryptography controls
+  { threat: 'cryptography', label: 'encryption',
+    pattern: /\b(encrypt|decrypt|createCipher|AES|RSA|createHash|HMAC)\b/i },
+
+  // Input validation controls (general)
+  { threat: 'input_validation', label: 'type/format validation',
+    pattern: /\b(parseInt|parseFloat|Number\(|Integer\.parseInt|Double\.parseDouble|NumberFormatException|isNaN|isFinite|validate|validator)\b/i },
+
+  // Resource management controls
+  { threat: 'resource_mgmt', label: 'synchronization',
+    pattern: /\b(synchronized|lock|mutex|semaphore|ReentrantLock|atomic)\b/i },
+
+  // Path traversal controls
+  { threat: 'path_traversal', label: 'path sanitization',
+    pattern: /\b(realpath|canonicalize|normalize.*path|path\.resolve|chroot|jail)\b/i },
+];
+
+/**
+ * Patterns that identify what threat class a SINK node represents (what the
+ * sink is vulnerable TO if unprotected).
+ */
+const SINK_THREAT_PATTERNS: Array<{ threat: ThreatClass; pattern: RegExp }> = [
+  // SQL sinks → vulnerable to both injection AND authorization bypass
+  { threat: 'injection',
+    pattern: /\b(query|execute|prepareStatement|createStatement|exec|raw\s*\(|sql\(|\.run\s*\()\b/i },
+  // File sinks → vulnerable to path traversal
+  { threat: 'path_traversal',
+    pattern: /\b(readFile|writeFile|openFile|createReadStream|fs\.\w+|File\(|FileInputStream|FileOutputStream)\b/i },
+  // Command sinks → vulnerable to injection
+  { threat: 'injection',
+    pattern: /\b(exec|spawn|system|popen|Runtime\.getRuntime|ProcessBuilder|child_process)\b/i },
+  // Network/egress sinks → vulnerable to data exposure
+  { threat: 'authorization',
+    pattern: /\b(response\.write|res\.json|res\.send|println|writeString|getWriter)\b/i },
+];
+
+/**
+ * CWEs that test for a specific threat class different from injection.
+ * When we know the CWE being tested, we can check if the control addresses
+ * the right threat.
+ */
+const CWE_THREAT_MAP: Record<string, ThreatClass> = {
+  // Authorization bypass CWEs
+  'CWE-566': 'authorization',  // Auth bypass through SQL primary key
+  'CWE-639': 'authorization',  // Auth bypass through user-controlled key
+  'CWE-284': 'authorization',  // Improper access control
+  'CWE-285': 'authorization',  // Improper authorization
+  'CWE-862': 'authorization',  // Missing authorization
+  'CWE-863': 'authorization',  // Incorrect authorization
+  'CWE-352': 'authentication', // CSRF
+  'CWE-306': 'authentication', // Missing authentication
+  'CWE-287': 'authentication', // Improper authentication
+  'CWE-384': 'authentication', // Session fixation
+  // Injection CWEs
+  'CWE-89': 'injection',       // SQL injection
+  'CWE-78': 'injection',       // OS command injection
+  'CWE-79': 'injection',       // XSS
+  // Overflow CWEs
+  'CWE-190': 'input_validation', // Integer overflow
+  'CWE-191': 'input_validation', // Integer underflow
+  // Race condition CWEs
+  'CWE-362': 'resource_mgmt',   // Race condition
+  'CWE-367': 'resource_mgmt',   // TOCTOU
+};
+
+/**
+ * Identify what threat class a CONTROL node's code addresses.
+ * Returns the threat class and a human-readable label for the finding.
+ */
+function classifyControlThreat(code: string): { threat: ThreatClass; label: string } {
+  for (const { threat, pattern, label } of CONTROL_THREAT_PATTERNS) {
+    if (pattern.test(code)) {
+      return { threat, label };
+    }
+  }
+  return { threat: 'unknown', label: 'unknown control type' };
+}
+
+/**
+ * Identify what threat class a SINK node is vulnerable to.
+ */
+function classifySinkThreat(code: string): ThreatClass {
+  for (const { threat, pattern } of SINK_THREAT_PATTERNS) {
+    if (pattern.test(code)) {
+      return threat;
+    }
+  }
+  return 'unknown';
+}
+
+/**
+ * AUTH ownership patterns — indicates a node checks that the authenticated
+ * user owns the resource being accessed. These are the AUTHORIZATION controls
+ * that CWE-566 (and similar) require.
+ */
+const AUTH_OWNERSHIP_RE = /\b(session\.getAttribute|getSession\s*\(\s*\)\s*\.\s*getAttribute|session\.user[_.]?id|request\.getUserPrincipal|SecurityContext|getRemoteUser|getUserName|currentUser|req\.user\.id|req\.user\b|user_id\s*===?\s*|AND\s+(?:user_id|owner_id|created_by)\s*=|owned_by|belongs_to|checkOwnership|isOwner|verifyOwner|authorize[!]?|hasPermission|can\?\s*:|ability\.can|@PreAuthorize|@Secured|@RolesAllowed|\.where\s*\(.*(?:user_id|owner_id|created_by))/i;
+
+/**
+ * SQL query with user-controlled WHERE clause — the pattern that CWE-566
+ * targets specifically: a SQL query uses a user-supplied ID as the primary
+ * key lookup, but nobody checks if the session user owns that record.
+ */
+const SQL_PK_LOOKUP_RE = /(?:WHERE\s+(?:uid|id|user_id|pk|primary_key)\s*=\s*\?|\bfindById\b|\bfindByPk\b|\bget_object_or_404\b|\.get\s*\(\s*pk\b|\.find\s*\(\s*(?:req\.|params\.|request\.))/i;
+
+/**
+ * Check #7: Control-Threat Mismatch
+ *
+ * Given a CONTROL node on a mediated path, determine:
+ * 1. What threat does this control address? (e.g., injection)
+ * 2. What threat is the sink vulnerable to? (e.g., authorization bypass)
+ * 3. Are there OTHER nodes on the path that address the sink's threat?
+ * 4. If the control's threat != the sink's required threat, and no other
+ *    node covers the gap, flag it as a mismatch.
+ *
+ * The canonical example: CWE-566
+ *   - INGRESS: request.getParameter("id")
+ *   - CONTROL: PreparedStatement (addresses INJECTION)
+ *   - STORAGE: SQL query WHERE uid=? (vulnerable to AUTHORIZATION BYPASS)
+ *   - No AUTH node checking session user == queried uid
+ *   → MISMATCH: control addresses injection, threat is authorization
+ */
+export function controlThreatMismatch(
+  map: NeuralMap,
+  ctrl: NeuralMapNode,
+  sourceId: string,
+  sinkId: string,
+): WeakControlFinding[] {
+  const findings: WeakControlFinding[] = [];
+  const code = ctrl.code_snapshot + ' ' + (ctrl.analysis_snapshot || '');
+  const sinkNode = map.nodes.find(n => n.id === sinkId);
+  const sourceNode = map.nodes.find(n => n.id === sourceId);
+  if (!sinkNode || !sourceNode) return findings;
+
+  const sinkCode = sinkNode.code_snapshot + ' ' + (sinkNode.analysis_snapshot || '');
+
+  // Classify the control's threat and the sink's threat
+  const controlClass = classifyControlThreat(code);
+  const sinkThreat = classifySinkThreat(sinkCode);
+
+  // Only fire on clear mismatches we understand
+  if (controlClass.threat === 'unknown' || sinkThreat === 'unknown') return findings;
+
+  // --- CWE-566 SPECIFIC: SQL query with user-controlled PK but only injection control ---
+  // This is the high-value case: parameterized query protects against injection,
+  // but nobody checks ownership (session user == queried user).
+  if (controlClass.threat === 'injection' && sinkNode.node_type === 'STORAGE') {
+    const fullSinkCode = sinkCode + ' ' + getContainingScopeSnapshots(map, sinkId).join(' ');
+    const hasSqlPkLookup = SQL_PK_LOOKUP_RE.test(fullSinkCode);
+
+    if (hasSqlPkLookup) {
+      // Check: is there ANY auth/ownership node in scope that checks the session user?
+      const hasOwnershipCheck = map.nodes.some(n => {
+        // Must be in the same function scope
+        if (!sharesFunctionScope(map, n.id, sinkId)) return false;
+        // Must contain an ownership check pattern
+        const nodeCode = n.code_snapshot + ' ' + (n.analysis_snapshot || '');
+        return AUTH_OWNERSHIP_RE.test(nodeCode);
+      });
+
+      if (!hasOwnershipCheck) {
+        findings.push({
+          controlNode: ctrl,
+          weakness: 'Control addresses injection, not authorization — missing ownership check',
+          cwe: 'CWE-566',
+          severity: 'high',
+          description: `CONTROL at ${ctrl.label} uses ${controlClass.label} which prevents SQL injection, ` +
+            `but the query at ${sinkNode.label} uses a user-supplied primary key without verifying ` +
+            `that the authenticated user owns that record. An attacker can change the ID to access ` +
+            `other users' data (IDOR/authorization bypass). The control addresses the wrong threat class.`,
+        });
+      }
+    }
+  }
+
+  // --- GENERAL MISMATCH: control threat != required threat for this sink ---
+  // Only flag when we have high confidence both classifications are correct.
+  // The injection-vs-authorization case is handled above (CWE-566 specific).
+  // Add more specific cases here as needed (CWE-190, CWE-362, etc.)
 
   return findings;
 }
@@ -541,35 +774,54 @@ export function stripComments(code: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns analysis_snapshots (full context) for all nodes in the same containing scope as nodeId.
- * "Containing scope" = all nodes sharing the same CONTAINS parent in the graph.
- * Fixes the #1 systemic FP: safe patterns (DOMPurify, parameterized queries, etc.)
- * applied on prior lines are invisible when checking only the sink node itself.
+ * Returns the analysis_snapshot of the STRUCTURAL function/method that contains nodeId.
+ * This gives safe-pattern checks visibility into the containing function's code without
+ * leaking code from unrelated functions (scope poisoning).
  *
- * V4-D: Uses analysis_snapshot (full 2000-char context, set by V4-A) instead of
- * code_snapshot (200-char truncated display string), so safe-pattern checks on
- * larger functions can see the full surrounding code context.
+ * Walk: target node → CONTAINS parent → ... → nearest function/route_def STRUCTURAL node.
+ * Returns that node's analysis_snapshot (full function body, up to 2000 chars).
+ * Falls back to the target node's own snapshot if no containing function is found.
  */
 export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): string[] {
-  const snapshots: string[] = [];
   const targetNode = map.nodes.find(n => n.id === nodeId);
-  if (!targetNode) return snapshots;
+  if (!targetNode) return [];
 
-  // Find the parent STRUCTURAL node that contains this node
-  const parentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === nodeId);
-  if (!parentEdge) {
-    // No CONTAINS parent: return the node's own full-context snapshot
-    return [targetNode.analysis_snapshot || targetNode.code_snapshot];
+  // Build a lookup for CONTAINS edges: child -> parent source ID
+  const childToParent = new Map<string, string>();
+  for (const e of map.edges) {
+    if (e.edge_type === 'CONTAINS') {
+      childToParent.set(e.target, e.source!);
+    }
   }
 
-  // Get all siblings (nodes contained by the same parent) — use analysis_snapshot for full context
-  const siblings = map.edges
-    .filter(e => e.edge_type === 'CONTAINS' && e.source === parentEdge.source)
-    .map(e => map.nodes.find(n => n.id === e.target))
-    .filter(Boolean)
-    .map(n => n!.analysis_snapshot || n!.code_snapshot);
+  // Build a node lookup
+  const nodeById = new Map(map.nodes.map(n => [n.id, n]));
 
-  return siblings;
+  // Walk up the CONTAINS chain to find the nearest function-level STRUCTURAL node
+  const functionSubtypes = new Set(['function', 'route_def', 'method', 'lambda']);
+  let currentId: string | undefined = nodeId;
+  const visited = new Set<string>();
+
+  while (currentId) {
+    if (visited.has(currentId)) break; // cycle guard
+    visited.add(currentId);
+
+    const parentId = childToParent.get(currentId);
+    if (!parentId) break;
+
+    const parentNode = nodeById.get(parentId);
+    if (!parentNode) break;
+
+    if (parentNode.node_type === 'STRUCTURAL' && functionSubtypes.has(parentNode.node_subtype)) {
+      // Found the containing function — return its analysis_snapshot
+      return [parentNode.analysis_snapshot || parentNode.code_snapshot];
+    }
+
+    currentId = parentId;
+  }
+
+  // No containing function found — fall back to the target node's own snapshot
+  return [targetNode.analysis_snapshot || targetNode.code_snapshot];
 }
 
 // ---------------------------------------------------------------------------
@@ -588,11 +840,14 @@ export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: st
   const nodeB = nodeMap.get(nodeIdB);
   if (!nodeA || !nodeB) return false;
 
-  // Strategy 1: Direct CONTAINS edge matching
+  // Only function-level subtypes count as "same scope"
+  const functionSubtypes = new Set(['function', 'route_def', 'method', 'lambda']);
+
+  // Strategy 1: Direct CONTAINS edge matching — only function-level STRUCTURAL nodes
   const getAncestors = (nodeId: string): Set<string> => {
     const ancestors = new Set<string>();
     for (const n of map.nodes) {
-      if (n.node_type === 'STRUCTURAL') {
+      if (n.node_type === 'STRUCTURAL' && functionSubtypes.has(n.node_subtype)) {
         for (const edge of n.edges) {
           if (edge.target === nodeId && edge.edge_type === 'CONTAINS') {
             ancestors.add(n.id);
@@ -609,7 +864,7 @@ export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: st
     if (ancestorsB.has(a)) return true;
   }
 
-  // Strategy 2: Line-range containment
+  // Strategy 2: Line-range containment (already correctly scoped to function/route_def)
   const funcNodes = map.nodes.filter(n =>
     n.node_type === 'STRUCTURAL' &&
     (n.node_subtype === 'function' || n.node_subtype === 'route_def')

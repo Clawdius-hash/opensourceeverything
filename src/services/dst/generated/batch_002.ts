@@ -16,9 +16,35 @@
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, createGenericVerifier,
-  sinkHasNonZeroRange,
+  sinkHasNonZeroRange, detectLanguage,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
+
+// ---------------------------------------------------------------------------
+// Framework detection helpers
+// ---------------------------------------------------------------------------
+
+/** Returns true if the code uses the Struts framework (Action classes, struts imports) */
+function isStrutsCode(map: NeuralMap): boolean {
+  const allCode = map.nodes.map(n => n.code_snapshot).join('\n');
+  return /\bimport\s+org\.apache\.struts\b|\bActionForm\b|\bActionMapping\b|\bstruts-config\b|\bValidatorForm\b/i.test(allCode);
+}
+
+/**
+ * Factory for Struts-specific input validation verifiers.
+ * Returns PASS immediately if the code doesn't use the Struts framework.
+ */
+function createStrutsValidationVerifier(
+  cweId: string, cweName: string, severity: Severity, extraSafe?: RegExp
+): (map: NeuralMap) => VerificationResult {
+  const inner = createInputValidationVerifier(cweId, cweName, severity, extraSafe);
+  return (map: NeuralMap): VerificationResult => {
+    if (!isStrutsCode(map)) {
+      return { cwe: cweId, name: cweName, holds: true, findings: [] };
+    }
+    return inner(map);
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Sink filters — TRANSFORM nodes matching specific vulnerability classes
@@ -207,7 +233,7 @@ function complexAlgoTransformNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe pattern constants
 // ---------------------------------------------------------------------------
 
-const INPUT_VALID_SAFE = /\bvalidate\s*\(|\bsanitize\s*\(|\bcheck\s*\(|\b\.filter\s*\(|\bescape\s*\(|\bencode\s*\(|\bschema\b|\bzod\b|\bjoi\b|\byup\b|\bsuperStruct\b/i;
+const INPUT_VALID_SAFE = /\bvalidate\s*\(|\bsanitize\s*\(|\bcheck\s*\(|\b\.filter\s*\(|\bescape\s*\(|\bencode\s*\(|\bschema\b|\bzod\b|\bjoi\b|\byup\b|\bsuperStruct\b|\bESAPI\b|\bencodeForHTML\b|\bHtmlUtils\b|\bStringEscapeUtils\b|\bPattern\.matches\b|\bMatcher\b/i;
 const EVAL_SAFE = /\bsanitize\s*\(|\ballowlist\b|\bwhitelist\b|\bJSON\.parse\b|\bsafeEval\b|\bvm2\b|\bsandbox\b/i;
 const FORMAT_SAFE = /\bstatic\b.*format|\bconst\b.*format|\bhardcoded\b|\bliteral\b|\bformat.*=.*['"`]/i;
 const INCLUDE_SAFE = /\ballowlist\b|\bwhitelist\b|\bbasename\b|\bstartsWith\b|\ballow_url_include.*off\b|\bvalidate.*path\b/i;
@@ -239,8 +265,15 @@ function createInputValidationVerifier(
     const ingress = nodesOfType(map, 'INGRESS');
     const sinks = dataTransformNodes(map);
 
+    // Require at least one sink that is NOT just a simple decode/URLDecode/type-cast
+    // Simple decodes are not risky data processing — they're just format conversion
+    const riskySinks = sinks.filter(s =>
+      !/^\s*(URLDecoder\.decode|java\.net\.URLDecoder|Base64\.decode|Integer\.parseInt|Long\.parseLong|Double\.parseDouble)\b/i.test(s.code_snapshot.trim()) ||
+      /\beval\b|\bexec\b|\bcompile\b|\bprocess\b|\bcommand\b/i.test(s.code_snapshot)
+    );
+
     for (const src of ingress) {
-      for (const sink of sinks) {
+      for (const sink of riskySinks) {
         if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
           const isSafe = INPUT_VALID_SAFE.test(sink.code_snapshot) ||
             (extraSafe ? extraSafe.test(sink.code_snapshot) : false);
@@ -265,12 +298,12 @@ function createInputValidationVerifier(
   };
 }
 
-// Struts framework validation CWEs
-export const verifyCWE103 = createInputValidationVerifier('CWE-103', 'Struts: Incomplete validate() Method Definition', 'medium', /\bsuper\.validate\b|\bValidator\b/i);
-export const verifyCWE104 = createInputValidationVerifier('CWE-104', 'Struts: Form Bean Does Not Extend Validation Class', 'medium', /\bValidatorForm\b|\bValidatorActionForm\b/i);
-export const verifyCWE105 = createInputValidationVerifier('CWE-105', 'Struts: Form Field Without Validator', 'medium', /\bvalidation\.xml\b|\bvalidator\b.*\bfield\b/i);
-export const verifyCWE106 = createInputValidationVerifier('CWE-106', 'Struts: Plug-in Framework Not In Use', 'medium', /\bValidatorPlugin\b|\bstruts-config\b.*\bvalidator\b/i);
-export const verifyCWE108 = createInputValidationVerifier('CWE-108', 'Struts: Unverified Action Form', 'medium', /\bvalidate\b|\bActionErrors\b/i);
+// Struts framework validation CWEs — gated to only fire on actual Struts code
+export const verifyCWE103 = createStrutsValidationVerifier('CWE-103', 'Struts: Incomplete validate() Method Definition', 'medium', /\bsuper\.validate\b|\bValidator\b/i);
+export const verifyCWE104 = createStrutsValidationVerifier('CWE-104', 'Struts: Form Bean Does Not Extend Validation Class', 'medium', /\bValidatorForm\b|\bValidatorActionForm\b/i);
+export const verifyCWE105 = createStrutsValidationVerifier('CWE-105', 'Struts: Form Field Without Validator', 'medium', /\bvalidation\.xml\b|\bvalidator\b.*\bfield\b/i);
+export const verifyCWE106 = createStrutsValidationVerifier('CWE-106', 'Struts: Plug-in Framework Not In Use', 'medium', /\bValidatorPlugin\b|\bstruts-config\b.*\bvalidator\b/i);
+export const verifyCWE108 = createStrutsValidationVerifier('CWE-108', 'Struts: Unverified Action Form', 'medium', /\bvalidate\b|\bActionErrors\b/i);
 
 // XML/structural validation
 export const verifyCWE112 = createInputValidationVerifier('CWE-112', 'Missing XML Validation', 'high', /\bXMLSchema\b|\bDTD\b|\bvalidate\b|\bschema\b.*\bxml\b/i);
@@ -867,11 +900,17 @@ export const verifyCWE757 = createGenericVerifier(
 // F. INDIVIDUAL VERIFIERS (11 CWEs)
 // ===========================================================================
 
-/** CWE-554: ASP.NET Misconfiguration: Not Using Input Validation Framework */
-export const verifyCWE554 = createInputValidationVerifier(
-  'CWE-554', 'ASP.NET Misconfiguration: Not Using Input Validation Framework', 'medium',
-  /\bRequestValidation\b|\bvalidateRequest\b|\bAntiForgery\b|\b\[ValidateInput\]/i
-);
+/** CWE-554: ASP.NET Misconfiguration — gated to C#/.NET code only */
+export const verifyCWE554 = (map: NeuralMap): VerificationResult => {
+  const lang = detectLanguage(map);
+  if (lang && lang !== 'csharp') {
+    return { cwe: 'CWE-554', name: 'ASP.NET Misconfiguration: Not Using Input Validation Framework', holds: true, findings: [] };
+  }
+  return createInputValidationVerifier(
+    'CWE-554', 'ASP.NET Misconfiguration: Not Using Input Validation Framework', 'medium',
+    /\bRequestValidation\b|\bvalidateRequest\b|\bAntiForgery\b|\b\[ValidateInput\]/i
+  )(map);
+};
 
 /** CWE-602: Client-Side Enforcement of Server-Side Security */
 export const verifyCWE602 = createGenericVerifier(
