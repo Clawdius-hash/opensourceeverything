@@ -21,7 +21,8 @@ import type {
 } from '../languageProfile.js';
 import type { ScopeType, VariableInfo } from '../mapper.js';
 import type { CalleePattern } from '../calleePatterns.js';
-import { createNode } from '../types.js';
+import { createNode, createRange, narrowRange } from '../types.js';
+import type { RangeInfo } from '../types.js';
 import { resolveCallee as _resolveCallee, resolvePropertyAccess as _resolvePropertyAccess } from '../resolveCallee.js';
 import { lookupCallee as _lookupCallee } from '../calleePatterns.js';
 import { analyzeStructure as _analyzeStructure } from '../structuralPatterns.js';
@@ -202,6 +203,150 @@ function resolveEscapes(s: string): string {
     .replace(/\\u\{([0-9a-fA-F]+)\}/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
     .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
     .replace(/\\\\/g, '\\');
+}
+
+// ---------------------------------------------------------------------------
+// Range Extraction — parse comparison operators from CONTROL conditions
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a tree-sitter condition node (the `condition` field of an if_statement
+ * or while_statement), extract variable-to-range mappings from comparison operators.
+ *
+ * Handles:
+ *   x > 0          → { x: { min: 1, max: Infinity } }    (exclusive: min = val + 1)
+ *   x >= 0         → { x: { min: 0, max: Infinity } }
+ *   x < 1000       → { x: { min: -Infinity, max: 999 } } (exclusive: max = val - 1)
+ *   x <= 1000      → { x: { min: -Infinity, max: 1000 } }
+ *   x > 0 && x < 1000 → { x: { min: 1, max: 999 } }     (narrowed)
+ *   x === 5        → { x: { min: 5, max: 5 } }
+ *
+ * Does NOT handle disjunctions (||), negation, or non-literal comparisons.
+ */
+function extractRangeFromCondition(
+  conditionNode: SyntaxNode,
+  ctx: MapperContextLike,
+  controlNodeId: string,
+): Map<string, RangeInfo> {
+  const ranges = new Map<string, RangeInfo>();
+
+  function processComparison(node: SyntaxNode): void {
+    if (node.type !== 'binary_expression') return;
+
+    const op = node.childForFieldName('operator')?.text;
+    const left = node.childForFieldName('left');
+    const right = node.childForFieldName('right');
+    if (!op || !left || !right) return;
+
+    let varName: string | null = null;
+    let numVal: number | null = null;
+    let varIsLeft = true;
+
+    // Try left = identifier/member, right = numeric literal
+    if (left.type === 'identifier' || left.type === 'member_expression') {
+      const folded = tryFoldConstant(right);
+      if (folded !== null && !isNaN(Number(folded))) {
+        varName = left.text;
+        numVal = Number(folded);
+        varIsLeft = true;
+      }
+    }
+    // Try left = numeric literal, right = identifier/member
+    if (varName === null && (right.type === 'identifier' || right.type === 'member_expression')) {
+      const folded = tryFoldConstant(left);
+      if (folded !== null && !isNaN(Number(folded))) {
+        varName = right.text;
+        numVal = Number(folded);
+        varIsLeft = false;
+      }
+    }
+
+    if (varName === null || numVal === null) return;
+
+    // Normalize: express as "varName OP numVal"; flip operator if var was on right
+    let normalizedOp = op;
+    if (!varIsLeft) {
+      switch (op) {
+        case '<':  normalizedOp = '>'; break;
+        case '<=': normalizedOp = '>='; break;
+        case '>':  normalizedOp = '<'; break;
+        case '>=': normalizedOp = '<='; break;
+        // == and != are symmetric
+      }
+    }
+
+    let newRange: RangeInfo;
+    switch (normalizedOp) {
+      case '>':
+        newRange = createRange(numVal + 1, Infinity, controlNodeId);
+        break;
+      case '>=':
+        newRange = createRange(numVal, Infinity, controlNodeId);
+        break;
+      case '<':
+        newRange = createRange(-Infinity, numVal - 1, controlNodeId);
+        break;
+      case '<=':
+        newRange = createRange(-Infinity, numVal, controlNodeId);
+        break;
+      case '==':
+      case '===':
+        newRange = createRange(numVal, numVal, controlNodeId);
+        break;
+      case '!=':
+      case '!==':
+        // Inequality doesn't yield a useful contiguous range
+        return;
+      default:
+        return;
+    }
+
+    // Narrow with any existing range for this variable (handles && chains)
+    const existing = ranges.get(varName);
+    if (existing) {
+      ranges.set(varName, narrowRange(existing, newRange));
+    } else {
+      ranges.set(varName, newRange);
+    }
+  }
+
+  function walk(node: SyntaxNode): void {
+    if (node.type === 'binary_expression') {
+      const op = node.childForFieldName('operator')?.text;
+      if (op === '&&') {
+        // Conjunction: both sides contribute ranges
+        const left = node.childForFieldName('left');
+        const right = node.childForFieldName('right');
+        if (left) walk(left);
+        if (right) walk(right);
+        return;
+      }
+      // Comparison — try to extract range
+      processComparison(node);
+      return;
+    }
+    // Parenthesized expression: unwrap
+    if (node.type === 'parenthesized_expression') {
+      const inner = node.namedChild(0);
+      if (inner) walk(inner);
+      return;
+    }
+    // Other node types: don't recurse (only handle explicit comparisons)
+  }
+
+  walk(conditionNode);
+
+  // Attach inferred ranges to variables currently in scope
+  for (const [varName, range] of ranges) {
+    const varInfo = ctx.resolveVariable(varName);
+    if (varInfo) {
+      varInfo.range = varInfo.range
+        ? narrowRange(varInfo.range, range)
+        : range;
+    }
+  }
+
+  return ranges;
 }
 
 // ---------------------------------------------------------------------------
@@ -709,7 +854,15 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
       const v = ctx.resolveVariable(varName);
       if (v) {
         if (aliasChain) v.aliasChain = aliasChain;
-        if (constantValue) v.constantValue = constantValue;
+        if (constantValue) {
+          v.constantValue = constantValue;
+          // Step 6: constant folding → range
+          // If the constant is numeric, set an exact range { min: N, max: N }
+          const numVal = Number(constantValue);
+          if (!isNaN(numVal) && Number.isFinite(numVal)) {
+            v.range = createRange(numVal, numVal);
+          }
+        }
       }
     };
 
@@ -1661,11 +1814,17 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'if_statement': {
       const ifN = createNode({ label: 'if', node_type: 'CONTROL', node_subtype: 'branch', language: 'javascript', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(ifN); ctx.lastCreatedNodeId = ifN.id; ctx.emitContainsIfNeeded(ifN.id);
+      // Range inference: extract bounds from condition and attach to variables in scope
+      const ifCondition = node.childForFieldName('condition');
+      if (ifCondition) extractRangeFromCondition(ifCondition, ctx, ifN.id);
       break;
     }
     case 'for_statement': {
       const forN = createNode({ label: 'for', node_type: 'CONTROL', node_subtype: 'loop', language: 'javascript', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(forN); ctx.lastCreatedNodeId = forN.id; ctx.emitContainsIfNeeded(forN.id);
+      // Range inference: extract bounds from for-loop condition
+      const forCondition = node.childForFieldName('condition');
+      if (forCondition) extractRangeFromCondition(forCondition, ctx, forN.id);
       break;
     }
     case 'for_in_statement': {
@@ -1685,6 +1844,9 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
     case 'while_statement': {
       const whileN = createNode({ label: 'while', node_type: 'CONTROL', node_subtype: 'loop', language: 'javascript', file: ctx.neuralMap.source_file, line_start: node.startPosition.row + 1, line_end: node.endPosition.row + 1, code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000) });
       ctx.neuralMap.nodes.push(whileN); ctx.lastCreatedNodeId = whileN.id; ctx.emitContainsIfNeeded(whileN.id);
+      // Range inference: extract bounds from while-loop condition
+      const whileCondition = node.childForFieldName('condition');
+      if (whileCondition) extractRangeFromCondition(whileCondition, ctx, whileN.id);
       break;
     }
     case 'do_statement': {

@@ -16,6 +16,7 @@
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, createGenericVerifier,
+  sinkHasSafeRange,
   type VerificationResult, type Finding, type NodeRef, type Severity,
 } from './_helpers';
 export type { VerificationResult, Finding, NodeRef };
@@ -229,7 +230,11 @@ function createIntegerVerifier(
           const isSafe = INTEGER_SAFE.test(sink.code_snapshot) ||
             (extraSafe ? extraSafe.test(sink.code_snapshot) : false);
 
-          if (!isSafe) {
+          // Range check: if the variable is bounded within safe integer range,
+          // integer overflow is impossible
+          const isRangeBounded = sinkHasSafeRange(map, sink.id, Number.MAX_SAFE_INTEGER);
+
+          if (!isSafe && !isRangeBounded) {
             findings.push({
               source: nodeRef(src),
               sink: nodeRef(sink),

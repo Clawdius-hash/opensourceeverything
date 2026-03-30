@@ -3,7 +3,8 @@
  * Graph traversal, node filtering, and result types used by all batches.
  */
 
-import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from '../types';
+import type { NeuralMap, NeuralMapNode, NodeType, EdgeType, RangeInfo } from '../types';
+import { rangeExcludesZero, isRangeSafe } from '../types';
 
 // ---------------------------------------------------------------------------
 // Result types (same shape as verifier.ts exports)
@@ -154,6 +155,55 @@ export function sinkHasTaintedDataIn(map: NeuralMap, sinkId: string): boolean {
   const sink = map.nodes.find(n => n.id === sinkId);
   if (!sink) return false;
   return sink.data_in.some(d => d.tainted);
+}
+
+// ---------------------------------------------------------------------------
+// Range-aware helpers (Step 7) — used by CWE-190, 191, 369, 131
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a sink node has any data_in with a bounded range.
+ * Used by integer/arithmetic verifiers to suppress findings when
+ * the incoming data is provably bounded by a CONTROL gate.
+ */
+export function sinkHasBoundedRange(map: NeuralMap, sinkId: string): boolean {
+  const sink = map.nodes.find(n => n.id === sinkId);
+  if (!sink) return false;
+  return sink.data_in.some(d => d.range?.bounded === true);
+}
+
+/**
+ * Check if a sink node has data_in with a range that provably excludes zero.
+ * Used by CWE-369 (divide by zero) to suppress findings when the divisor
+ * is known to be non-zero from a CONTROL gate.
+ */
+export function sinkHasNonZeroRange(map: NeuralMap, sinkId: string): boolean {
+  const sink = map.nodes.find(n => n.id === sinkId);
+  if (!sink) return false;
+  return sink.data_in.some(d => d.range != null && rangeExcludesZero(d.range));
+}
+
+/**
+ * Check if a sink node has data_in with a range that fits within [0, maxSafe].
+ * Used by CWE-190 (integer overflow) to suppress findings when the value
+ * is known to be within safe bounds from a CONTROL gate.
+ */
+export function sinkHasSafeRange(map: NeuralMap, sinkId: string, maxSafe: number): boolean {
+  const sink = map.nodes.find(n => n.id === sinkId);
+  if (!sink) return false;
+  return sink.data_in.some(d => d.range != null && isRangeSafe(d.range, maxSafe));
+}
+
+/**
+ * Get all ranges from a sink's data_in.
+ * Returns an empty array if no ranges are present.
+ */
+export function getSinkRanges(map: NeuralMap, sinkId: string): RangeInfo[] {
+  const sink = map.nodes.find(n => n.id === sinkId);
+  if (!sink) return [];
+  return sink.data_in
+    .filter(d => d.range != null)
+    .map(d => d.range!);
 }
 
 /**

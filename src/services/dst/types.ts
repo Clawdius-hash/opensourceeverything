@@ -43,6 +43,78 @@ export const EDGE_TYPES: readonly EdgeType[] = [
 export type Sensitivity = 'NONE' | 'PII' | 'SECRET' | 'AUTH' | 'FINANCIAL';
 
 // ---------------------------------------------------------------------------
+// Range inference — numeric bounds attached to variables after CONTROL gates
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracks the known numeric range of a variable after it passes through
+ * a CONTROL node with comparison operators (e.g., if (x > 0 && x < 1000)).
+ *
+ * Used by integer/arithmetic verifiers (CWE-190, 191, 369, 131) to
+ * suppress findings when a variable is provably bounded.
+ */
+export interface RangeInfo {
+  /** Lower bound (inclusive). -Infinity if unknown/unbounded below. */
+  min: number;
+  /** Upper bound (inclusive). Infinity if unknown/unbounded above. */
+  max: number;
+  /** True when BOTH min and max are finite — the variable is fully bounded. */
+  bounded: boolean;
+  /** Where the range was established — the CONTROL node ID that set it. */
+  sourceNodeId?: string;
+}
+
+/**
+ * Create a RangeInfo with sensible defaults (unbounded).
+ */
+export function createUnboundedRange(): RangeInfo {
+  return { min: -Infinity, max: Infinity, bounded: false };
+}
+
+/**
+ * Create a RangeInfo from known bounds. Sets `bounded` automatically.
+ */
+export function createRange(min: number, max: number, sourceNodeId?: string): RangeInfo {
+  return {
+    min,
+    max,
+    bounded: Number.isFinite(min) && Number.isFinite(max),
+    sourceNodeId,
+  };
+}
+
+/**
+ * Narrow an existing range by intersecting with new bounds.
+ * Used when a variable passes through multiple CONTROL gates.
+ * e.g., first `if (x > 0)` then later `if (x < 1000)` → range is (0, 1000].
+ */
+export function narrowRange(existing: RangeInfo, additional: RangeInfo): RangeInfo {
+  const min = Math.max(existing.min, additional.min);
+  const max = Math.min(existing.max, additional.max);
+  return {
+    min,
+    max,
+    bounded: Number.isFinite(min) && Number.isFinite(max),
+    sourceNodeId: additional.sourceNodeId ?? existing.sourceNodeId,
+  };
+}
+
+/**
+ * Check if a range is provably safe for a given maximum value.
+ * Returns true if the entire range fits within [0, maxSafe].
+ */
+export function isRangeSafe(range: RangeInfo, maxSafe: number): boolean {
+  return range.bounded && range.min >= 0 && range.max <= maxSafe;
+}
+
+/**
+ * Check if a range provably excludes zero (safe for division).
+ */
+export function rangeExcludesZero(range: RangeInfo): boolean {
+  return range.min > 0 || range.max < 0;
+}
+
+// ---------------------------------------------------------------------------
 // Core interfaces
 // ---------------------------------------------------------------------------
 
@@ -59,6 +131,8 @@ export interface DataFlow {
   tainted: boolean;
   /** Classification of data sensitivity */
   sensitivity: Sensitivity;
+  /** Numeric range constraint on this data element, if known from CONTROL gates. */
+  range?: RangeInfo;
 }
 
 export interface Edge {

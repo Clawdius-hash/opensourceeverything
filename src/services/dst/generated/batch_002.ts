@@ -16,6 +16,7 @@
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, createGenericVerifier,
+  sinkHasNonZeroRange,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -542,7 +543,12 @@ export function verifyCWE369(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of sinks) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (!ZERO_CHECK_SAFE.test(sink.code_snapshot)) {
+        // Existing regex check
+        const regexSafe = ZERO_CHECK_SAFE.test(sink.code_snapshot);
+        // Range check: if the divisor is provably non-zero, suppress
+        const rangeSafe = sinkHasNonZeroRange(map, sink.id);
+
+        if (!regexSafe && !rangeSafe) {
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),

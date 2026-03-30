@@ -10,7 +10,7 @@
 
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
-  nodeRef, nodesOfType, hasTaintedPathWithoutControl,
+  nodeRef, nodesOfType, hasTaintedPathWithoutControl, sinkHasSafeRange,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -99,13 +99,40 @@ function createTransformTransformVerifier(
 // MEMORY/POINTER (10 CWEs)
 // ===========================================================================
 
-export const verifyCWE131 = createTransformTransformVerifier(
-  'CWE-131', 'Incorrect Calculation of Buffer Size', 'critical',
-  computeTransformNodes, memoryTransformNodes, SIZE_CHECK_SAFE,
-  'CONTROL (buffer size validation — account for null terminator, encoding expansion, overflow)',
-  'Validate calculated buffer sizes: account for null terminators (+1), multi-byte encoding expansion, ' +
-    'and check for integer overflow in size * count. Use checked arithmetic.',
-);
+// CWE-131: range-aware version — if the computed size is bounded, buffer allocation is safe
+export function verifyCWE131(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const sources = computeTransformNodes(map);
+  const sinks = memoryTransformNodes(map);
+
+  for (const src of sources) {
+    for (const sink of sinks) {
+      if (src.id === sink.id) continue;
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        const regexSafe = SIZE_CHECK_SAFE.test(sink.code_snapshot) ||
+          SIZE_CHECK_SAFE.test(src.code_snapshot);
+        // Range check: if the size value is bounded within reasonable limits,
+        // buffer size miscalculation risk is mitigated
+        const rangeSafe = sinkHasSafeRange(map, sink.id, 2_147_483_647); // INT32_MAX
+
+        if (!regexSafe && !rangeSafe) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (buffer size validation — account for null terminator, encoding expansion, overflow)',
+            severity: 'critical',
+            description: `Operation at ${src.label} feeds ${sink.label} without validation. ` +
+              `Vulnerable to Incorrect Calculation of Buffer Size.`,
+            fix: 'Validate calculated buffer sizes: account for null terminators (+1), multi-byte encoding expansion, ' +
+              'and check for integer overflow in size * count. Use checked arithmetic.',
+          });
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-131', name: 'Incorrect Calculation of Buffer Size', holds: findings.length === 0, findings };
+}
 
 export const verifyCWE170 = createTransformTransformVerifier(
   'CWE-170', 'Improper Null Termination', 'high',

@@ -480,6 +480,62 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
             fix: 'Encode output for the target context. Use textContent instead of innerHTML. ' +
               'Use a sanitizer like DOMPurify for rich text. Never trust user input in HTML.',
           });
+        } else if (isEncoded && !isJsonResponse) {
+          // Context-aware encoding check: encoding exists but may be wrong for the output context.
+          const sinkContextCode = stripComments(
+            sink.node_subtype + ' ' + (sink.analysis_snapshot || sink.code_snapshot)
+          );
+
+          // Determine the output context from the sink's subtype and code_snapshot.
+          const isHtmlContext = /\binnerHTML\b|\bdocument\.write\b|\.html\s*\(|render\s*\(|html_response|html_output/i.test(sinkContextCode);
+          const isJsContext = /<script\b|eval\s*\(|setTimeout\s*\(\s*[^,)]*[^,)]\s*[,)]/i.test(sinkContextCode) ||
+            /js_context|script_context/i.test(sink.node_subtype);
+          const isUrlContext = /href\s*=|src\s*=|action\s*=|url_redirect|url_context/i.test(sinkContextCode);
+          const isCssContext = /style\s*=|\.css\s*\(/i.test(sinkContextCode) || /css_context/i.test(sink.node_subtype);
+          const isAttributeContext = /setAttribute\s*\(/i.test(sinkContextCode) || /attribute_context/i.test(sink.node_subtype);
+
+          // Determine which encoding functions are actually used.
+          const hasHtmlEncoding = /\bescapeHtml\b|\bhtmlEncode\b|\bDOMPurify\b|\btextContent\b/i.test(combinedScope);
+          const hasUrlEncoding = /\bencodeURIComponent\b|\bencodeURI\b/i.test(combinedScope);
+          const hasJsEncoding = /\bJSON\.stringify\b|\bjsEscape\b|\bescapeJs\b/i.test(combinedScope);
+
+          // Check for wrong encoding given the context.
+          let wrongEncodingDescription: string | null = null;
+
+          if (isHtmlContext && !hasHtmlEncoding && (hasUrlEncoding || hasJsEncoding)) {
+            wrongEncodingDescription =
+              'Output is encoded but using wrong encoding for the context. ' +
+              'URL/JS-encoded data in an HTML context can still be exploited.';
+          } else if (isJsContext && hasHtmlEncoding && !hasJsEncoding) {
+            wrongEncodingDescription =
+              'Output is encoded but using wrong encoding for the context. ' +
+              'HTML-encoded data in JavaScript context can still be exploited.';
+          } else if (isUrlContext && hasHtmlEncoding && !hasUrlEncoding) {
+            wrongEncodingDescription =
+              'Output is encoded but using wrong encoding for the context. ' +
+              'HTML-encoded data in a URL context does not prevent URL-based attacks.';
+          } else if (isCssContext && !hasHtmlEncoding && !hasJsEncoding) {
+            wrongEncodingDescription =
+              'Output is encoded but using wrong encoding for the context. ' +
+              'CSS context requires CSS-specific encoding to prevent style injection.';
+          } else if (isAttributeContext && hasUrlEncoding && !hasHtmlEncoding) {
+            wrongEncodingDescription =
+              'Output is encoded but using wrong encoding for the context. ' +
+              'URL-encoded data in an HTML attribute context can still be exploited.';
+          }
+
+          if (wrongEncodingDescription) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'CONTROL (correct encoding for output context)',
+              severity: 'high',
+              description: wrongEncodingDescription,
+              fix: 'Use context-appropriate encoding: htmlEscape/DOMPurify for HTML, ' +
+                'JSON.stringify/jsEscape for JavaScript, encodeURIComponent for URLs, ' +
+                'CSS encoding for style contexts. Never substitute one context\'s encoding for another.',
+            });
+          }
         }
       }
     }

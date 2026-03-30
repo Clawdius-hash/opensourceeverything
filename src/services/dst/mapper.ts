@@ -4,7 +4,7 @@
 
 import type { Node as SyntaxNode } from 'web-tree-sitter';
 import type Parser from 'web-tree-sitter';
-import type { NeuralMap, NeuralMapNode, Edge, Sensitivity } from './types.js';
+import type { NeuralMap, NeuralMapNode, Edge, Sensitivity, RangeInfo } from './types.js';
 import { createNode, createNeuralMap, resetSequence } from './types.js';
 import type { LanguageProfile } from './languageProfile.js';
 import { javascriptProfile } from './profiles/javascript.js';
@@ -33,6 +33,10 @@ export interface VariableInfo {
   /** If this variable holds a known constant string (e.g., const action = "quer" + "y" → "query"),
    *  store the value for computed property resolution: db[action] → db.query */
   constantValue?: string;
+  /** If this variable has been range-checked by a CONTROL node,
+   *  stores the inferred numeric bounds. Used by integer/arithmetic
+   *  verifiers to suppress findings on bounded variables. */
+  range?: RangeInfo;
 }
 
 export type ScopeType = 'module' | 'function' | 'block' | 'class';
@@ -182,18 +186,24 @@ export class MapperContext {
     name: string,
     dataType: string = 'unknown',
     tainted: boolean = false,
+    range?: RangeInfo,     // Step 5: optional range propagation
   ): void {
     const fromNode = this.neuralMap.nodes.find(n => n.id === fromNodeId);
     const toNode = this.neuralMap.nodes.find(n => n.id === toNodeId);
     if (!fromNode || !toNode) return;
 
-    const flow = {
+    const flow: {
+      name: string; source: string; target: string;
+      data_type: string; tainted: boolean; sensitivity: 'NONE';
+      range?: RangeInfo;
+    } = {
       name,
       source: fromNodeId,
       target: toNodeId,
       data_type: dataType,
       tainted,
       sensitivity: 'NONE' as const,
+      ...(range !== undefined ? { range } : {}),
     };
 
     // Avoid duplicate flows (same name, same source/target pair)
