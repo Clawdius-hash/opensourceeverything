@@ -7488,11 +7488,23 @@
   },
   "CWE-690": {
     "language_classes": [
-      "Memory-Unsafe"
+      "Memory-Unsafe",
+      "Not Language-Specific"
     ],
     "languages": [
       "C",
-      "C++"
+      "C++",
+      "Java",
+      "JavaScript",
+      "TypeScript",
+      "Python",
+      "C#",
+      "Go",
+      "Rust",
+      "PHP",
+      "Ruby",
+      "Kotlin",
+      "Swift"
     ],
     "technologies": [],
     "technology_classes": []

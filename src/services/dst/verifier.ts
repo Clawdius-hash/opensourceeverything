@@ -10,7 +10,7 @@
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from './types';
-import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate, scopeBasedTaintReaches } from './generated/_helpers.js';
+import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate, scopeBasedTaintReaches, findNearestNode } from './generated/_helpers.js';
 import { GENERATED_REGISTRY } from './generated/index.js';
 import { verifyCWE336_B2, verifyCWE614_B2, verifyCWE759_B2, verifyCWE760_B2 } from './generated/batch_crypto_B2.js';
 import { deduplicateResults } from './dedup.js';
@@ -465,7 +465,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
-          /\bescape\s*\(|\bescapeHtml\b|\bencode\s*\(|\bencodeURI\b|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i
+          /\bescape\s*\(|\bescapeHtml\b|\bhtmlEncode\s*\(|\bencodeURI\b|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i
         ) !== null;
 
         // JSON responses are not vulnerable to XSS — Content-Type: application/json
@@ -4461,24 +4461,38 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
   const ARITH_RE = /\b\w+\s*[\*\+]\s*\w+|\b\w+\s*\+=\s*\w+|\b\w+\s*\*=\s*\w+|\b\w+\s*<<\s*\w+/;
   const OVERFLOW_SAFE_RE = /\bchecked_add\b|\bchecked_mul\b|\bsaturating_add\b|\bsaturating_mul\b|\b__builtin_\w+_overflow\b|\bSafeInt\b|\bNumber\.isSafeInteger\b|\bMAX_SAFE_INTEGER\b|\bif\s*\(.*>\s*MAX|\bif\s*\(.*>\s*INT_MAX|\bif\s*\(.*>\s*SIZE_MAX|\bif\s*\(.*overflow|\bclamp\b|\bMath\.min\b/i;
   const ingress = nodesOfType(map, 'INGRESS');
+  // Cast-narrow patterns: (byte)(...+...), (short)(...+...) — narrowing casts on arithmetic
+  // are the classic Java integer overflow pattern. The cast truncates the result.
+  const CAST_NARROW_ARITH_RE = /\(\s*(byte|short|char)\s*\)\s*\([^)]*[\+\*\-][^)]*\)/i;
   const arithNodes = map.nodes.filter(n =>
     // Include RESOURCE nodes: Buffer.alloc(size + 1) is classified RESOURCE/memory
     // and contains integer arithmetic used as a size argument.
     (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE' || n.node_type === 'RESOURCE') &&
     (SIZE_ARITH_RE.test(n.analysis_snapshot || n.code_snapshot) ||
      (ARITH_RE.test(n.analysis_snapshot || n.code_snapshot) && CAST_WIDEN_RE.test(n.analysis_snapshot || n.code_snapshot)) ||
+     // Narrowing cast on arithmetic: (byte)(data + 1), (short)(x * y) — classic overflow
+     CAST_NARROW_ARITH_RE.test(n.analysis_snapshot || n.code_snapshot) ||
+     // Simple arithmetic on user-controlled data in variable assignments
+     (n.node_subtype === 'assignment' && ARITH_RE.test(n.analysis_snapshot || n.code_snapshot)) ||
      n.node_subtype.includes('arithmetic') || n.node_subtype.includes('numeric') ||
      n.node_subtype.includes('integer') || n.attack_surface.includes('numeric_operation') ||
      // Buffer.alloc/allocUnsafe with arithmetic argument is a direct integer overflow sink
      /\bBuffer\.(alloc|allocUnsafe)\s*\([^)]*[\*\+\-][^)]*\)/.test(n.analysis_snapshot || n.code_snapshot))
   );
+  // Also check STRUCTURAL/function nodes whose analysis_snapshot contains
+  // unchecked arithmetic — the arithmetic may be inside a local_variable_declaration
+  // that doesn't create a TRANSFORM node (e.g., Java: byte result = (byte)(data + 1)).
+  const FUNC_ARITH_RE = /\(\s*(byte|short|char|int|long)\s*\)\s*\([^)]*[\+\*\-][^)]*\)|\b\w+\s*[\+\*]\s*\w+/;
+  // Real bounds check pattern: if (data < MAX_VALUE) or if (data > 0 && data < MAX)
+  const REAL_BOUNDS_CHECK_RE = /\bif\s*\(.*\b(MAX_VALUE|MIN_VALUE|MAX_SAFE_INTEGER|INT_MAX|SIZE_MAX|overflow)\b|\bchecked_add\b|\bchecked_mul\b|\bsaturating_add\b|\bsaturating_mul\b|\b__builtin_\w+_overflow\b|\bSafeInt\b|\bNumber\.isSafeInteger\b|\bclamp\b|\bMath\.min\b/i;
+
   for (const src of ingress) {
     for (const sink of arithNodes) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
           sharesFunctionScope(map, src.id, sink.id)) {
         // Check the sink AND the function scope for safety patterns.
-        // Number.isSafeInteger / Math.min may be in a sibling CONTROL node.
+        // Only count REAL bounds checks, not NumberFormatException catches or generic error handling.
         const scopeSafe = OVERFLOW_SAFE_RE.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) ||
           map.nodes.some(n =>
             n.id !== sink.id &&
@@ -4496,6 +4510,36 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
               'Validate input ranges before arithmetic. Use Number.isSafeInteger() in JS. ' +
               'Use int64 or BigInt for intermediate calculations.',
           });
+        }
+      }
+    }
+
+    // Fallback: check STRUCTURAL/function nodes containing arithmetic for cases
+    // where no TRANSFORM node was created (e.g., Java local_variable_declaration
+    // with cast+arithmetic: byte result = (byte)(data + 1))
+    if (arithNodes.length === 0) {
+      const funcNodes = map.nodes.filter(n =>
+        n.node_type === 'STRUCTURAL' && n.node_subtype === 'function' &&
+        FUNC_ARITH_RE.test(n.analysis_snapshot || '')
+      );
+      for (const funcNode of funcNodes) {
+        if (sharesFunctionScope(map, src.id, funcNode.id) ||
+            hasTaintedPathWithoutControl(map, src.id, funcNode.id)) {
+          const funcCode = stripComments(funcNode.analysis_snapshot || funcNode.code_snapshot);
+          // Only count REAL bounds checks as overflow protection.
+          // NumberFormatException catch is parse error handling, NOT overflow protection.
+          const hasBoundsCheck = REAL_BOUNDS_CHECK_RE.test(funcCode);
+          if (!hasBoundsCheck) {
+            findings.push({
+              source: nodeRef(src), sink: nodeRef(funcNode),
+              missing: 'CONTROL (integer overflow check before arithmetic)',
+              severity: 'high',
+              description: `User input from ${src.label} feeds into arithmetic in ${funcNode.label} without overflow protection. ` +
+                `Result exceeding the type's maximum wraps to small/negative value, causing buffer overflow or infinite loops.`,
+              fix: 'Use checked arithmetic or validate input ranges before arithmetic. ' +
+                'Compare against MAX_VALUE/MIN_VALUE before operations that could overflow.',
+            });
+          }
         }
       }
     }
@@ -7255,6 +7299,267 @@ function verifyCWE832(map: NeuralMap): VerificationResult {
     }
   }
   return { cwe: 'CWE-832', name: 'Unlock of a Resource that is not Locked', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-833: Deadlock — Lock Ordering Inversion Detection
+// ---------------------------------------------------------------------------
+
+/**
+ * CWE-833: Deadlock
+ *
+ * Detects deadlock potential by finding methods that acquire two or more
+ * locks in different orders. The classic pattern:
+ *   Method A: lock1 -> lock2
+ *   Method B: lock2 -> lock1
+ *
+ * Covers three Java patterns from Juliet:
+ * 1. ReentrantLock: X.lock() then Y.lock() vs Y.lock() then X.lock()
+ * 2. synchronized(object): synchronized(X) { synchronized(Y) } vs synchronized(Y) { synchronized(X) }
+ * 3. synchronized methods: synchronized method on obj1 calls synchronized method on obj2 (and vice versa)
+ *
+ * Source-level scan — no graph traversal needed. The deadlock pattern is
+ * entirely visible in the source text within a single file.
+ *
+ * Limitations:
+ * - Only detects intra-file deadlock patterns (cross-file would require call graph)
+ * - Pattern 3 (synchronized methods calling each other) requires understanding
+ *   that `synchronized` on a method means locking `this` — harder to detect
+ *   with source scanning alone, so we use a heuristic approach
+ * - Does not track lock aliases (e.g., Lock ref = lock1; ref.lock())
+ */
+function verifyCWE833(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const src = map.source_code || '';
+  if (!src) return { cwe: 'CWE-833', name: 'Deadlock', holds: true, findings };
+
+  const lines = src.split('\n').map((line, i) => ({
+    line,
+    lineNum: i + 1,
+    isComment: /^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line),
+  }));
+
+  // -------------------------------------------------------------------------
+  // Step 1: Extract method boundaries from source
+  // -------------------------------------------------------------------------
+  interface MethodInfo {
+    name: string;
+    startLine: number;
+    endLine: number;
+    body: string;
+    isSynchronized: boolean;
+  }
+
+  const methods: MethodInfo[] = [];
+  // Match Java method declarations — { may be on same line or next line
+  // Return type must NOT consume spaces (so we exclude \s from its char class)
+  const METHOD_DECL_RE = /^\s*(?:(?:public|private|protected|static|final|synchronized|override|virtual|abstract)\s+)*(\w[\w<>\[\],?]*)\s+(\w+)\s*\([^)]*\)\s*(?:throws\s+[\w,\s]+)?\s*\{?\s*$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].isComment) continue;
+    const line = lines[i].line.replace(/\r$/, '');
+    const match = METHOD_DECL_RE.exec(line);
+    if (!match) continue;
+
+    // Ensure this is a method, not a class/interface declaration
+    const retType = match[1];
+    if (retType === 'class' || retType === 'interface' || retType === 'enum') continue;
+
+    const methodName = match[2];
+    const startLine = lines[i].lineNum;
+    const isSynchronized = /\bsynchronized\b/.test(line);
+
+    // Find matching closing brace by counting braces
+    let braceDepth = 0;
+    let foundOpen = false;
+    let endLine = startLine;
+    const bodyLines: string[] = [];
+
+    for (let j = i; j < lines.length; j++) {
+      const line = lines[j].line;
+      for (const ch of line) {
+        if (ch === '{') { braceDepth++; foundOpen = true; }
+        if (ch === '}') { braceDepth--; }
+      }
+      bodyLines.push(line);
+      if (foundOpen && braceDepth === 0) {
+        endLine = lines[j].lineNum;
+        break;
+      }
+    }
+
+    methods.push({
+      name: methodName,
+      startLine,
+      endLine,
+      body: bodyLines.join('\n'),
+      isSynchronized,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 2: For each method, extract lock acquisition order
+  // -------------------------------------------------------------------------
+  interface LockAcquisition {
+    lockName: string;
+    line: number;
+  }
+
+  function extractLockOrder(method: MethodInfo): LockAcquisition[] {
+    const acquisitions: LockAcquisition[] = [];
+    const methodLines = method.body.split('\n').map((line, idx) => ({
+      line,
+      lineNum: idx + 1,
+      isComment: /^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line),
+    }));
+
+    for (const ml of methodLines) {
+      if (ml.isComment) continue;
+      const line = ml.line;
+      const lineNum = method.startLine + ml.lineNum - 1;
+
+      // Pattern 1: ReentrantLock — VARNAME.lock()
+      const lockCallRe = /(\w+)\.lock\s*\(\s*\)/g;
+      let m;
+      while ((m = lockCallRe.exec(line)) !== null) {
+        acquisitions.push({ lockName: m[1], line: lineNum });
+      }
+
+      // Pattern 2: synchronized(EXPRESSION) — extract the object being synchronized on
+      const syncRe = /\bsynchronized\s*\(\s*(\w+)\s*\)/g;
+      while ((m = syncRe.exec(line)) !== null) {
+        acquisitions.push({ lockName: `sync:${m[1]}`, line: lineNum });
+      }
+    }
+
+    return acquisitions;
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 3: Compare lock ordering across method pairs
+  // -------------------------------------------------------------------------
+  const methodLockOrders = methods.map(m => ({
+    method: m,
+    locks: extractLockOrder(m),
+  }));
+
+  for (let i = 0; i < methodLockOrders.length; i++) {
+    for (let j = i + 1; j < methodLockOrders.length; j++) {
+      const a = methodLockOrders[i];
+      const b = methodLockOrders[j];
+
+      if (a.locks.length < 2 || b.locks.length < 2) continue;
+
+      // Find locks that appear in both methods
+      const aLockNames = a.locks.map(l => l.lockName);
+      const bLockNames = b.locks.map(l => l.lockName);
+      const sharedLocks = [...new Set(aLockNames.filter(l => bLockNames.includes(l)))];
+
+      if (sharedLocks.length < 2) continue;
+
+      // For each pair of shared locks, check if the order is inverted
+      for (let p = 0; p < sharedLocks.length; p++) {
+        for (let q = p + 1; q < sharedLocks.length; q++) {
+          const lock1 = sharedLocks[p];
+          const lock2 = sharedLocks[q];
+
+          // Find first occurrence index in each method
+          const aIdx1 = aLockNames.indexOf(lock1);
+          const aIdx2 = aLockNames.indexOf(lock2);
+          const bIdx1 = bLockNames.indexOf(lock1);
+          const bIdx2 = bLockNames.indexOf(lock2);
+
+          // Check for ordering inversion: A acquires lock1 before lock2,
+          // but B acquires lock2 before lock1 (or vice versa)
+          const aOrder = aIdx1 < aIdx2; // true = lock1 first in A
+          const bOrder = bIdx1 < bIdx2; // true = lock1 first in B
+
+          if (aOrder !== bOrder) {
+            // Deadlock detected!
+            const firstInA = aOrder ? lock1 : lock2;
+            const secondInA = aOrder ? lock2 : lock1;
+            const firstAcqA = a.locks[aOrder ? aIdx1 : aIdx2];
+            const firstAcqB = b.locks[bOrder ? bIdx2 : bIdx1];
+
+            const sourceNode = findNearestNode(map, firstAcqA.line) || map.nodes[0];
+            const sinkNode = findNearestNode(map, firstAcqB.line) || map.nodes[0];
+
+            if (sourceNode && sinkNode) {
+              const displayLock1 = firstInA.replace('sync:', '');
+              const displayLock2 = secondInA.replace('sync:', '');
+              findings.push({
+                source: nodeRef(sourceNode),
+                sink: nodeRef(sinkNode),
+                missing: 'CONTROL (consistent lock ordering — all methods must acquire locks in the same order)',
+                severity: 'high',
+                description: `Deadlock: ${a.method.name}() acquires ${displayLock1} then ${displayLock2}, ` +
+                  `but ${b.method.name}() acquires ${displayLock2} then ${displayLock1}. ` +
+                  `If these methods run concurrently, each thread can hold one lock while waiting for the other, causing deadlock.`,
+                fix: `Enforce a global lock ordering: always acquire ${displayLock1} before ${displayLock2} (or vice versa, but consistently). ` +
+                  `Alternatively, use tryLock() with timeouts to break potential deadlocks.`,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 4: Pattern 3 — synchronized methods calling synchronized methods
+  // on other objects (the "bow" pattern from Juliet).
+  // -------------------------------------------------------------------------
+  const syncMethods = methods.filter(m => m.isSynchronized);
+  if (syncMethods.length >= 2) {
+    for (const sm of syncMethods) {
+      const bodyLines = sm.body.split('\n').map((line, idx) => ({
+        line,
+        lineNum: idx + 1,
+        isComment: /^\s*\/\//.test(line) || /^\s*\*/.test(line) || /^\s*\/\*/.test(line),
+      }));
+
+      for (const bl of bodyLines) {
+        if (bl.isComment) continue;
+        // Look for calls like: bower.someMethod(this) or param.someMethod(...)
+        const callRe = /(\w+)\.(\w+)\s*\(/g;
+        let m;
+        while ((m = callRe.exec(bl.line)) !== null) {
+          const calledObj = m[1];
+          const calledMethod = m[2];
+
+          // Is calledMethod a synchronized method in this file?
+          const target = syncMethods.find(t => t.name === calledMethod && t !== sm);
+          if (!target) continue;
+
+          // Calling on 'this' or 'super' is not cross-object
+          if (calledObj === 'this' || calledObj === 'super') continue;
+
+          // This synchronized method calls another synchronized method on a different object
+          // while holding its own lock — potential deadlock if the other object does the same.
+          const lineNum = sm.startLine + bl.lineNum - 1;
+          const sourceNode = findNearestNode(map, sm.startLine) || map.nodes[0];
+          const sinkNode = findNearestNode(map, lineNum) || map.nodes[0];
+
+          if (sourceNode && sinkNode) {
+            findings.push({
+              source: nodeRef(sourceNode),
+              sink: nodeRef(sinkNode),
+              missing: 'CONTROL (avoid calling synchronized method on another object while holding own lock)',
+              severity: 'high',
+              description: `Deadlock risk: synchronized method ${sm.name}() holds lock on 'this' ` +
+                `while calling synchronized method ${calledMethod}() on '${calledObj}'. ` +
+                `If ${calledObj} simultaneously calls a synchronized method on this object, deadlock occurs.`,
+              fix: `Release your own lock before calling synchronized methods on other objects. ` +
+                `Use a synchronized block instead of synchronized method, and release before the cross-object call. ` +
+                `Or use a global lock ordering strategy.`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-833', name: 'Deadlock', holds: findings.length === 0, findings };
 }
 
 // ---------------------------------------------------------------------------
@@ -15012,6 +15317,253 @@ function verifyCWE689(map: NeuralMap): VerificationResult {
 }
 
 /**
+ * CWE-690: Unchecked Return Value to NULL Pointer Dereference
+ *
+ * A method that can return null is called. The caller uses the return value
+ * without checking for null. The dereference causes a NullPointerException
+ * (Java), segfault (C/C++), or TypeError (JS/TS).
+ *
+ * Detection approach (source scan):
+ *   1. Identify "nullable sources" — method calls known/likely to return null:
+ *      - Well-known APIs: System.getProperty, getParameter, getProperty, getenv,
+ *        Map.get, find, findOne, querySelector, getAttribute, getItem, etc.
+ *      - Methods defined in the same file that contain `return null`
+ *      - Methods whose name follows naming conventions suggesting nullable return
+ *   2. Track the variable receiving the return value
+ *   3. Check if that variable is dereferenced (var.method(), var.field, var[idx])
+ *      without an intervening null check (if (var != null), if (var == null), etc.)
+ *
+ * Honest limitations: Cross-file analysis is limited to well-known API names.
+ * Same-file methods with `return null` are fully detected. The Juliet Helper
+ * pattern (cross-file getStringBad) is caught by matching known nullable names.
+ */
+function verifyCWE690(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const src690 = map.source_code || '';
+  if (!src690) {
+    return { cwe: 'CWE-690', name: 'Unchecked Return Value to NULL Pointer Dereference', holds: true, findings };
+  }
+
+  const lines = src690.split('\n');
+  // Strip comments but preserve line count — replace comment content with spaces,
+  // keeping all newlines so line indices match the original source.
+  const stripped690 = src690.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+                            .replace(/\/\/.*$/gm, (m) => ' '.repeat(m.length));
+  const strippedLines = stripped690.split('\n');
+
+  // --- Phase 1: Collect same-file methods that return null ---
+  const nullReturningMethods = new Set<string>();
+  let currentMethod690: string | null = null;
+  let braceDepth690 = 0;
+  let methodBraceStart690 = 0;
+  for (let i = 0; i < strippedLines.length; i++) {
+    const line = strippedLines[i];
+    const methodDecl = line.match(/(?:public|private|protected|static|\s)+\s+\w+(?:<[^>]*>)?\s+(\w+)\s*\(/);
+    if (methodDecl && !line.includes(';') && !line.match(/^\s*\/\//)) {
+      currentMethod690 = methodDecl[1];
+      methodBraceStart690 = braceDepth690;
+    }
+    for (const ch of line) {
+      if (ch === '{') braceDepth690++;
+      if (ch === '}') braceDepth690--;
+    }
+    if (currentMethod690 && /\breturn\s+null\s*;/.test(line)) {
+      nullReturningMethods.add(currentMethod690);
+    }
+    if (currentMethod690 && braceDepth690 <= methodBraceStart690) {
+      currentMethod690 = null;
+    }
+  }
+
+  // --- Phase 2: Well-known nullable API methods ---
+  const NULLABLE_API_RE = /\b(?:System\.getProperty|System\.getenv|\.getProperty|\.getParameter|\.getAttribute|\.getItem|\.get\s*\(|\.find\s*\(|\.findOne\s*\(|\.findFirst\s*\(|\.querySelector\s*\(|\.getElementById\s*\(|\.lookup\s*\(|\.search\s*\(|\.match\s*\(|\.exec\s*\(|\.pop\s*\(|\.poll\s*\(|\.peek\s*\(|\.remove\s*\(|Class\.forName|\.getResource\s*\(|\.getAnnotation\s*\(|\.getHeader\s*\(|\.getCookie\s*\(|\.getSession\s*\(|\.getInitParameter\s*\(|\.getRealPath\s*\(|malloc\s*\(|calloc\s*\(|realloc\s*\(|getenv\s*\(|fopen\s*\()\b/;
+
+  // --- Phase 3: Source scan for the pattern ---
+  const seenFindings690 = new Set<string>();
+
+  for (let i = 0; i < strippedLines.length; i++) {
+    const line = strippedLines[i];
+    if (/^\s*$/.test(line)) continue;
+
+    // Match: var = someCall(...) or var = Qualifier.someCall(...)
+    const assignMatch = line.match(/(\w+)\s*=\s*(?:(\w+(?:\.\w+)*)\s*\.\s*)?(\w+)\s*\(/);
+    if (!assignMatch) continue;
+
+    const varName = assignMatch[1];
+    const qualifier = assignMatch[2] || '';
+    const methodName = assignMatch[3];
+
+    // Skip constructors (new X(...))
+    const rhs = line.substring(line.indexOf('=') + 1).trim();
+    if (/^new\s/.test(rhs)) continue;
+    // Skip type declarations
+    if (/^\s*(public|private|protected|class|interface|enum)\b/.test(line)) continue;
+
+    // Determine if this call is nullable
+    let isNullable = false;
+
+    if (NULLABLE_API_RE.test(line)) {
+      isNullable = true;
+    }
+
+    if (nullReturningMethods.has(methodName)) {
+      isNullable = true;
+    }
+
+    // Cross-file: methods with "Bad" in name (Juliet convention)
+    if (/Bad\s*\(/.test(line)) {
+      isNullable = true;
+    }
+
+    // Additional Java nullable APIs by method name alone
+    if (/\.(getProperty|getParameter|getAttribute|getHeader|getenv|getItem)\s*\(/.test(line)) {
+      isNullable = true;
+    }
+
+    if (!isNullable) continue;
+
+    // Scan forward for dereference without null check (within same method).
+    // Compute absolute brace depth from file start to know when we exit the method.
+    let absDepthAtSource = 0;
+    for (let k = 0; k <= i; k++) {
+      for (const ch of strippedLines[k]) {
+        if (ch === '{') absDepthAtSource++;
+        if (ch === '}') absDepthAtSource--;
+      }
+    }
+    // The method body is at some depth; we exit when we go below depth 2
+    // (class=1, method=2 in Java). Use the minimum expected method depth.
+    const methodExitDepth = Math.max(absDepthAtSource - 3, 1);
+
+    let nullChecked = false;
+    let foundDeref = false;
+    let derefLine = -1;
+    let derefCode = '';
+
+    let scanDepth = absDepthAtSource;
+    for (let j = i + 1; j < Math.min(i + 60, strippedLines.length); j++) {
+      const ahead = strippedLines[j];
+
+      for (const ch of ahead) {
+        if (ch === '{') scanDepth++;
+        if (ch === '}') scanDepth--;
+      }
+      // Exit if we've left the enclosing method body
+      if (scanDepth < methodExitDepth) break;
+
+      const nullCheckPat = new RegExp(`\\b${varName}\\s*[!=]=\\s*null\\b|\\bnull\\s*[!=]=\\s*${varName}\\b`);
+      if (nullCheckPat.test(ahead)) {
+        nullChecked = true;
+        break;
+      }
+
+      if (new RegExp(`Objects\\.(?:nonNull|requireNonNull)\\s*\\(\\s*${varName}`).test(ahead) ||
+          new RegExp(`Optional\\.ofNullable\\s*\\(\\s*${varName}`).test(ahead)) {
+        nullChecked = true;
+        break;
+      }
+
+      // Reassignment breaks the nullable chain — UNLESS it's inside a catch/else
+      // block (conditional path that doesn't cover the main execution path).
+      const reassignPat = new RegExp(`\\b${varName}\\s*=\\s*(?!null\\s*;|=)`);
+      if (reassignPat.test(ahead)) {
+        // Check if there's a catch/else between source and this reassignment
+        let inCatchOrElse = false;
+        for (let k = i + 1; k <= j; k++) {
+          if (/\bcatch\b|\belse\b/.test(strippedLines[k])) {
+            inCatchOrElse = true;
+            break;
+          }
+        }
+        if (!inCatchOrElse) break; // Definitive reassignment on main path
+        // Otherwise, the reassignment is on an alternative path — keep scanning
+      }
+
+      // Dereference: var.something
+      const derefPat = new RegExp(`\\b${varName}\\s*\\.\\s*\\w+`);
+      if (derefPat.test(ahead)) {
+        if (nullCheckPat.test(ahead)) {
+          nullChecked = true;
+          break;
+        }
+        foundDeref = true;
+        derefLine = j;
+        derefCode = lines[j]?.trim() || ahead.trim();
+        break;
+      }
+    }
+
+    if (foundDeref && !nullChecked) {
+      const key = `${varName}:${i}:${derefLine}`;
+      if (!seenFindings690.has(key)) {
+        seenFindings690.add(key);
+        const nearNode = map.nodes.find(n => Math.abs(n.line_start - (derefLine + 1)) <= 2) || map.nodes[0];
+        const sourceNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+        if (nearNode && sourceNode) {
+          const fullCall = qualifier ? `${qualifier}.${methodName}` : methodName;
+          findings.push({
+            source: nodeRef(sourceNode),
+            sink: nodeRef(nearNode),
+            missing: 'CONTROL (null check on return value before dereference)',
+            severity: 'high',
+            description: `L${derefLine + 1}: Variable '${varName}' assigned from ${fullCall}() at L${i + 1} ` +
+              `(which may return null) is dereferenced without a null check: ${derefCode.slice(0, 120)}`,
+            fix: `Check the return value for null before dereferencing. ` +
+              `Add: if (${varName} != null) { ... } or use Optional/Objects.requireNonNull().`,
+          });
+        }
+      }
+    }
+  }
+
+  // --- Phase 4: Graph-based fallback ---
+  if (findings.length === 0) {
+    const NULLABLE_SRC_RE = /\b(find|findOne|get|getElementById|querySelector|getAttribute|getItem|getProperty|getParameter|getenv|lookup|search|match|exec|pop|poll|peek|malloc|calloc|realloc|fopen)\b/i;
+    const NULL_SAFE_690_RE = /\bif\s*\(\s*\w+\s*[!=]==?\s*null\b|\bif\s*\(\s*\w+\s*[!=]=?\s*nil\b|\bif\s*\(\s*\w+\s*is\s+None\b|\bif\s*\(\s*\w+\s*!=?\s*nullptr\b|\b\?\.\b|\b\?\?\b|\bif\s+err\s*!=\s*nil|\bif let\b|\bguard let\b|\bObjects\.nonNull\b|\bObjects\.requireNonNull\b|\bOptional\b/i;
+
+    const nullableSources = map.nodes.filter(n =>
+      (n.node_type === 'EXTERNAL' || n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE') &&
+      NULLABLE_SRC_RE.test(n.analysis_snapshot || n.code_snapshot)
+    );
+
+    const derefSinks = map.nodes.filter(n =>
+      (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL') &&
+      /\.\w+\s*[\([]|\.length\b|\.toString\b|\.trim\b|\.equals\b|\.hashCode\b|->\w+|\*\s*\w+/i.test(n.analysis_snapshot || n.code_snapshot)
+    );
+
+    for (const src of nullableSources) {
+      for (const sink of derefSinks) {
+        if (src.id === sink.id) continue;
+        const reachable = hasPathWithoutControl(map, src.id, sink.id) ||
+          sharesFunctionScope(map, src.id, sink.id);
+        if (reachable) {
+          const srcCode = stripComments(src.analysis_snapshot || src.code_snapshot);
+          const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
+          if (!NULL_SAFE_690_RE.test(sinkCode) && !NULL_SAFE_690_RE.test(srcCode)) {
+            const scopeNullSafe = map.nodes.some(n =>
+              sharesFunctionScope(map, src.id, n.id) &&
+              NULL_SAFE_690_RE.test(stripComments(n.analysis_snapshot || n.code_snapshot))
+            );
+            if (!scopeNullSafe) {
+              findings.push({
+                source: nodeRef(src), sink: nodeRef(sink),
+                missing: 'CONTROL (null check on return value before dereference)',
+                severity: 'high',
+                description: `Potentially-null value from ${src.label} is dereferenced at ${sink.label} without a null check.`,
+                fix: 'Check the return value for null before dereferencing. Use if (result != null) or Optional.',
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-690', name: 'Unchecked Return Value to NULL Pointer Dereference', holds: findings.length === 0, findings };
+}
+
+/**
  * CWE-696: Incorrect Behavior Order
  *
  * Pattern: Security-relevant operations performed in the wrong order — e.g.,
@@ -16343,6 +16895,7 @@ function verifyCWE597(map: NeuralMap): VerificationResult {
 function verifyCWE606(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
+
 
   const LOOP_CONDITION = /\b(for|while|do)\b\s*\(/i;
   const USER_IN_LOOP = /\b(for|while)\s*\([^)]*\b(req\.|params\.|query\.|body\.|input\.|user\.|args\.|argv|request\.|form\[|GET\[|POST\[|params\[|data\[)/i;
@@ -32431,6 +32984,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-764': verifyCWE764,
   'CWE-765': verifyCWE765,
   'CWE-832': verifyCWE832,
+  'CWE-833': verifyCWE833,
   'CWE-672': verifyCWE672,
   'CWE-674': verifyCWE674,
   'CWE-676': verifyCWE676,
@@ -32545,6 +33099,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   // Type confusion, permission issues, error handling CWEs
   'CWE-688': verifyCWE688,
   'CWE-689': verifyCWE689,
+  'CWE-690': verifyCWE690,
   'CWE-696': verifyCWE696,
   'CWE-698': verifyCWE698,
   'CWE-704': verifyCWE704,

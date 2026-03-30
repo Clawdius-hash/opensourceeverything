@@ -177,9 +177,9 @@ const HAND_WRITTEN_OVERRIDES: ReadonlySet<string> = new Set([
   'CWE-653', 'CWE-654',
   // --- Resource management ---
   'CWE-662', 'CWE-667', 'CWE-672', 'CWE-674', 'CWE-676', 'CWE-694',
-  'CWE-764', 'CWE-765', 'CWE-832',
+  'CWE-764', 'CWE-765', 'CWE-832', 'CWE-833',
   // --- Type confusion, permission issues, error handling ---
-  'CWE-688', 'CWE-689', 'CWE-696', 'CWE-698', 'CWE-704', 'CWE-706',
+  'CWE-688', 'CWE-689', 'CWE-690', 'CWE-696', 'CWE-698', 'CWE-704', 'CWE-706',
   'CWE-732', 'CWE-749', 'CWE-754', 'CWE-755',
   // --- Logging, crypto padding, trust decisions, infinite loops ---
   'CWE-756', 'CWE-778', 'CWE-779', 'CWE-780', 'CWE-804', 'CWE-806',
