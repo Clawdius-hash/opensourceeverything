@@ -179,15 +179,16 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'writer.println':             { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'writer.print':               { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'writer.write':               { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
-  'PrintWriter.println':        { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
-  'PrintWriter.print':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
-  'PrintWriter.write':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.println':        { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+  'PrintWriter.print':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+  'PrintWriter.write':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
 
   // -- Servlet response --
   'response.getWriter':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.getOutputStream':   { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.sendRedirect':      { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.sendError':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'HttpServletResponse.sendRedirect': { nodeType: 'EGRESS', subtype: 'redirect', tainted: false },
   'response.setHeader':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.addHeader':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'response.addCookie':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -365,6 +366,12 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'RedisTemplate.opsForValue':    { nodeType: 'STORAGE', subtype: 'cache_read', tainted: false },
   'StringRedisTemplate.opsForValue': { nodeType: 'STORAGE', subtype: 'cache_read', tainted: false },
 
+  // -- HTTP Session (CWE-384/501: Session Fixation / Trust Boundary Violation) --
+  'HttpSession.setAttribute':     { nodeType: 'STORAGE', subtype: 'session_write', tainted: false },
+  'HttpSession.getAttribute':     { nodeType: 'STORAGE', subtype: 'session_read',  tainted: false },
+  'session.setAttribute':         { nodeType: 'STORAGE', subtype: 'session_write', tainted: false },
+  'session.getAttribute':         { nodeType: 'STORAGE', subtype: 'session_read',  tainted: false },
+
   // -- LDAP (CWE-90: LDAP Injection) --
   // Juliet CWE-90 uses DirContext.search(name, filter, controls) where filter is user-controlled.
   'DirContext.search':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
@@ -384,9 +391,18 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'XPathExpression.evaluate':     { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
   'xpathExpression.evaluate':     { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
 
+  // -- File access (CWE-22 path traversal sinks) --
+  'File.new':                     { nodeType: 'STORAGE', subtype: 'file_access', tainted: false },
+  'FileInputStream.new':          { nodeType: 'STORAGE', subtype: 'file_read',   tainted: false },
+  'FileOutputStream.new':         { nodeType: 'STORAGE', subtype: 'file_write',  tainted: false },
+  'FileReader.new':               { nodeType: 'STORAGE', subtype: 'file_read',   tainted: false },
+
   // =========================================================================
   // TRANSFORM
   // =========================================================================
+
+  // -- Path resolution --
+  'Paths.get':                    { nodeType: 'TRANSFORM', subtype: 'path_resolve', tainted: false },
 
   // -- Crypto --
   'MessageDigest.getInstance':    { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
@@ -397,6 +413,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'KeyGenerator.getInstance':     { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
   'KeyPairGenerator.getInstance': { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
   'Signature.getInstance':        { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
+  'SecretKeySpec.new':            { nodeType: 'TRANSFORM', subtype: 'encrypt',  tainted: false },
 
   // -- Weak PRNG (CWE-338) — Math.random and java.util.Random are cryptographically weak --
   'Math.random':                  { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },

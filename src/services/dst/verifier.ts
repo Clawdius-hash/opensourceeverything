@@ -504,10 +504,13 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   const fileOps = map.nodes.filter(n =>
     (n.node_type === 'STORAGE' &&
      (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
+      n.node_subtype === 'file_access' || n.node_subtype === 'file_read' || n.node_subtype === 'file_write' ||
       n.attack_surface.includes('file_access') ||
       (n.analysis_snapshot || n.code_snapshot).match(/\b(readFile|writeFile|createReadStream|open|unlink|readdir)\b/i) !== null)) ||
     // Python: open(filename) is classified as INGRESS/file_read, not STORAGE/file
     (n.node_type === 'INGRESS' && n.node_subtype === 'file_read') ||
+    // Java: EGRESS/file_write (e.g. FileOutputStream, Files.write) with user-controlled path
+    (n.node_type === 'EGRESS' && n.node_subtype === 'file_write') ||
     // Go: http.ServeFile serves file content from a user-controlled path
     (n.node_type === 'EGRESS' && n.node_subtype === 'file_serve')
   );

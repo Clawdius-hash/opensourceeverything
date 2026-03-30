@@ -99,6 +99,7 @@ describe('CWE-89: SQL Injection', () => {
           label: 'validate()',
           node_subtype: 'validation',
           code_snapshot: 'const id = validate(req.params.id)',
+          data_in: [{ name: 'id', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
           edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
         },
         {

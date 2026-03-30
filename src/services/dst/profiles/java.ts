@@ -858,9 +858,32 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
         if (existing) {
           return [{ nodeId: existing.id, name: existing.label }];
         }
-        // Node not yet created (called before classifyNode runs) — return synthetic taint
-        // so that the parent processVariableDeclaration marks the variable tainted.
-        return [{ nodeId: `synthetic:${expr.text.slice(0, 30)}`, name: expr.text.slice(0, 30) }];
+        // Node not yet created — create a new INGRESS node so that taint paths
+        // are established even when classifyNode hasn't run yet for this expression.
+        const label = expr.text.length > 100 ? expr.text.slice(0, 97) + '...' : expr.text;
+        const newIngressNode = createNode({
+          label,
+          node_type: callResolution.nodeType,
+          node_subtype: callResolution.subtype,
+          language: 'java',
+          file: ctx.neuralMap.source_file,
+          line_start: callLine,
+          line_end: expr.endPosition.row + 1,
+          code_snapshot: expr.text.slice(0, 200),
+          analysis_snapshot: expr.text.slice(0, 2000),
+          data_out: [{
+            name: 'result',
+            source: 'SELF',
+            data_type: 'unknown',
+            tainted: true,
+            sensitivity: 'NONE',
+          }],
+          attack_surface: ['user_input'],
+        });
+        newIngressNode.data_out[0].source = newIngressNode.id;
+        ctx.neuralMap.nodes.push(newIngressNode);
+        ctx.emitContainsIfNeeded(newIngressNode.id);
+        return [{ nodeId: newIngressNode.id, name: newIngressNode.label }];
       }
       // For any other call, check arguments AND receiver for taint
       const sources: TaintSourceResult[] = [];
