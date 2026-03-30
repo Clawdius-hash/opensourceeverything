@@ -60,6 +60,35 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'request.getPart':            { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'request.getParts':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
 
+  // -- Alias: req.* (Juliet Servlet pattern) --
+  'req.getParameter':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getParameterMap':        { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getParameterValues':     { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getHeader':              { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getHeaders':             { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getCookies':             { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getInputStream':         { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getReader':              { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getRequestURI':          { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getRequestURL':          { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getQueryString':         { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getPathInfo':            { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getRemoteAddr':          { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getAttribute':           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'req.getPart':                { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- Alias: httpRequest.* --
+  'httpRequest.getParameter':   { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'httpRequest.getHeader':      { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'httpRequest.getCookies':     { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'httpRequest.getQueryString': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'httpRequest.getInputStream': { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
+  // -- Alias: servletRequest.* --
+  'servletRequest.getParameter':    { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'servletRequest.getHeader':       { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  'servletRequest.getQueryString':  { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
   // -- Spring MVC request binding is annotation-driven but also: --
   'RequestBody':                { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
   'RequestParam':               { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
@@ -90,8 +119,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'FileInputStream':            { nodeType: 'INGRESS', subtype: 'file_read',    tainted: false },
 
   // -- Environment --
-  'System.getenv':              { nodeType: 'INGRESS', subtype: 'env_read',     tainted: false },
-  'System.getProperty':         { nodeType: 'INGRESS', subtype: 'env_read',     tainted: false },
+  // STEP 3: Mark env vars as tainted — attacker-controlled in containerised deployments
+  // and in Juliet CWE-78 patterns where env vars feed directly into Runtime.exec().
+  'System.getenv':              { nodeType: 'INGRESS', subtype: 'env_read',     tainted: true },
+  'System.getProperty':         { nodeType: 'INGRESS', subtype: 'env_read',     tainted: true },
 
   // -- Properties --
   'Properties.getProperty':     { nodeType: 'INGRESS', subtype: 'env_read',     tainted: false },
@@ -123,6 +154,20 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'System.out.printf':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
   'System.err.println':         { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
   'System.err.print':           { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+
+  // -- PrintWriter (servlet response writer alias) --
+  // When `out = response.getWriter()`, calls on `out` must also be classified.
+  'out.println':                { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'out.print':                  { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'out.write':                  { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'out.printf':                 { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'out.flush':                  { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'writer.println':             { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'writer.print':               { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'writer.write':               { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.println':        { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.print':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.write':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
 
   // -- Servlet response --
   'response.getWriter':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -223,6 +268,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- Process --
   'Runtime.exec':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'Runtime.getRuntime.exec':    { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'runtime.exec':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'ProcessBuilder.start':       { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
 
   // -- EJB / JNDI (Jakarta EE) --
@@ -298,6 +345,25 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- Redis (Spring) --
   'RedisTemplate.opsForValue':    { nodeType: 'STORAGE', subtype: 'cache_read', tainted: false },
   'StringRedisTemplate.opsForValue': { nodeType: 'STORAGE', subtype: 'cache_read', tainted: false },
+
+  // -- LDAP (CWE-90: LDAP Injection) --
+  // Juliet CWE-90 uses DirContext.search(name, filter, controls) where filter is user-controlled.
+  'DirContext.search':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'InitialDirContext.search':     { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'LdapContext.search':           { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'InitialLdapContext.search':    { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'dirContext.search':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'ldapContext.search':           { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'DirContext.bind':              { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'InitialDirContext.bind':       { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'DirContext.lookup':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+
+  // -- XPath (CWE-643: XPath Injection) --
+  // Juliet CWE-643 uses XPath.evaluate(expression, context) where expression is user-controlled.
+  'XPath.evaluate':               { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
+  'xpath.evaluate':               { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
+  'XPathExpression.evaluate':     { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
+  'xpathExpression.evaluate':     { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
 
   // =========================================================================
   // TRANSFORM

@@ -467,7 +467,7 @@ export const verifyCWE619 = createTransformStorageVerifier(
   (map) => map.nodes.filter(n =>
     n.node_type === 'STORAGE' &&
     (n.node_subtype.includes('cursor') || n.node_subtype.includes('database') ||
-     n.code_snapshot.match(/\b(cursor|Cursor|createCursor|prepare|Statement)\b/i) !== null)
+     n.code_snapshot.match(/\b(cursor|Cursor|createCursor|ResultSet)\b/i) !== null)
   ),
   RESOURCE_RELEASE_SAFE,
   'CONTROL (cursor cleanup — close in finally/using block)',

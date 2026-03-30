@@ -330,9 +330,18 @@ const TAINTED_PATHS: ReadonlySet<string> = new Set([
   // Short aliases (req, httpRequest)
   'req.getParameter', 'req.getHeader', 'req.getCookies',
   'req.getInputStream', 'req.getReader', 'req.getQueryString',
+  'req.getRequestURI', 'req.getRequestURL', 'req.getPathInfo',
+  'req.getRemoteAddr', 'req.getAttribute', 'req.getPart',
+  'req.getParameterMap', 'req.getParameterValues', 'req.getHeaders',
   'httpRequest.getParameter', 'httpRequest.getHeader',
+  'httpRequest.getCookies', 'httpRequest.getQueryString',
+  'httpRequest.getInputStream', 'httpRequest.getRequestURI',
+  'servletRequest.getParameter', 'servletRequest.getHeader',
+  'servletRequest.getQueryString',
   // Scanner
   'scanner.nextLine', 'scanner.next', 'scanner.nextInt',
+  // STEP 3: Environment variables treated as tainted (attacker-controlled in containers)
+  'System.getenv', 'System.getProperty',
 ]);
 
 // Spring annotation names that mark parameters as tainted INGRESS sources
@@ -439,6 +448,20 @@ function extractCalleeChain(node: SyntaxNode): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// STEP 1: Servlet taint method names — recognised regardless of receiver variable name.
+// These are unmistakably HttpServletRequest API methods. If lookup by full chain
+// fails AND the method name is in this set, we classify as INGRESS/http_request
+// with tainted=true. This handles any alias: req, request, httpReq, etc.
+// ---------------------------------------------------------------------------
+const SERVLET_TAINT_METHODS: ReadonlySet<string> = new Set([
+  'getParameter', 'getParameterMap', 'getParameterValues',
+  'getHeader', 'getHeaders', 'getCookies',
+  'getInputStream', 'getReader', 'getRequestURI',
+  'getRequestURL', 'getQueryString', 'getPathInfo',
+  'getRemoteAddr', 'getAttribute', 'getPart', 'getParts',
+]);
+
+// ---------------------------------------------------------------------------
 // Helper: resolve callee from a method_invocation or object_creation_expression
 // ---------------------------------------------------------------------------
 
@@ -457,6 +480,16 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
           nodeType: pattern.nodeType,
           subtype: pattern.subtype,
           tainted: pattern.tainted,
+          chain,
+        };
+      }
+      // STEP 1 fallback: if method name alone is a known servlet taint method,
+      // treat as INGRESS/http_request regardless of receiver variable name.
+      if (chain.length === 2 && SERVLET_TAINT_METHODS.has(chain[1])) {
+        return {
+          nodeType: 'INGRESS',
+          subtype: 'http_request',
+          tainted: true,
           chain,
         };
       }
@@ -1089,7 +1122,9 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         file: ctx.neuralMap.source_file,
         line_start: node.startPosition.row + 1,
         line_end: node.endPosition.row + 1,
-        code_snapshot: node.text.slice(0, 200),
+        // STEP 4: Use 500 chars so the parameter list is never truncated for
+        // inter-procedural taint propagation via functionParamPattern.
+        code_snapshot: node.text.slice(0, 500),
       });
 
       if (routeAnnotation) {

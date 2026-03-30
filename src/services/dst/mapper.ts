@@ -486,7 +486,22 @@ export class MapperContext {
       let paramNames: string[] = [];
       if (paramMatch) {
         const paramStr = paramMatch[1] || paramMatch[2] || paramMatch[3] || '';
-        paramNames = paramStr.split(',').map(p => p.trim().replace(/\s*=.*$/, '').replace(/\s*:.*$/, '').replace(/\.{3}/, '').replace(/^\*{1,2}/, '')).filter(Boolean);
+        paramNames = paramStr.split(',').map(p => {
+          // Strip default values, TypeScript/Go-style type annotations, spread operators
+          let token = p.trim()
+            .replace(/\s*=.*$/, '')
+            .replace(/\s*:.*$/, '')
+            .replace(/\.{3}/, '')
+            .replace(/^\*{1,2}/, '');
+          // STEP 4 (Java): handle `TypeName varName` and `final TypeName varName` pairs —
+          // take only the last whitespace-delimited word as the parameter name.
+          // This is gated on whether the profile is Java (detected by language id).
+          if (this.profile.id === 'java' && /\s/.test(token)) {
+            const parts = token.trim().split(/\s+/);
+            token = parts[parts.length - 1];
+          }
+          return token;
+        }).filter(Boolean);
       }
 
       // Check if any sink's code_snapshot references a parameter

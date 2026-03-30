@@ -11,7 +11,7 @@
 
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
-  nodeRef, nodesOfType, hasPathWithoutIntermediateType,
+  nodeRef, nodesOfType, hasPathWithoutIntermediateType, getContainingScopeSnapshots,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -45,15 +45,21 @@ function createControlTransformVerifier(
         if (src.id === sink.id) continue;
         if (hasPathWithoutIntermediateType(map, src.id, sink.id, 'CONTROL')) {
           if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
-            findings.push({
-              source: nodeRef(src),
-              sink: nodeRef(sink),
-              missing: missingDesc,
-              severity,
-              description: `Check at ${src.label} feeds operation at ${sink.label} without additional control. ` +
-                `Vulnerable to ${cweName}.`,
-              fix: fixDesc,
-            });
+            // Also check the containing scope snapshots — safe patterns in the same
+            // function/block scope as the sink should suppress the finding.
+            const sinkScopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+            const scopeSafe = sinkScopeSnapshots.some(s => safePattern.test(s));
+            if (!scopeSafe) {
+              findings.push({
+                source: nodeRef(src),
+                sink: nodeRef(sink),
+                missing: missingDesc,
+                severity,
+                description: `Check at ${src.label} feeds operation at ${sink.label} without additional control. ` +
+                  `Vulnerable to ${cweName}.`,
+                fix: fixDesc,
+              });
+            }
           }
         }
       }

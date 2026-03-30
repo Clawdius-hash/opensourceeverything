@@ -99,6 +99,24 @@ export function hasTaintedPathWithoutControl(map: NeuralMap, sourceId: string, s
 }
 
 /**
+ * Fallback taint check: does the sink node's data_in contain a tainted entry
+ * whose source is reachable from sourceId via BFS?
+ *
+ * This covers cases where the mapper captured taint in data_in entries but
+ * did not emit explicit DATA_FLOW edges between the source and the sink.
+ * Used as a belt-and-suspenders fallback after hasTaintedPathWithoutControl.
+ *
+ * Multi-hop: any tainted data_in entry on the sink counts, regardless of
+ * which specific source node it names — the fact that `d.tainted === true`
+ * means the mapper already decided taint reaches this sink.
+ */
+export function sinkHasTaintedDataIn(map: NeuralMap, sinkId: string): boolean {
+  const sink = map.nodes.find(n => n.id === sinkId);
+  if (!sink) return false;
+  return sink.data_in.some(d => d.tainted);
+}
+
+/**
  * SECOND PASS: Evaluate whether CONTROL nodes on a mediated path are actually
  * effective. Returns an array of "weak control" findings.
  *

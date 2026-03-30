@@ -9,7 +9,7 @@
 import type { NeuralMap, NeuralMapNode, NodeType } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, hasPathWithoutTransform,
-  hasPathWithoutIntermediateType,
+  hasPathWithoutIntermediateType, getContainingScopeSnapshots,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -297,18 +297,60 @@ export const verifyCWE698 = v('CWE-698', 'Execution After Redirect', 'medium', '
 // are enforced. Dynamic languages (JS, Python, Ruby, PHP) have no compile-time argument
 // checking, so STRUCTURAL→STRUCTURAL paths are normal, not a vulnerability.
 export const verifyCWE628 = (map: NeuralMap): VerificationResult => {
+  // Dynamic languages have no compile-time argument checking — STRUCTURAL→STRUCTURAL is normal.
   const DYNAMIC_LANGS = new Set(['javascript', 'typescript', 'python', 'ruby', 'php']);
+  // Typed languages enforce arity at compile time, but DST lacks full type resolution
+  // to detect actual mismatches at the graph topology level. The STRUCTURAL→STRUCTURAL
+  // without CONTROL path fires on essentially all Java/Go/Kotlin/etc. code, producing
+  // 90% false positive rates on Juliet benchmarks. Suppress for all typed languages.
+  const TYPED_NO_RESOLUTION_LANGS = new Set(['java', 'kotlin', 'go', 'rust', 'csharp', 'c', 'cpp', 'swift', 'scala']);
   // Infer language from nodes or source file extension
   const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
   const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
-  const extLang: Record<string, string> = { js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php' };
+  const extLang: Record<string, string> = {
+    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php',
+    java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', cs: 'csharp',
+    c: 'c', cpp: 'cpp', cc: 'cpp', swift: 'swift', scala: 'scala',
+  };
   const effectiveLang = lang || extLang[ext] || '';
-  if (DYNAMIC_LANGS.has(effectiveLang)) {
+  if (DYNAMIC_LANGS.has(effectiveLang) || TYPED_NO_RESOLUTION_LANGS.has(effectiveLang)) {
     return { cwe: 'CWE-628', name: 'Function Call with Incorrectly Specified Arguments', holds: true, findings: [] };
   }
   return v('CWE-628', 'Function Call with Incorrectly Specified Arguments', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\btypescript\b|\btype.*check\b|\blint\b/i, 'CONTROL (type-safe function calls)', 'Use TypeScript or linting to catch incorrect arguments at compile time.')(map);
 };
-export const verifyCWE653 = v('CWE-653', 'Improper Isolation or Compartmentalization', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\bisolat\b|\bsandbox\b|\bcompartment\b|\bmodule\b/i, 'CONTROL (proper isolation between components)', 'Isolate security domains. Use separate processes or sandboxes for untrusted code.');
+export function verifyCWE653(map: NeuralMap): VerificationResult {
+  // CWE-653 (Improper Isolation or Compartmentalization) is only meaningful for
+  // systems that can actually create privilege/process boundaries. For managed
+  // single-process languages (Java, Python, Ruby, etc.) without explicit
+  // inter-process or container isolation APIs, the STRUCTURAL→STRUCTURAL topology
+  // check fires as a structural truism rather than a real isolation failure.
+  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
+  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
+  const extLang653: Record<string, string> = {
+    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php',
+  };
+  const effectiveLang653 = lang || extLang653[ext] || '';
+
+  // For Java: only fire if the map contains explicit process-isolation or container APIs.
+  if (effectiveLang653 === 'java' || ext === 'java') {
+    const ISOLATION_APIS = /\b(SecurityManager|ProcessBuilder|Runtime\.exec|DockerClient|ContainerRuntime|Namespace|setSecurityManager)\b/;
+    const hasIsolationApi = map.nodes.some(n => ISOLATION_APIS.test(n.code_snapshot));
+    if (!hasIsolationApi) {
+      return { cwe: 'CWE-653', name: 'Improper Isolation or Compartmentalization', holds: true, findings: [] };
+    }
+  }
+
+  // For other managed/single-process languages without compartmentalization semantics:
+  const SINGLE_PROCESS_LANGS = new Set(['python', 'ruby', 'php']);
+  if (SINGLE_PROCESS_LANGS.has(effectiveLang653)) {
+    return { cwe: 'CWE-653', name: 'Improper Isolation or Compartmentalization', holds: true, findings: [] };
+  }
+
+  // For all other languages: use the generic topology check.
+  return v('CWE-653', 'Improper Isolation or Compartmentalization', 'medium', 'STRUCTURAL', 'STRUCTURAL', nCi, /\bisolat\b|\bsandbox\b|\bcompartment\b|\bmodule\b/i, 'CONTROL (proper isolation between components)', 'Isolate security domains. Use separate processes or sandboxes for untrusted code.')(map);
+}
 
 // TRANSFORM→TRANSFORM without TRANSFORM (2)
 export const verifyCWE666 = v('CWE-666', 'Operation on Resource in Wrong Phase of Lifetime', 'medium', 'TRANSFORM', 'TRANSFORM', nTi, /\bstate.*check\b|\bphase\b|\blifecycle\b|\binit.*before.*use\b/i, 'TRANSFORM (lifecycle phase validation)', 'Verify resource is in correct lifecycle phase before operations. Init before use, release after.');
@@ -341,7 +383,39 @@ export const verifyCWE348 = v('CWE-348', 'Use of Less Trusted Source', 'medium',
 export const verifyCWE356 = v('CWE-356', 'Product UI does not Warn User of Unsafe Actions', 'medium', 'INGRESS', 'CONTROL', nM, /\bwarn\b|\bconfirm\b|\bdialog\b|\bprompt\b/i, 'META (user warning for unsafe actions)', 'Warn users before destructive or irreversible actions. Require confirmation.');
 export const verifyCWE357 = v('CWE-357', 'Insufficient UI Warning of Dangerous Operations', 'medium', 'META', 'CONTROL', nM, /\bwarn\b|\bconfirm\b|\bhighlight\b/i, 'META (clear danger warnings in UI)', 'Clearly indicate dangerous operations in the UI. Use confirmation dialogs.');
 export const verifyCWE370 = v('CWE-370', 'Missing Check for Certificate Revocation after Initial Check', 'high', 'AUTH', 'CONTROL', nA, /\bOCSP\b|\bCRL\b|\bperiodic.*check\b|\bstapl\b/i, 'AUTH (periodic certificate revocation checking)', 'Re-check certificate revocation periodically, not just at initial connection.');
-export const verifyCWE397 = v('CWE-397', 'Declaration of Throws for Generic Exception', 'low', 'TRANSFORM', 'EGRESS', nEg, /\bspecific.*exception\b|\btyped.*error\b/i, 'EGRESS (specific exception types in throws declarations)', 'Declare specific exception types. Generic throws hides failure modes.');
+// CWE-397: Java-specific check — only fire on actual `throws Exception/Throwable/RuntimeException`
+// declarations in method signatures. The generic TRANSFORM→EGRESS topology fired on every Java file
+// because exception declarations parse as TRANSFORM and output nodes parse as EGRESS.
+export const verifyCWE397 = (map: NeuralMap): VerificationResult => {
+  const JAVA_GENERIC_THROWS = /\bthrows\s+(Exception|Throwable|RuntimeException|Error)\b/;
+  const JAVA_SPECIFIC_SAFE = /\bthrows\s+(?!Exception\b|Throwable\b|RuntimeException\b|Error\b)\w+Exception\b/;
+  const lang = (map.nodes.find(n => n.language)?.language ?? '').toLowerCase();
+  const ext = map.source_file?.split('.').pop()?.toLowerCase() ?? '';
+  const extLang: Record<string, string> = { js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', php: 'php', java: 'java', kt: 'kotlin', cs: 'csharp' };
+  const effectiveLang = lang || extLang[ext] || '';
+
+  if (effectiveLang === 'java' || effectiveLang === 'kotlin') {
+    // Java/Kotlin: check TRANSFORM nodes for generic throws declarations
+    const findings: Finding[] = [];
+    const transforms = nodesOfType(map, 'TRANSFORM');
+    for (const node of transforms) {
+      const snap = node.code_snapshot;
+      if (JAVA_GENERIC_THROWS.test(snap) && !JAVA_SPECIFIC_SAFE.test(snap)) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'EGRESS (specific exception types in throws declarations)',
+          severity: 'low',
+          description: `Method at ${node.label} declares generic throws (Exception/Throwable/RuntimeException). Vulnerable to CWE-397.`,
+          fix: 'Declare specific exception types. Generic throws hides failure modes.',
+        });
+      }
+    }
+    return { cwe: 'CWE-397', name: 'Declaration of Throws for Generic Exception', holds: findings.length === 0, findings };
+  }
+
+  // For all other languages: use the generic topology check.
+  return v('CWE-397', 'Declaration of Throws for Generic Exception', 'low', 'TRANSFORM', 'EGRESS', nEg, /\bspecific.*exception\b|\btyped.*error\b/i, 'EGRESS (specific exception types in throws declarations)', 'Declare specific exception types. Generic throws hides failure modes.')(map);
+};
 export const verifyCWE403 = v('CWE-403', 'Exposure of File Descriptor to Unintended Control Sphere (Descriptor Leak)', 'medium', 'STORAGE', 'EXTERNAL', nC, /\bclose.*exec\b|\bFD_CLOEXEC\b|\bO_CLOEXEC\b/i, 'CONTROL (close-on-exec flag for file descriptors)', 'Set FD_CLOEXEC/O_CLOEXEC on file descriptors. Prevents leaking to child processes.');
 export const verifyCWE414 = v('CWE-414', 'Missing Lock Check', 'medium', 'STRUCTURAL', 'TRANSFORM', nC, L, 'CONTROL (lock status check before critical operations)', 'Check lock status before critical operations.');
 export const verifyCWE419 = v('CWE-419', 'Unprotected Primary Channel', 'high', 'INGRESS', 'AUTH', nS, /\bTLS\b|\bhttps\b|\bencrypt\b/i, 'STRUCTURAL (encrypted primary channel)', 'Protect primary communication channels with TLS/HTTPS.');
@@ -359,7 +433,35 @@ export const verifyCWE5 = v('CWE-5', 'J2EE Misconfiguration: Data Transmission W
 export const verifyCWE511 = v('CWE-511', 'Logic/Time Bomb', 'critical', 'CONTROL', 'TRANSFORM', nM, /\baudit\b|\breview\b|\bno.*time.*bomb\b/i, 'META (code audit for logic/time bombs)', 'Audit for time-triggered or condition-triggered malicious code.');
 export const verifyCWE531 = v('CWE-531', 'Inclusion of Sensitive Information in Test Code', 'medium', 'STRUCTURAL', 'EGRESS', nM, /\bno.*secret.*test\b|\bmock\b|\benv\b/i, 'META (no real credentials in test code)', 'Use mock credentials in tests. Never commit real secrets in test files.');
 export const verifyCWE540 = v('CWE-540', 'Inclusion of Sensitive Information in Source Code', 'medium', 'META', 'EGRESS', nA, /\benv\b|\bvault\b|\bno.*hardcode\b/i, 'AUTH (no sensitive data in source code)', 'Move sensitive data to environment variables or secret managers.');
-export const verifyCWE544 = v('CWE-544', 'Missing Standardized Error Handling Mechanism', 'medium', 'CONTROL', 'EGRESS', nS, /\btry\b|\bcatch\b|\berror.*handler\b|\bmiddleware\b/i, 'STRUCTURAL (standardized error handling mechanism)', 'Implement a centralized error handling mechanism. Use error middleware.');
+// CWE-544: scope-aware — check containing scope for error handling patterns before firing
+export const verifyCWE544 = (map: NeuralMap): VerificationResult => {
+  const safePattern = /\btry\b|\bcatch\b|\berror.*handler\b|\bmiddleware\b/i;
+  const findings: Finding[] = [];
+  const controls = nodesOfType(map, 'CONTROL');
+  const egresses = nodesOfType(map, 'EGRESS');
+  for (const src of controls) {
+    for (const sink of egresses) {
+      if (src.id === sink.id) continue;
+      if (nS(map, src.id, sink.id)) {
+        if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
+          // Check scope snapshots before firing
+          const sinkScopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+          const scopeSafe = sinkScopeSnapshots.some(s => safePattern.test(s));
+          if (!scopeSafe) {
+            findings.push({
+              source: nodeRef(src), sink: nodeRef(sink),
+              missing: 'STRUCTURAL (standardized error handling mechanism)',
+              severity: 'medium',
+              description: `CONTROL at ${src.label} → EGRESS at ${sink.label} without error handling. Vulnerable to CWE-544.`,
+              fix: 'Implement a centralized error handling mechanism. Use error middleware.',
+            });
+          }
+        }
+      }
+    }
+  }
+  return { cwe: 'CWE-544', name: 'Missing Standardized Error Handling Mechanism', holds: findings.length === 0, findings };
+};
 export const verifyCWE546 = v('CWE-546', 'Suspicious Comment', 'low', 'META', 'STRUCTURAL', nC, /\bno.*todo.*security\b|\breview\b|\baudit\b/i, 'CONTROL (review suspicious TODO/FIXME/HACK comments)', 'Review and resolve security-related TODO/FIXME/HACK comments before release.');
 export const verifyCWE547 = v('CWE-547', 'Use of Hard-coded, Security-relevant Constants', 'medium', 'META', 'AUTH', nSt, /\bconfig\b|\benv\b|\bconfigurable\b/i, 'STORAGE (configurable security constants — not hard-coded)', 'Make security constants configurable. Hard-coded values cannot be updated without redeployment.');
 export const verifyCWE563 = v('CWE-563', 'Assignment to Variable without Use', 'low', 'TRANSFORM', 'STORAGE', nEg, /\bused\b|\blint\b|\bno-unused\b/i, 'EGRESS (remove unused variable assignments)', 'Remove unused assignments. They may indicate logic errors or incomplete implementation.');

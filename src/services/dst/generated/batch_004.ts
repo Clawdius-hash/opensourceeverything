@@ -589,13 +589,24 @@ export const verifyCWE454 = createNoTransformVerifier(
 /** CWE-464: Addition of Data Structure Sentinel */
 export const verifyCWE464 = createNoTransformVerifier(
   'CWE-464', 'Addition of Data Structure Sentinel', 'high',
-  (map) => map.nodes.filter(n =>
-    n.node_type === 'STORAGE' &&
-    (n.node_subtype.includes('list') || n.node_subtype.includes('array') ||
-     n.node_subtype.includes('string') || n.node_subtype.includes('buffer') ||
-     n.code_snapshot.match(/\b(push|append|concat|insert|add|write|null.*terminat)\b/i) !== null)
-  ),
-  /\bstrip.*sentinel\b|\bremove.*null\b|\bvalidate.*struct\b|\bcheck.*terminat\b|\bescape\s*\(/i,
+  (map) => {
+    // Only fire if the map has at least one INGRESS node with tainted data —
+    // without any tainted input flowing in, sentinel injection cannot occur.
+    const hasTaintedIngress = map.nodes.some(
+      n => n.node_type === 'INGRESS' && n.data_out.some(d => d.tainted),
+    );
+    if (!hasTaintedIngress) return [];
+
+    return map.nodes.filter(n =>
+      n.node_type === 'STORAGE' &&
+      // Require the storage node itself to receive tainted data OR show direct assignment.
+      (n.data_in.some(d => d.tainted) || n.data_in.some(d => d.source === 'EXTERNAL')) &&
+      (n.node_subtype.includes('list') || n.node_subtype.includes('array') ||
+       n.node_subtype.includes('string') || n.node_subtype.includes('buffer') ||
+       n.code_snapshot.match(/\b(push|append|concat|insert|add|write|null.*terminat)\b/i) !== null)
+    );
+  },
+  /\bstrip.*sentinel\b|\bremove.*null\b|\bvalidate.*struct\b|\bcheck.*terminat\b|\bescape\s*\(|\bvalidate\b|\bsanitize\b|\bstripNull\b|\breplace.*\\x00\b/i,
   'TRANSFORM (sentinel character stripping / neutralization)',
   'Strip or neutralize sentinel characters (null bytes, delimiters) from user input ' +
     'before adding to data structures. Uncontrolled sentinels can corrupt structure boundaries.',
