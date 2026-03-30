@@ -52,7 +52,7 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   mysqli_query:        { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
   mysqli_real_query:   { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
   mysqli_prepare:      { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
-  mysqli_real_escape_string: { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
+  mysqli_real_escape_string: { nodeType: 'CONTROL',   subtype: 'sanitize_sql', tainted: false },
   mysqli_multi_query:  { nodeType: 'STORAGE',   subtype: 'sql_write',    tainted: false },
   mysqli_fetch_assoc:  { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysqli_fetch_array:  { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
@@ -70,7 +70,7 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
 
   // Deprecated mysql_* (still found in legacy code)
   mysql_query:         { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
-  mysql_real_escape_string: { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
+  mysql_real_escape_string: { nodeType: 'CONTROL',   subtype: 'sanitize_sql', tainted: false },
   mysql_fetch_assoc:   { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
   mysql_fetch_array:   { nodeType: 'STORAGE',   subtype: 'db_read',      tainted: false },
 
@@ -143,8 +143,8 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   // Encoding / escaping
   escapeshellarg:    { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
   escapeshellcmd:    { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
-  htmlspecialchars:  { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
-  htmlentities:      { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
+  htmlspecialchars:  { nodeType: 'CONTROL',   subtype: 'sanitize_xss',  tainted: false },
+  htmlentities:      { nodeType: 'CONTROL',   subtype: 'sanitize_xss',  tainted: false },
 
   // WordPress output escaping
   esc_html:          { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
@@ -156,8 +156,8 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   wp_kses:           { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
   htmlspecialchars_decode: { nodeType: 'TRANSFORM', subtype: 'encode',  tainted: false },
   html_entity_decode:{ nodeType: 'TRANSFORM', subtype: 'encode',        tainted: false },
-  strip_tags:        { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
-  addslashes:        { nodeType: 'TRANSFORM', subtype: 'sanitize',      tainted: false },
+  strip_tags:        { nodeType: 'CONTROL',   subtype: 'sanitize_html', tainted: false },
+  addslashes:        { nodeType: 'CONTROL',   subtype: 'sanitize_sql',  tainted: false },
   stripslashes:      { nodeType: 'TRANSFORM', subtype: 'encode',        tainted: false },
   urlencode:         { nodeType: 'TRANSFORM', subtype: 'encode',        tainted: false },
   urldecode:         { nodeType: 'TRANSFORM', subtype: 'encode',        tainted: false },
@@ -201,9 +201,17 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   preg_match_all:    { nodeType: 'TRANSFORM', subtype: 'parse',         tainted: false },
   preg_split:        { nodeType: 'TRANSFORM', subtype: 'parse',         tainted: false },
 
+  // PHP input sanitizers / type coercers (break SQL taint path) (CWE-89 false positive reduction)
+  intval:            { nodeType: 'CONTROL',   subtype: 'sanitize_numeric', tainted: false },
+  floatval:          { nodeType: 'CONTROL',   subtype: 'sanitize_numeric', tainted: false },
+  doubleval:         { nodeType: 'CONTROL',   subtype: 'sanitize_numeric', tainted: false },
+  is_numeric:        { nodeType: 'CONTROL',   subtype: 'validate_numeric', tainted: false },
+  ctype_digit:       { nodeType: 'CONTROL',   subtype: 'validate_numeric', tainted: false },
+  ctype_alpha:       { nodeType: 'CONTROL',   subtype: 'validate_alpha',   tainted: false },
+  filter_var:        { nodeType: 'CONTROL',   subtype: 'sanitize',         tainted: false },
+  pg_escape_string:  { nodeType: 'CONTROL',   subtype: 'sanitize_sql',     tainted: false },
+
   // Type casting
-  intval:            { nodeType: 'TRANSFORM', subtype: 'format',        tainted: false },
-  floatval:          { nodeType: 'TRANSFORM', subtype: 'format',        tainted: false },
   strval:            { nodeType: 'TRANSFORM', subtype: 'format',        tainted: false },
   boolval:           { nodeType: 'TRANSFORM', subtype: 'format',        tainted: false },
   settype:           { nodeType: 'TRANSFORM', subtype: 'format',        tainted: false },

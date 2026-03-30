@@ -140,7 +140,7 @@ export const verifyCWE476 = (map: NeuralMap): VerificationResult => {
     ) !== null
   );
 
-  const safePattern = /\bnull.*check\b|\bif\s*\(\s*\w+\s*[!=]==?\s*null\b|\btypeof\b|\?\.\b|\?\?\b|\bassert\b/i;
+  const safePattern = /\bnull.*check\b|\bif\s*\(\s*\w+\s*[!=]==?\s*null\b|\btypeof\b|\?\.\b|\?\?\b|\bassert\s*\(/i;
 
   for (const src of sources) {
     for (const sink of sinks) {
@@ -186,20 +186,37 @@ export const verifyCWE522 = (map: NeuralMap): VerificationResult => {
     n.node_type === 'STORAGE' || n.node_type === 'EGRESS'
   );
 
-  const safePattern = /\bbcrypt\b|\bargon2\b|\bscrypt\b|\bpbkdf2\b|\bhash\b|\bencrypt\b|\bcipher\b|\btls\b|\bhttps\b|\bAES\b/i;
+  // Password-safe hashing functions only — bcrypt/argon2/scrypt/pbkdf2 variants
+  const PASSWORD_SAFE_HASH_RE = /\b(bcrypt|scrypt|argon2|pbkdf2|Argon2|PBKDF2|bcryptjs|bcryptSync|hashSync|hashpw|checkpw)\b/i;
+  // Insecure fast hashes explicitly used for passwords — must flag even if createHash is present
+  const INSECURE_HASH_FOR_PASSWORDS_RE = /createHash\s*\(\s*['"](?:md5|sha1|sha-1|sha128|md4|md2)['"]/i;
+  // Broader encryption/transport safe patterns (non-password contexts)
+  const ENCRYPT_SAFE_RE = /\bencrypt\s*\(|\bcipher\s*\(|\bcreateCipher\w*\b|\btls\b|\bhttps\b|\bAES\b/i;
 
   for (const src of sources) {
     for (const sink of sinks) {
       if (src.id === sink.id) continue;
       if (hasPathWithoutTransform(map, src.id, sink.id)) {
-        if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
+        const combinedCode = (src.code_snapshot || '') + '\n' + (sink.code_snapshot || '');
+        // If an insecure hash is explicitly used for passwords, always flag
+        const hasInsecureHash = INSECURE_HASH_FOR_PASSWORDS_RE.test(combinedCode);
+        // If a password-safe hash function is present, suppress
+        const hasSafeHash = PASSWORD_SAFE_HASH_RE.test(combinedCode);
+        // If general encryption/transport protection is present (non-password), suppress
+        const hasEncryptSafe = ENCRYPT_SAFE_RE.test(combinedCode);
+
+        if (hasInsecureHash || (!hasSafeHash && !hasEncryptSafe)) {
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
-            missing: 'TRANSFORM (strong hash or encryption — bcrypt, Argon2, AES)',
+            missing: 'TRANSFORM (strong password hash — bcrypt, Argon2, scrypt, PBKDF2)',
             severity: 'high',
-            description: `Credentials from ${src.label} reach ${sink.label} without cryptographic protection. ` +
-              `Plaintext credentials are exposed to interception or retrieval.`,
-            fix: 'Hash passwords with bcrypt/Argon2/scrypt before storage. Encrypt API keys and tokens at rest. ' +
+            description: hasInsecureHash
+              ? `Credentials from ${src.label} reach ${sink.label} hashed with an insecure fast hash (MD5/SHA1). ` +
+                `Fast cryptographic hashes are trivially cracked with GPU rainbow tables and are NOT safe for passwords.`
+              : `Credentials from ${src.label} reach ${sink.label} without cryptographic protection. ` +
+                `Plaintext credentials are exposed to interception or retrieval.`,
+            fix: 'Hash passwords with bcrypt/Argon2/scrypt/PBKDF2 before storage. Never use MD5, SHA1, or other fast ' +
+              'cryptographic hashes for password storage. Encrypt API keys and tokens at rest. ' +
               'Transmit credentials only over TLS. Never store plaintext credentials.',
           });
         }

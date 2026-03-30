@@ -128,12 +128,12 @@ const ABSPATH_SAFE = /\bpath\.isAbsolute\b|\bisAbsolute\b|\breject.*absolute\b|\
 const WINPATH_SAFE = /\bpath\.win32\b|\bdeviceName\b|\bCON\b.*block|\bNUL\b.*block|\b\$DATA\b.*strip|\b\.lnk\b.*check/i;
 const BUFFER_SAFE = /\blength\b.*[<>]=?|\bsizeof\b|\bbounds\b.*check|\bBuffer\.alloc\b(?!Unsafe)|\bMath\.min\b|\bclamp\b|\bvalidate.*index|\bcheck.*range|\bArray\.isArray\b/i;
 const INTEGER_SAFE = /\bNumber\.isSafeInteger\b|\bMAX_SAFE_INTEGER\b|\bBigInt\b|\bNumber\.isFinite\b|\boverflow\b.*check|\brange.*valid|\bclamp\b|\bMath\.trunc\b/i;
-const TRUST_SAFE = /\bObject\.freeze\b|\bObject\.seal\b|\breadonly\b|\bdeepClone\b|\bstructuredClone\b|\bvalidate\b|\bsanitize\b|\bEXTR_SKIP\b/i;
+const TRUST_SAFE = /\bObject\.freeze\b|\bObject\.seal\b|\breadonly\b|\bdeepClone\b|\bstructuredClone\b|\bvalidate\s*\(|\bsanitize\s*\(|\bEXTR_SKIP\b/i;
 const XPATH_SAFE = /\bescapeXPath\b|\bxpath.*param|\bxpath.*compile|\bsanitize.*xpath|\bprepare.*xpath/i;
-const AUTH_SAFE = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\brole\s*[=!]==?\b|\bpolicy\b|\bRBAC\b|\bABAC\b|\bisAuthorized\b/i;
+const AUTH_SAFE = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\s*[=!]==?\b|\bpolicy\b|\bRBAC\b|\bABAC\b|\bisAuthorized\b/i;
 const LOCK_SAFE = /\bmutex\b|\block\b.*acquire|\bsynchronized\b|\bsemaphore\b|\batomic\b|\bcriticalSection\b|\bflock\b/i;
 const RESOURCE_LIMIT_SAFE = /\blimit\b|\bthrottle\b|\bmax\b.*\b(fd|file|descriptor|connection|handle)\b|\bpool\b|\bulimit\b/i;
-const LOG_SAFE = /\blog.*level|\bfilter\b|\bredact\b|\btruncate\b|\bmax.*log|\blog.*limit|\bsanitize.*log/i;
+const LOG_SAFE = /\blog.*level|\b\.filter\s*\(|\bredact\s*\(|\btruncate\s*\(|\bmax.*log|\blog.*limit|\bsanitize\s*\(.*log/i;
 
 // ---------------------------------------------------------------------------
 // Factory: Path Traversal (source=INGRESS, sink=STORAGE[file], gap=no CONTROL)
@@ -410,7 +410,7 @@ export const verifyCWE473 = createGenericVerifier(
     (n.node_subtype.includes('global') || n.node_subtype.includes('extract') ||
      n.code_snapshot.match(/\b(extract|register_globals|\$GLOBALS|\$_SESSION|\$_SERVER)\b/i) !== null)
   ),
-  /\bEXTR_SKIP\b|\bregister_globals.*off\b|\bvalidate\b|\ballowlist\b|\bwhitelist\b/i,
+  /\bEXTR_SKIP\b|\bregister_globals.*off\b|\bvalidate\s*\(|\ballowlist\b|\bwhitelist\b/i,
   'CONTROL (variable extraction restriction)',
   'Never use extract() on user input. Use EXTR_SKIP or EXTR_PREFIX if unavoidable. ' +
     'Explicitly initialize all variables.',

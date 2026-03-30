@@ -27,10 +27,10 @@ function egressNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe patterns
 // ---------------------------------------------------------------------------
 
-const FILTER_COMPLETE_SAFE = /\breplaceAll\b|\bglobal\b.*\breplace\b|\b\/g\b|\bsanitize\b|\bescape\b|\bDOMPurify\b|\bencode\b|\bfilterAll\b/i;
+const FILTER_COMPLETE_SAFE = /\breplaceAll\b|\bglobal\b.*\breplace\b|\b\/g\b|\bsanitize\s*\(|\bescape\s*\(|\bDOMPurify\b|\bencode\s*\(|\bfilterAll\b/i;
 const CRYPTO_STRENGTH_SAFE = /\bAES-256\b|\bRSA-2048\b|\bRSA-4096\b|\bcurve25519\b|\bP-256\b|\bstrong\b.*\bcipher\b|\bTLS\s*1\.[23]\b/i;
 const SESSION_SAFE = /\bsession\b.*\bisolat\b|\buser\b.*\bcontext\b|\bscoped\b|\brbac\b|\bcheck.*session\b/i;
-const TRANSPORT_SAFE = /\bhttps\b|\bTLS\b|\bSSL\b|\bSecure\b|\bencrypt\b|\bHSTS\b/i;
+const TRANSPORT_SAFE = /\bhttps\b|\bTLS\b|\bSSL\b|\bSecure\b|\bencrypt\s*\(|\bHSTS\b/i;
 const METHOD_SAFE = /\bPOST\b|\bmethod\s*:\s*['"]POST['"]|\bmethod.*enforce\b|\bredirect.*POST\b/i;
 
 // ---------------------------------------------------------------------------

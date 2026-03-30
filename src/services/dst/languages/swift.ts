@@ -79,7 +79,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'FileManager.fileExists':       { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
   'FileManager.attributesOfItem': { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
   'Data.init':                    { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
+  'Data.init(contentsOf':         { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
   'String.init':                  { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
+  'String.init(contentsOfFile':   { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
+  'String.init(contentsOf':       { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
+  'NSString.init(contentsOfFile': { nodeType: 'INGRESS', subtype: 'file_read', tainted: false },
 
   // -- UserDefaults read --
   'UserDefaults.standard.string':   { nodeType: 'INGRESS', subtype: 'env_read', tainted: false },
@@ -166,8 +170,8 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // EXTERNAL
   // =========================================================================
 
-  // -- URLSession (as external API call) --
-  'URLSession.shared.dataTask':   { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
+  // -- URLSession (SSRF sink when URL is user-controlled) --
+  'URLSession.shared.dataTask':   { nodeType: 'EXTERNAL', subtype: 'ssrf', tainted: false },
   'URLRequest.init':              { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
   'URL.init':                     { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
 
@@ -187,6 +191,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Process.executableURL':        { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'Process.launch':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'Process.run':                  { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'Process.init':                 { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'Process.arguments':            { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'Process.launchPath':           { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'process.arguments':            { nodeType: 'INGRESS',  subtype: 'env_read',    tainted: true  },
+  'Process.terminationStatus':    { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
 
   // -- Alamofire --
   'AF.request':                   { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },

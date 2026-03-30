@@ -53,9 +53,9 @@ function xqueryExternalNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe patterns
 // ---------------------------------------------------------------------------
 
-const CMD_NEUTRALIZE_SAFE = /\bexecFile\b|\bspawn\b.*\[|\bshellEscape\b|\bescapeShell\b|\bparameteriz\b|\bsanitize\b/i;
+const CMD_NEUTRALIZE_SAFE = /\bexecFile\b|\bspawn\b.*\[|\bshellEscape\b|\bescapeShell\b|\bparameteriz\b|\bsanitize\s*\(/i;
 const LDAP_NEUTRALIZE_SAFE = /\bescapeLdap\b|\bldap.*escape\b|\bldap.*sanitize\b|\bparameteriz\b|\bfilter.*encode\b/i;
-const GENERAL_NEUTRALIZE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bneutralize\b|\bparameteriz\b|\bstrip\b|\bfilter\b/i;
+const GENERAL_NEUTRALIZE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bneutralize\s*\(|\bparameteriz\b|\bstrip\s*\(|\b\.filter\s*\(/i;
 const ENCODING_SAFE = /\bencodeURI\b|\bpercentEncode\b|\bUTF-8\b|\bnormalize.*encoding\b|\bcharset.*valid\b|\biconv\b/i;
 
 // ---------------------------------------------------------------------------

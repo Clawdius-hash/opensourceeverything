@@ -99,8 +99,8 @@ const TEMP_FILE_SAFE = /\bmkstemp\b|\btmpfile\b|\bO_EXCL\b|\bo_excl\b|\b0[67]00\
 const PERMISSION_SAFE = /\bchmod\b|\bchown\b|\bumask\b|\b0[67]00\b|\b0o[67]00\b|\bpermission.*preserv\b|\bcopyPermission\b|\bstat\b.*\bmode\b/i;
 const SEARCH_PATH_SAFE = /\babsolute.*path\b|\bfull.*path\b|\bpath\.resolve\b|\bverify.*integrity\b|\bhash.*check\b|\bsignature.*verify\b/i;
 const SYNC_SAFE = /\bmutex\b|\block\b|\bsynchronized\b|\bsemaphore\b|\batomic\b|\bcriticalSection\b|\bflock\b|\bReentrantLock\b|\bMonitor\b/i;
-const CACHE_SAFE = /\bno-?cache\b|\bno-?store\b|\bprivate\b|\bCache-Control\b|\bencrypt\b|\bredact\b|\bclear.*cache\b/i;
-const ENV_SECRET_SAFE = /\bencrypt\b|\bvault\b|\bsecretManager\b|\bKMS\b|\bssm\b|\bsecure.*store\b|\bhash\b/i;
+const CACHE_SAFE = /\bno-?cache\b|\bno-?store\b|\bprivate\b|\bCache-Control\b|\bencrypt\s*\(|\bredact\s*\(|\bclear.*cache\b/i;
+const ENV_SECRET_SAFE = /\bencrypt\s*\(|\bvault\b|\bsecretManager\b|\bKMS\b|\bssm\b|\bsecure.*store\b|\bhash\s*\(|\bcreateHash\b/i;
 const RESOURCE_RELEASE_SAFE = /\bclose\b|\brelease\b|\bdispose\b|\bfinally\b|\busing\b|\bwith\b|\bautoClose\b|\btry.*finally\b|\bdefer\b/i;
 const DANGEROUS_FN_SAFE = /\bstrncpy\b|\bsnprintf\b|\bstrlcpy\b|\bstrlcat\b|\bsafe.*version\b|\b_s\b\s*\(/i;
 
@@ -569,7 +569,7 @@ export const verifyCWE463 = createTransformStorageVerifier(
      n.node_subtype.includes('tree') || n.node_subtype.includes('sentinel') ||
      n.code_snapshot.match(/\b(head|tail|sentinel|root|null.*terminat|end.*marker)\b/i) !== null)
   ),
-  /\bsentinel\b.*\bprotect\b|\bread.*only\b|\bimmutable\b|\bfreeze\b|\bguard\b/i,
+  /\bsentinel\b.*\bprotect\b|\bread.*only\b|\bimmutable\b|\b\.freeze\s*\(|\bguard\s*\(/i,
   'CONTROL (sentinel protection — prevent deletion of structural markers)',
   'Protect sentinel nodes from deletion. Mark sentinels as immutable or read-only. ' +
     'Add guard checks before deleting nodes in linked data structures.',

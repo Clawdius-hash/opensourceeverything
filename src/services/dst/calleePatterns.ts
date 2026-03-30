@@ -143,6 +143,17 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'request.files':        { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
   'request.file':         { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
 
+  // -- Multer file upload middleware --
+  'multer.single':        { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'multer.array':         { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'multer.fields':        { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'multer.any':           { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'upload.single':        { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'upload.array':         { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'upload.fields':        { nodeType: 'INGRESS',    subtype: 'file_upload',   tainted: true },
+  'multer.diskStorage':   { nodeType: 'STORAGE',    subtype: 'file_write',    tainted: false },
+  'multer.memoryStorage': { nodeType: 'STORAGE',    subtype: 'file_write',    tainted: false },
+
   // ── res.* → EGRESS ──
   'res.send':             { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
   'res.json':             { nodeType: 'EGRESS',     subtype: 'http_response', tainted: false },
@@ -166,6 +177,35 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'console.info':         { nodeType: 'EGRESS',     subtype: 'display',       tainted: false },
   'console.debug':        { nodeType: 'EGRESS',     subtype: 'display',       tainted: false },
   'console.trace':        { nodeType: 'EGRESS',     subtype: 'display',       tainted: false },
+
+  // ── Third-party logger sinks → EGRESS/log_write (CWE-117 expansion) ──
+  'winston.log':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'winston.info':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'winston.error':        { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'winston.warn':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'winston.debug':        { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.log':           { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.info':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.error':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.warn':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.debug':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.fatal':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'logger.verbose':       { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'pino.info':            { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'pino.error':           { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'pino.warn':            { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'pino.debug':           { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'pino.fatal':           { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'bunyan.info':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'bunyan.error':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'bunyan.warn':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'bunyan.debug':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'bunyan.fatal':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'log4js.info':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'log4js.error':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'log4js.warn':          { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'log4js.debug':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
+  'log4js.fatal':         { nodeType: 'EGRESS',     subtype: 'log_write',     tainted: false },
 
   // ── fs.* → INGRESS (read) / EGRESS (write) ──
   'fs.readFile':          { nodeType: 'INGRESS',    subtype: 'file_read',     tainted: false },
@@ -232,8 +272,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // ── bcrypt.* → AUTH ──
   'bcrypt.compare':       { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
+  'bcrypt.compareSync':   { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
   'bcrypt.hash':          { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
+  'bcrypt.hashSync':      { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
   'bcrypt.genSalt':       { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
+  'bcrypt.genSaltSync':   { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
 
   // ── jwt.* → AUTH ──
   'jwt.sign':             { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },

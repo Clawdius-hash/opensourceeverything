@@ -232,7 +232,7 @@ function store($request) {
 
   // ── 10. htmlspecialchars as TRANSFORM/sanitize ───────────────────
 
-  it('classifies htmlspecialchars() as TRANSFORM/sanitize', () => {
+  it('classifies htmlspecialchars() as CONTROL/sanitize_xss', () => {
     const code = `<?php
 $safe = htmlspecialchars($_GET['name']);
 echo $safe;
@@ -240,10 +240,10 @@ echo $safe;
     const tree = parsePHP(code);
     const { map } = buildNeuralMap(tree, code, 'sanitize.php', phpProfile);
 
-    const transformNodes = map.nodes.filter(n =>
-      n.node_type === 'TRANSFORM' && n.node_subtype === 'sanitize'
+    const controlNodes = map.nodes.filter(n =>
+      n.node_type === 'CONTROL' && n.node_subtype === 'sanitize_xss'
     );
-    expect(transformNodes.length).toBeGreaterThan(0);
+    expect(controlNodes.length).toBeGreaterThan(0);
   });
 
   // ── 11. Data flow: taint from $_GET to echo ──────────────────────

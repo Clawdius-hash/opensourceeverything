@@ -206,11 +206,11 @@ function complexAlgoTransformNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe pattern constants
 // ---------------------------------------------------------------------------
 
-const INPUT_VALID_SAFE = /\bvalidate\b|\bsanitize\b|\bcheck\b|\bfilter\b|\bescape\b|\bencode\b|\bschema\b|\bzod\b|\bjoi\b|\byup\b|\bsuperStruct\b/i;
-const EVAL_SAFE = /\bsanitize\b|\ballowlist\b|\bwhitelist\b|\bJSON\.parse\b|\bsafeEval\b|\bvm2\b|\bsandbox\b/i;
+const INPUT_VALID_SAFE = /\bvalidate\s*\(|\bsanitize\s*\(|\bcheck\s*\(|\b\.filter\s*\(|\bescape\s*\(|\bencode\s*\(|\bschema\b|\bzod\b|\bjoi\b|\byup\b|\bsuperStruct\b/i;
+const EVAL_SAFE = /\bsanitize\s*\(|\ballowlist\b|\bwhitelist\b|\bJSON\.parse\b|\bsafeEval\b|\bvm2\b|\bsandbox\b/i;
 const FORMAT_SAFE = /\bstatic\b.*format|\bconst\b.*format|\bhardcoded\b|\bliteral\b|\bformat.*=.*['"`]/i;
 const INCLUDE_SAFE = /\ballowlist\b|\bwhitelist\b|\bbasename\b|\bstartsWith\b|\ballow_url_include.*off\b|\bvalidate.*path\b/i;
-const EXPR_SAFE = /\bsanitize\b|\bescape\b|\ballowlist\b|\bwhitelist\b|\bsandbox\b|\brestrict\b/i;
+const EXPR_SAFE = /\bsanitize\s*\(|\bescape\s*\(|\ballowlist\b|\bwhitelist\b|\bsandbox\b|\brestrict\b/i;
 const REGEX_SAFE = /\bescapeRegex\b|\bescapeString\b|\bliteral\b|\bstatic.*pattern\b|\bconstant.*regex\b|\bRE2\b/i;
 const REFLECT_SAFE = /\ballowlist\b|\bwhitelist\b|\bpermitted.*class\b|\ballowedClass\b|\bvalidate.*class\b/i;
 const TYPE_SAFE = /\btypeof\b|\binstanceof\b|\bNumber\.isFinite\b|\bNumber\.isInteger\b|\bArray\.isArray\b|\bvalidate.*type\b/i;
@@ -221,7 +221,7 @@ const XML_ENTITY_SAFE = /\bnoent\b|\bdisable.*entity\b|\bresolveEntities\s*:\s*f
 const ALLOC_SIZE_SAFE = /\bmax\b.*\bsize\b|\blimit\b|\bclamp\b|\b[<>]=?\s*\d{3,}\b|\bvalidate.*size\b|\bMAX_SIZE\b/i;
 const RATE_LIMIT_SAFE = /\brate.*limit\b|\bthrottle\b|\bquota\b|\bcost.*check\b|\bmax.*request\b|\bbackpressure\b/i;
 const COMPLEXITY_SAFE = /\bRE2\b|\btimeout\b|\bmax.*length\b|\blimit.*input\b|\bsafe.*regex\b|\blinear\b/i;
-const WORKFLOW_SAFE = /\bstate.*machine\b|\bworkflow\b|\bstep.*valid\b|\bsequence.*check\b|\bprecondition\b|\bguard\b/i;
+const WORKFLOW_SAFE = /\bstate.*machine\b|\bworkflow\b|\bstep.*valid\b|\bsequence.*check\b|\bprecondition\b|\bguard\s*\(/i;
 const NEGOTIATE_SAFE = /\bmin.*version\b|\bTLS.*1\.[23]\b|\ballowedCiphers\b|\bcipher.*suite\b|\bno.*downgrade\b|\bstrict.*transport\b/i;
 
 // ===========================================================================
@@ -494,7 +494,7 @@ export const verifyCWE913 = createGenericVerifier(
      n.node_subtype.includes('reflect') || n.attack_surface.includes('dynamic_code') ||
      n.code_snapshot.match(/\b(eval|Function|require|import|Reflect|Proxy|defineProperty)\b/i) !== null)
   ),
-  /\ballowlist\b|\bwhitelist\b|\bsandbox\b|\bvalidate\b|\bfreeze\b|\bseal\b/i,
+  /\ballowlist\b|\bwhitelist\b|\bsandbox\b|\bvalidate\s*\(|\b\.freeze\s*\(|\b\.seal\s*\(/i,
   'CONTROL (dynamic code resource restriction / validation)',
   'Restrict which code resources can be dynamically accessed. Use Object.freeze() to prevent modification. ' +
     'Validate all dynamic identifiers against an allowlist.',

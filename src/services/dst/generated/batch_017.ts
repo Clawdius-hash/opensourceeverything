@@ -61,9 +61,9 @@ const nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONT
 const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRANSFORM');
 
 // Safe patterns
-const V = /\bvalidate\b|\bcheck\b|\bverif\b|\bassert\b|\bguard\b|\bensure\b/i;
-const S = /\bsanitize\b|\bescape\b|\bencode\b|\bfilter\b|\bstrip\b/i;
-const E = /\bencrypt\b|\bhash\b|\bcipher\b|\bprotect\b|\bsecure\b|\bDPAPI\b|\bRSA\b/i;
+const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
+const S = /\bsanitize\s*\(|\bescape\s*\(|\bencode\s*\(|\b\.filter\s*\(|\bstrip\s*\(/i;
+const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(|\bDPAPI\b|\bRSA\b/i;
 const B = /\bbounds\b|\blength.*check\b|\bindex.*valid\b|\bBuffer\.alloc\b|\bArray\.isArray\b/i;
 
 // ---------------------------------------------------------------------------

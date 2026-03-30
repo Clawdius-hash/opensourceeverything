@@ -50,7 +50,7 @@ function dataProcessNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe pattern constants
 // ---------------------------------------------------------------------------
 
-const DELIMITER_ESCAPE_SAFE = /\bescape\b|\bquote\b|\bencode\b|\bsanitize\b|\bstrip\b|\bneutralize\b|\bparameteriz\b|\bCSV\.stringify\b|\bjson\.stringify\b/i;
+const DELIMITER_ESCAPE_SAFE = /\bescape\s*\(|\bquote\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bstrip\s*\(|\bneutralize\s*\(|\bparameteriz\b|\bCSV\.stringify\b|\bjson\.stringify\b/i;
 const ENCODING_SAFE = /\bencodeURI\b|\bencodeURIComponent\b|\bpercentEncode\b|\bhtmlEntities\b|\bencoding.*check\b|\bcharset.*valid\b/i;
 const DATA_TYPE_SAFE = /\btypeof\b|\binstanceof\b|\bNumber\.isFinite\b|\bArray\.isArray\b|\bschema\b|\bvalidate.*type\b|\bzod\b|\bjoi\b/i;
 
@@ -287,7 +287,7 @@ export function verifyCWE337(map: NeuralMap): VerificationResult {
 export const verifyCWE349 = createIntermediateTransformVerifier(
   'CWE-349', 'Acceptance of Extraneous Untrusted Data With Trusted Data', 'high',
   dataProcessNodes,
-  /\bvalidate\b|\bsanitize\b|\bstrip.*extra\b|\bschema\b|\bstrict\b|\badditionalProperties.*false\b/i,
+  /\bvalidate\s*\(|\bsanitize\s*\(|\bstrip.*extra\b|\bschema\b|\bstrict\b|\badditionalProperties.*false\b/i,
   'TRANSFORM (strict parsing — reject extraneous data)',
   'Use strict parsing that rejects unexpected fields. Set additionalProperties: false in JSON schemas. ' +
     'Never merge untrusted data into trusted structures without validation.',

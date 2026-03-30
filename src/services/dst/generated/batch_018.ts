@@ -62,10 +62,10 @@ const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRAN
 const nS: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STRUCTURAL');
 
 // Safe patterns
-const V = /\bvalidate\b|\bcheck\b|\bverif\b|\bassert\b|\bguard\b|\bensure\b/i;
-const A = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\brole\b|\bauth\b/i;
-const E = /\bencrypt\b|\bhash\b|\bcipher\b|\bprotect\b|\bsecure\b/i;
-const L = /\block\b|\bmutex\b|\bsynchronized\b|\batomic\b/i;
+const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
+const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\bauth\s*\(/i;
+const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
+const L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b/i;
 
 // ===========================================================================
 // A. INFORMATION EXPOSURE & ERROR HANDLING (3 CWEs)

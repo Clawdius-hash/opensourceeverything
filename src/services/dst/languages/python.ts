@@ -200,6 +200,17 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'ET.fromstring':                    { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
   'ET.iterparse':                     { nodeType: 'EXTERNAL', subtype: 'xml_parse',   tainted: false },
 
+  // ── XPath / XML injection (CWE-91, CWE-643) ──
+  'lxml.etree.XPath':                 { nodeType: 'EXTERNAL', subtype: 'xpath_query',  tainted: false },
+  'lxml.etree.fromstring':            { nodeType: 'EXTERNAL', subtype: 'xml_parse',    tainted: false },
+  'lxml.etree.parse':                 { nodeType: 'EXTERNAL', subtype: 'xml_parse',    tainted: false },
+  'lxml.etree.XMLParser':             { nodeType: 'EXTERNAL', subtype: 'xml_parse',    tainted: false },
+  'tree.xpath':                       { nodeType: 'EXTERNAL', subtype: 'xpath_query',  tainted: false },
+  'root.find':                        { nodeType: 'EXTERNAL', subtype: 'xpath_query',  tainted: false },
+  'root.findall':                     { nodeType: 'EXTERNAL', subtype: 'xpath_query',  tainted: false },
+  'root.findtext':                    { nodeType: 'EXTERNAL', subtype: 'xpath_query',  tainted: false },
+  'element.xpath':                    { nodeType: 'EXTERNAL', subtype: 'xpath_query',  tainted: false },
+
   // ── FastAPI WebSocket receive (persistent tainted input) ──
   'WebSocket.receive_text':   { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },
   'WebSocket.receive_json':   { nodeType: 'INGRESS', subtype: 'websocket_read', tainted: true },

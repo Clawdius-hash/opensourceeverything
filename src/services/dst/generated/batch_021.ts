@@ -55,8 +55,8 @@ const nA: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'AUTH'
 const nCi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'CONTROL');
 
 // Safe patterns
-const A = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\brole\b|\bacl\b|\brbac\b|\bcan\b.*\bdo\b/i;
-const MA = /\ballowedFields\b|\bpermit\b|\bwhitelist\b|\ballowlist\b|\bpick\b|\bschema\b|\bvalidate\b/i;
+const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\bacl\b|\brbac\b|\bcan\b.*\bdo\b/i;
+const MA = /\ballowedFields\b|\bpermit\b|\bwhitelist\b|\ballowlist\b|\b\.pick\s*\(|\bschema\b|\bvalidate\s*\(/i;
 
 // ---------------------------------------------------------------------------
 // A. Real verifiers — graph-pattern-based

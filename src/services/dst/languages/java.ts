@@ -183,6 +183,17 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // EXTERNAL
   // =========================================================================
 
+  // -- HttpURLConnection (legacy Java HTTP) --
+  'URL.openConnection':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'url.openConnection':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'HttpURLConnection.connect':  { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'connection.connect':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'connection.getInputStream':  { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'connection.getOutputStream': { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'new URL':                    { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'URI.create':                 { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'new URI':                    { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+
   // -- HttpClient (Java 11+) --
   'HttpClient.send':            { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'HttpClient.sendAsync':       { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },

@@ -64,11 +64,11 @@ function cookieEgressNodes(map: NeuralMap): NeuralMapNode[] {
 // Safe pattern constants
 // ---------------------------------------------------------------------------
 
-const HTML_ENCODE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bDOMPurify\b|\btextContent\b|\bhtmlEntities\b|\bhtmlspecialchars\b|\bencodeHtml\b/i;
+const HTML_ENCODE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bhtmlEntities\b|\bhtmlspecialchars\b|\bencodeHtml\b/i;
 const CRLF_SAFE = /\bstrip.*crlf\b|\breplace.*\\r\\n\b|\bstrip.*newline\b|\bcrlf.*reject\b|\bsanitize.*header\b|\bencodeURI\b/i;
-const NEUTRALIZE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bneutralize\b|\bparameterize\b|\bstrip\b|\bfilter\b/i;
-const ENCRYPT_SAFE = /\bencrypt\b|\bcrypto\b|\bAES\b|\bhttps\b|\bSecure\b|\bhash\b|\bcipher\b/i;
-const NORMALIZE_SAFE = /\bnormalize\b|\bcanonicalize\b|\bstrip\b|\bencode\b|\bsanitize\b/i;
+const NEUTRALIZE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bneutralize\s*\(|\bparameterize\b|\bstrip\s*\(|\b\.filter\s*\(/i;
+const ENCRYPT_SAFE = /\bencrypt\s*\(|\bcrypto\.\w|\bAES\b|\bhttps\b|\bSecure\b|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b/i;
+const NORMALIZE_SAFE = /\bnormalize\s*\(|\bcanonicalize\s*\(|\bstrip\s*\(|\bencode\s*\(|\bsanitize\s*\(/i;
 
 // ---------------------------------------------------------------------------
 // Factory: INGRESS→EGRESS without TRANSFORM

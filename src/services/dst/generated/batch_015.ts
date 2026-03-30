@@ -59,13 +59,13 @@ const nTi: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'TRAN
 const nM: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'META');
 
 // Safe patterns
-const V = /\bvalidate\b|\bcheck\b|\bverif\b|\bassert\b|\bguard\b|\bensure\b/i;
-const S = /\bsanitize\b|\bescape\b|\bencode\b|\bfilter\b|\bstrip\b|\bneutralize\b/i;
-const A = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\brole\b|\btoken\b.*\bverif\b|\bauth\b/i;
-const E = /\bencrypt\b|\bhash\b|\bcipher\b|\bprotect\b|\bsecure\b/i;
-const L = /\block\b|\bmutex\b|\bsynchronized\b|\batomic\b|\btransaction\b/i;
-const R = /\brelease\b|\bclose\b|\bdispose\b|\bfinally\b|\bcleanup\b/i;
-const I = /\bimmutable\b|\bfreeze\b|\breadonly\b|\bconst\b|\bseal\b/i;
+const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
+const S = /\bsanitize\s*\(|\bescape\s*\(|\bencode\s*\(|\b\.filter\s*\(|\bstrip\s*\(|\bneutralize\s*\(/i;
+const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\btoken\b.*\bverif\w*\s*\(|\bauth\s*\(/i;
+const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
+const L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b|\btransaction\b/i;
+const R = /\brelease\s*\(|\bclose\s*\(|\bdispose\s*\(|\bfinally\b|\bcleanup\s*\(/i;
+const I = /\bimmutable\b|\b\.freeze\s*\(|\breadonly\b|\bconst\b|\b\.seal\s*\(/i;
 
 // ===========================================================================
 // INGRESS→CONTROL without CONTROL (9 CWEs)

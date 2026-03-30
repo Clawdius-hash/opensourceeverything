@@ -400,13 +400,35 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- Next.js config --
   'nextConfig':               { nodeType: 'META', subtype: 'config',         tainted: false },
 
-  // -- Winston/Pino logging --
-  'winston.createLogger':     { nodeType: 'META', subtype: 'config',         tainted: false },
-  'pino':                     { nodeType: 'META', subtype: 'logging',        tainted: false },
-  'logger.info':              { nodeType: 'META', subtype: 'logging',        tainted: false },
-  'logger.warn':              { nodeType: 'META', subtype: 'logging',        tainted: false },
-  'logger.error':             { nodeType: 'META', subtype: 'logging',        tainted: false },
-  'logger.debug':             { nodeType: 'META', subtype: 'logging',        tainted: false },
+  // -- Winston/Pino/Bunyan/log4js logging (CWE-117 sinks) --
+  'winston.createLogger':     { nodeType: 'META',   subtype: 'config',       tainted: false },
+  'winston.log':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'winston.info':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'winston.error':            { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'winston.warn':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'winston.debug':            { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'pino':                     { nodeType: 'META',   subtype: 'logging',      tainted: false },
+  'pino.info':                { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'pino.error':               { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'pino.warn':                { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'pino.debug':               { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'pino.fatal':               { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'logger.info':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'logger.warn':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'logger.error':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'logger.debug':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'logger.fatal':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'logger.verbose':           { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'bunyan.info':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'bunyan.error':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'bunyan.warn':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'bunyan.debug':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'bunyan.fatal':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'log4js.info':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'log4js.error':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'log4js.warn':              { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'log4js.debug':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
+  'log4js.fatal':             { nodeType: 'EGRESS', subtype: 'log_write',    tainted: false },
 };
 
 // -- Wildcard: inherits JS base patterns + these TS additions --

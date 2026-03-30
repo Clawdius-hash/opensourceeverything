@@ -22,7 +22,7 @@ import {
 const ATOMIC_SAFE = /\batomic\b|\btransaction\b|\block\b.*\buse\b|\bcompareAndSwap\b|\bCAS\b|\bO_EXCL\b/i;
 const ERROR_HANDLE_SAFE = /\btry\b|\bcatch\b|\bfinally\b|\bthrow\b|\berror\b.*\bhandl\b|\bonError\b|\bfallback\b/i;
 const EXCEPTION_SAFE = /\bcatch\b.*\bspecific\b|\binstanceof\b.*Error|\bcatch\b.*\b\w+Error\b/i;
-const CHECK_RESULT_SAFE = /\bif\s*\(\s*result\b|\breturn.*check\b|\bassert\b|\bverify.*result\b/i;
+const CHECK_RESULT_SAFE = /\bif\s*\(\s*result\b|\breturn.*check\b|\bassert\s*\(|\bverify.*result\b/i;
 
 // ---------------------------------------------------------------------------
 // Factory: CONTROL→TRANSFORM without intermediate CONTROL

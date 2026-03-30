@@ -63,13 +63,13 @@ const nEg: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'EGRE
 const nSt: BfsCheck = (m, s, d) => hasPathWithoutIntermediateType(m, s, d, 'STORAGE');
 
 // Safe patterns
-const V = /\bvalidate\b|\bcheck\b|\bverif\b|\bassert\b|\bguard\b|\bensure\b/i;
-const S = /\bsanitize\b|\bescape\b|\bencode\b|\bfilter\b|\bstrip\b/i;
-const A = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\brole\b|\bauth\b/i;
-const E = /\bencrypt\b|\bhash\b|\bcipher\b|\bprotect\b|\bsecure\b/i;
-const L = /\block\b|\bmutex\b|\bsynchronized\b|\batomic\b/i;
-const R = /\brelease\b|\bclose\b|\bdispose\b|\bfinally\b|\bcleanup\b/i;
-const I = /\bimmutable\b|\bfreeze\b|\breadonly\b|\bconst\b|\bseal\b/i;
+const V = /\bvalidate\s*\(|\bcheck\s*\(|\bverif\w*\s*\(|\bassert\s*\(|\bguard\s*\(|\bensure\s*\(/i;
+const S = /\bsanitize\s*\(|\bescape\s*\(|\bencode\s*\(|\b\.filter\s*\(|\bstrip\s*\(/i;
+const A = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\brole\b|\bauth\s*\(/i;
+const E = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bprotect\s*\(|\bsecure\s*\(/i;
+const L = /\block\s*\(|\bmutex\b|\bsynchronized\b|\batomic\b/i;
+const R = /\brelease\s*\(|\bclose\s*\(|\bdispose\s*\(|\bfinally\b|\bcleanup\s*\(/i;
+const I = /\bimmutable\b|\b\.freeze\s*\(|\breadonly\b|\bconst\b|\b\.seal\s*\(/i;
 const D = /\bdebug.*off\b|\bproduction\b|\bNODE_ENV\b/i;
 const CR = /\bcrypto\.random\b|\brandomBytes\b|\bCSPRNG\b|\bgetRandomValues\b/i;
 
@@ -79,7 +79,7 @@ const CR = /\bcrypto\.random\b|\brandomBytes\b|\bCSPRNG\b|\bgetRandomValues\b/i;
 
 // EXTERNAL→TRANSFORM without AUTH (4)
 export const verifyCWE322 = v('CWE-322', 'Key Exchange without Entity Authentication', 'high', 'EXTERNAL', 'TRANSFORM', nA, /\bauthenticat\b|\bcertificate\b|\bverif.*identity\b/i, 'AUTH (entity authentication during key exchange)', 'Authenticate parties during key exchange. Use authenticated key exchange protocols.');
-export const verifyCWE494 = v('CWE-494', 'Download of Code Without Integrity Check', 'high', 'EXTERNAL', 'TRANSFORM', nA, /\bhash\b|\bsignature\b|\bintegrity\b|\bchecksum\b|\bSRI\b/i, 'AUTH (code integrity verification before execution)', 'Verify downloaded code integrity (hash, signature) before execution.');
+export const verifyCWE494 = v('CWE-494', 'Download of Code Without Integrity Check', 'high', 'EXTERNAL', 'TRANSFORM', nA, /\bhash\s*\(|\bcreateHash\b|\bsignature\b|\bintegrity\b|\bchecksum\b|\bSRI\b/i, 'AUTH (code integrity verification before execution)', 'Verify downloaded code integrity (hash, signature) before execution.');
 export const verifyCWE618 = v('CWE-618', 'Exposed Unsafe ActiveX Method', 'high', 'EXTERNAL', 'TRANSFORM', nA, /\bsafe\b|\brestrict\b|\bdisable\b/i, 'AUTH (restrict unsafe ActiveX methods)', 'Do not expose unsafe ActiveX methods. Restrict scriptable interfaces.');
 export const verifyCWE749 = v('CWE-749', 'Exposed Dangerous Method or Function', 'high', 'EXTERNAL', 'TRANSFORM', nA, A, 'AUTH (access control on dangerous methods)', 'Restrict access to dangerous methods. Require authentication for sensitive operations.');
 
@@ -185,11 +185,11 @@ export const verifyCWE208 = (map: NeuralMap): VerificationResult => {
 
 // STRUCTURAL→EGRESS without TRANSFORM (3)
 export const verifyCWE207 = v('CWE-207', 'Observable Behavioral Discrepancy With Equivalent Error', 'low', 'STRUCTURAL', 'EGRESS', nT, /\bgeneric.*error\b|\buniform\b/i, 'TRANSFORM (uniform error responses)', 'Return consistent error responses regardless of failure reason.');
-export const verifyCWE210 = v('CWE-210', 'Self-generated Error Message Containing Sensitive Information', 'medium', 'STRUCTURAL', 'EGRESS', nT, /\bgeneric\b|\bredact\b|\bsanitize\b/i, 'TRANSFORM (sanitize error messages — no sensitive details)', 'Sanitize error messages. Do not include stack traces, paths, or SQL in responses.');
+export const verifyCWE210 = v('CWE-210', 'Self-generated Error Message Containing Sensitive Information', 'medium', 'STRUCTURAL', 'EGRESS', nT, /\bgeneric\b|\bredact\s*\(|\bsanitize\s*\(/i, 'TRANSFORM (sanitize error messages — no sensitive details)', 'Sanitize error messages. Do not include stack traces, paths, or SQL in responses.');
 export const verifyCWE459 = v('CWE-459', 'Incomplete Cleanup', 'medium', 'STRUCTURAL', 'EGRESS', nT, R, 'TRANSFORM (complete resource cleanup)', 'Clean up all resources: temporary files, credentials in memory, session data.');
 
 // EXTERNAL→EGRESS without CONTROL (3)
-export const verifyCWE211 = v('CWE-211', 'Externally-Generated Error Message Containing Sensitive Information', 'medium', 'EXTERNAL', 'EGRESS', nC, /\bgeneric\b|\bfilter\b|\bredact\b/i, 'CONTROL (filter external error messages)', 'Filter error messages from external systems. Do not pass them directly to users.');
+export const verifyCWE211 = v('CWE-211', 'Externally-Generated Error Message Containing Sensitive Information', 'medium', 'EXTERNAL', 'EGRESS', nC, /\bgeneric\b|\b\.filter\s*\(|\bredact\s*\(/i, 'CONTROL (filter external error messages)', 'Filter error messages from external systems. Do not pass them directly to users.');
 export const verifyCWE573 = v('CWE-573', 'Improper Following of Specification by Caller', 'medium', 'EXTERNAL', 'EGRESS', nC, V, 'CONTROL (API specification compliance)', 'Follow API specifications. Validate responses match expected format.');
 export const verifyCWE589 = v('CWE-589', 'Call to Non-ubiquitous API', 'low', 'EXTERNAL', 'EGRESS', nC, /\bpolyfill\b|\bfeature.*detect\b|\bcompat\b/i, 'CONTROL (API availability check / polyfill)', 'Check API availability before use. Use polyfills for non-ubiquitous APIs.');
 

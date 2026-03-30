@@ -29,7 +29,7 @@ function authNodes(map: NeuralMap): NeuralMapNode[] {
 const REPLAY_SAFE = /\bnonce\b|\btimestamp\b.*\bvalid\b|\bsequence\b|\bone.*time\b|\bexpir\b|\bchallenge.*response\b/i;
 const RATE_LIMIT_SAFE = /\brate.*limit\b|\bthrottle\b|\blockout\b|\bmax.*attempt\b|\bfail.*count\b|\bcaptcha\b|\bdelay\b/i;
 const PASSWORD_SAFE = /\bmin.*length\b|\bcomplexity\b|\bstrength\b|\bzxcvbn\b|\bentropy\b|\bpolicy\b|\brequire.*upper\b/i;
-const AUTH_CONTROL_SAFE = /\bverif\b|\bvalidate\b|\bcheck\b|\bmiddleware\b|\bguard\b|\bsecure\b|\bprotect\b/i;
+const AUTH_CONTROL_SAFE = /\bverif\w*\s*\(|\bvalidate\s*\(|\bcheck\s*\(|\bmiddleware\b|\bguard\s*\(|\bsecure\s*\(|\bprotect\s*\(/i;
 
 // ---------------------------------------------------------------------------
 // Factory

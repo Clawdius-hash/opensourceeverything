@@ -70,11 +70,11 @@ const noAuth: BfsCheck = (map, src, sink) =>
   hasPathWithoutIntermediateType(map, src, sink, 'AUTH');
 
 // Safe patterns
-const REDACT_SAFE = /\bredact\b|\bfilter\b|\bomit\b|\bselect\b|\bpick\b|\bsanitize\b|\bstrip\b|\bmask\b|\bexclude\b/i;
+const REDACT_SAFE = /\bredact\s*\(|\b\.filter\s*\(|\bomit\s*\(|\bselect\s*\(|\bpick\s*\(|\bsanitize\s*\(|\bstrip\s*\(|\bmask\s*\(|\bexclude\s*\(/i;
 const ERROR_SAFE = /\bgeneric.*error\b|\bcustom.*error\b|\bproduction\b.*\bmode\b|\bNODE_ENV\b|\berror.*page\b|\bsafeError\b/i;
-const ENCRYPT_SAFE = /\bencrypt\b|\bhash\b|\bredact\b|\bmask\b|\b\*\*\*\b|\btoken\b/i;
-const AUTH_CHECK_SAFE = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\bisOwner\b|\brole\b|\bscoped\b/i;
-const ENCODE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bneutralize\b|\bfilter\b/i;
+const ENCRYPT_SAFE = /\bencrypt\s*\(|\bhash\s*\(|\bcreateHash\b|\bredact\s*\(|\bmask\s*\(|\b\*\*\*\b|\btokenize\s*\(/i;
+const AUTH_CHECK_SAFE = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\bisOwner\s*\(|\brole\b|\bscoped\b/i;
+const ENCODE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bneutralize\s*\(|\b\.filter\s*\(/i;
 const DEBUG_SAFE = /\bproduction\b|\bNODE_ENV\b|\bdisable.*debug\b|\bverbose.*off\b/i;
 
 // ===========================================================================

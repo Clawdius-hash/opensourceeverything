@@ -64,11 +64,11 @@ const noControl: BfsCheck = hasTaintedPathWithoutControl;
 const noAuth: BfsCheck = (map, src, sink) => hasPathWithoutIntermediateType(map, src, sink, 'AUTH');
 
 // Safe patterns
-const RESTRICT_SAFE = /\ballowlist\b|\bwhitelist\b|\brestrict\b|\bvalidate\b|\bpermit\b|\bblock\b|\bdeny\b/i;
-const VERIFY_SAFE = /\bverif\b|\bvalidate\b|\bcheck\b|\bconfirm\b|\bassert\b|\bensure\b/i;
+const RESTRICT_SAFE = /\ballowlist\b|\bwhitelist\b|\brestrict\b|\bvalidate\s*\(|\bpermit\b|\bblock\b|\bdeny\b/i;
+const VERIFY_SAFE = /\bverif\w*\s*\(|\bvalidate\s*\(|\bcheck\s*\(|\bconfirm\s*\(|\bassert\s*\(|\bensure\s*\(/i;
 const CERT_SAFE = /\bcertificate\b|\bpin\b|\bfingerprint\b|\bCA\b|\btrust\b|\bverif.*cert\b|\brejectUnauthorized\b/i;
-const INTEGRITY_SAFE = /\bhash\b|\bsignature\b|\bHMAC\b|\bdigest\b|\bchecksum\b|\bintegrity\b|\bverif\b/i;
-const AUTH_SAFE = /\bauthorize\b|\bhasPermission\b|\bcheckAccess\b|\bisOwner\b|\brole\b|\btoken\b.*\bverif\b/i;
+const INTEGRITY_SAFE = /\bhash\s*\(|\bcreateHash\b|\bsignature\b|\bHMAC\b|\bdigest\b|\bchecksum\b|\bintegrity\b|\bverif\w*\s*\(/i;
+const AUTH_SAFE = /\bauthorize\s*\(|\bhasPermission\s*\(|\bcheckAccess\s*\(|\bisOwner\s*\(|\brole\b|\btoken\b.*\bverif\w*\s*\(/i;
 
 // ===========================================================================
 // STRUCTURAL→EXTERNAL without CONTROL (9 CWEs)

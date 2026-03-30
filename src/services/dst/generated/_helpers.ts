@@ -459,6 +459,35 @@ export function stripComments(code: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Scope-aware safe-pattern helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns code_snapshots for all nodes in the same containing scope as nodeId.
+ * "Containing scope" = all nodes sharing the same CONTAINS parent in the graph.
+ * Fixes the #1 systemic FP: safe patterns (DOMPurify, parameterized queries, etc.)
+ * applied on prior lines are invisible when checking only the sink node itself.
+ */
+export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): string[] {
+  const snapshots: string[] = [];
+  const targetNode = map.nodes.find(n => n.id === nodeId);
+  if (!targetNode) return snapshots;
+
+  // Find the parent STRUCTURAL node that contains this node
+  const parentEdge = map.edges.find(e => e.edge_type === 'CONTAINS' && e.target === nodeId);
+  if (!parentEdge) return [targetNode.code_snapshot];
+
+  // Get all siblings (nodes contained by the same parent)
+  const siblings = map.edges
+    .filter(e => e.edge_type === 'CONTAINS' && e.source === parentEdge.source)
+    .map(e => map.nodes.find(n => n.id === e.target))
+    .filter(Boolean)
+    .map(n => n!.code_snapshot);
+
+  return siblings;
+}
+
+// ---------------------------------------------------------------------------
 // Generic factory — configurable source, sink, safe pattern
 // ---------------------------------------------------------------------------
 

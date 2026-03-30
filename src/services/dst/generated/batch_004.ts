@@ -103,12 +103,12 @@ function trustedStorageNodes(map: NeuralMap): NeuralMapNode[] {
 // ---------------------------------------------------------------------------
 
 const PATH_CANON_SAFE = /\bpath\.resolve\b|\bpath\.normalize\b|\brealpath\b|\bcanonicalize\b|\bpath\.basename\b|\bstrip.*trailing\b|\btrim\b|\bnormalizePath\b/i;
-const ENCRYPT_SAFE = /\bencrypt\b|\bcrypto\b|\bcipher\b|\bAES\b|\bRSA\b|\bcreateCipher\b|\bcreateHash\b/i;
+const ENCRYPT_SAFE = /\bencrypt\s*\(|\bcrypto\.\w|\bcipher\s*\(|\bAES\b|\bRSA\b|\bcreateCipher\w*\b|\bcreateHash\b/i;
 const HASH_SALT_SAFE = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bsalt\b|\brounds\b|\bcost\b|\bworkFactor\b/i;
-const LOG_ENCODE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bstrip.*newline\b|\breplace.*\\n\b|\blog.*safe\b|\bneutralize\b/i;
-const NEUTRALIZE_SAFE = /\bescape\b|\bencode\b|\bsanitize\b|\bstrip\b|\bneutralize\b|\bhtmlEntities\b|\bencodeURI\b/i;
-const CODE_ESCAPE_SAFE = /\bescape\b|\bsanitize\b|\bhtmlspecialchars\b|\bhtmlentities\b|\bstrip_tags\b|\bparameterize\b|\btemplate.*literal\b/i;
-const VALIDATE_TRANSFORM_SAFE = /\bvalidate\b|\bsanitize\b|\bparse\b|\bcast\b|\bcoerce\b|\bschema\b|\bzod\b|\bjoi\b/i;
+const LOG_ENCODE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bstrip.*newline\b|\breplace.*\\n\b|\blog.*safe\b|\bneutralize\s*\(/i;
+const NEUTRALIZE_SAFE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bstrip\s*\(|\bneutralize\s*\(|\bhtmlEntities\b|\bencodeURI\b/i;
+const CODE_ESCAPE_SAFE = /\bescape\s*\(|\bsanitize\s*\(|\bhtmlspecialchars\b|\bhtmlentities\b|\bstrip_tags\b|\bparameterize\b|\btemplate.*literal\b/i;
+const VALIDATE_TRANSFORM_SAFE = /\bvalidate\s*\(|\bsanitize\s*\(|\bparse\s*\(|\bcast\s*\(|\bcoerce\s*\(|\bschema\b|\bzod\b|\bjoi\b/i;
 
 // ---------------------------------------------------------------------------
 // Factory: INGRESS→STORAGE without TRANSFORM
@@ -326,7 +326,7 @@ export const verifyCWE316 = createNoTransformVerifier(
      n.data_in.some(d => d.sensitivity === 'SECRET' || d.sensitivity === 'AUTH') ||
      n.code_snapshot.match(/\b(password|secret|key|token|credential)\s*[=:]\s*/i) !== null)
   ),
-  /\bencrypt\b|\bSecureString\b|\bProtectedMemory\b|\bzero.*after\b|\bclear.*after\b|\bwipe\b/i,
+  /\bencrypt\s*\(|\bSecureString\b|\bProtectedMemory\b|\bzero.*after\b|\bclear.*after\b|\bwipe\b/i,
   'TRANSFORM (encryption in memory / secure string / zeroing after use)',
   'Use SecureString or encrypted buffers for sensitive data in memory. ' +
     'Zero memory after use. Minimize the time sensitive data is held in cleartext.',
@@ -595,7 +595,7 @@ export const verifyCWE464 = createNoTransformVerifier(
      n.node_subtype.includes('string') || n.node_subtype.includes('buffer') ||
      n.code_snapshot.match(/\b(push|append|concat|insert|add|write|null.*terminat)\b/i) !== null)
   ),
-  /\bstrip.*sentinel\b|\bremove.*null\b|\bvalidate.*struct\b|\bcheck.*terminat\b|\bescape\b/i,
+  /\bstrip.*sentinel\b|\bremove.*null\b|\bvalidate.*struct\b|\bcheck.*terminat\b|\bescape\s*\(/i,
   'TRANSFORM (sentinel character stripping / neutralization)',
   'Strip or neutralize sentinel characters (null bytes, delimiters) from user input ' +
     'before adding to data structures. Uncontrolled sentinels can corrupt structure boundaries.',

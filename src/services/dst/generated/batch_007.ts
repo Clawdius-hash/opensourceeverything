@@ -50,10 +50,10 @@ const NULL_TERM_SAFE = /\b\\0\b|\bnull.*terminat\b|\bstrlen\b.*\+\s*1|\b\+ 1\b.*
 const PTR_VALID_SAFE = /\bnull\b.*check|\b!==?\s*null\b|\bif\s*\(\s*\w+\s*\)|\bptr.*valid\b|\bweakRef\b/i;
 const DOUBLE_FREE_SAFE = /\bnull\b.*after.*free|\bptr\s*=\s*null|\bdelete.*null|\bpointer.*invalidat\b|\bonce\b/i;
 const RECURSION_SAFE = /\bdepth\b|\bmax.*recurs\b|\bbase.*case\b|\bstack.*limit\b|\btail.*call\b|\biterative\b/i;
-const RETURN_CHECK_SAFE = /\bif\s*\(\s*\w+\s*[!=]==?\s*null\b|\berror\b.*check|\breturn.*check|\bthrow\b|\bassert\b|\b!==?\s*undefined\b/i;
+const RETURN_CHECK_SAFE = /\bif\s*\(\s*\w+\s*[!=]==?\s*null\b|\berror\b.*check|\breturn.*check|\bthrow\b|\bassert\s*\(|\b!==?\s*undefined\b/i;
 const TYPE_CHECK_SAFE = /\btypeof\b|\binstanceof\b|\btype.*check\b|\btype.*guard\b|\bass?ert.*type\b|\btype.*valid\b/i;
 const IV_SAFE = /\bcrypto\.random\b|\brandomBytes\b|\bgetRandomValues\b|\bCSPRNG\b|\bnonce.*random\b|\biv.*random\b/i;
-const EXCEPTION_SAFE = /\btry\b|\bcatch\b|\bfinally\b|\bthrow\b|\berror\b.*handl|\bcheck.*condition\b|\bassert\b/i;
+const EXCEPTION_SAFE = /\btry\b|\bcatch\b|\bfinally\b|\bthrow\b|\berror\b.*handl|\bcheck.*condition\b|\bassert\s*\(/i;
 
 // ---------------------------------------------------------------------------
 // Factory: TRANSFORM→TRANSFORM without CONTROL

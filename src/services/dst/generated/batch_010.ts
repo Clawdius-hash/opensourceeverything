@@ -254,7 +254,7 @@ export function verifyCWE639(map: NeuralMap): VerificationResult {
         // Also check upstream: is there a CONTROL or AUTH node in the path that checks ownership?
         const hasUpstreamAuth = map.nodes.some(n =>
           n.node_type === 'AUTH' &&
-          /\b(isOwner|belongsTo|ownership|authorize|canAccess)\b/i.test(n.code_snapshot)
+          /\b(isOwner|belongsTo|ownership|authorize|canAccess)\s*\(/i.test(n.code_snapshot)
         );
 
         const isSafe = scopedQuery || ownershipCheck || policyCheck || rowLevelSecurity || hasUpstreamAuth;

@@ -10,7 +10,7 @@
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from './types';
-import { evaluateControlEffectiveness } from './generated/_helpers.js';
+import { evaluateControlEffectiveness, getContainingScopeSnapshots } from './generated/_helpers.js';
 import { GENERATED_REGISTRY } from './generated/index.js';
 
 // ---------------------------------------------------------------------------
@@ -501,9 +501,10 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of storage) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        // Check if the sink uses parameterized queries (strip comments to avoid bypass)
-        const codeOnly = stripComments(sink.code_snapshot);
-        const isParameterized = codeOnly.match(
+        // Check if the sink or containing scope uses parameterized queries
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.code_snapshot);
+        const isParameterized = combinedScope.match(
           /\$\d|\?\s*[,)]|\bprepare\b|\bparameterized\b|\bplaceholder/i
         ) !== null;
 
@@ -556,13 +557,15 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of egress) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const sinkCode = stripComments(sink.code_snapshot);
-        const isEncoded = sinkCode.match(
-          /\bescape\b|\bencode\b|\bsanitize\b|\bDOMPurify\b|\btextContent\b/i
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.code_snapshot);
+        const isEncoded = combinedScope.match(
+          /\bescape\s*\(|\bescapeHtml\b|\bencode\s*\(|\bencodeURI\b|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b/i
         ) !== null;
 
         // JSON responses are not vulnerable to XSS — Content-Type: application/json
         // prevents browser script execution. Detect .send({...}), .json({...}), res.json()
+        const sinkCode = stripComments(sink.code_snapshot);
         const isJsonResponse = sinkCode.match(
           /\.send\s*\(\s*\{|\.json\s*\(\s*\{|\.json\s*\(|res\.send\s*\(\s*\{|reply\.send\s*\(\s*\{|response\.json\s*\(/i
         ) !== null;
@@ -613,7 +616,9 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of fileOps) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const isValidated = stripComments(sink.code_snapshot).match(
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.code_snapshot);
+        const isValidated = combinedScope.match(
           /\bpath\.resolve\b|\bpath\.normalize\b|\bstartsWith\b|\b\.\.\/\b|\bsanitize.*path/i
         ) !== null;
 
@@ -715,7 +720,9 @@ function verifyCWE918(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of external) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const isValidated = stripComments(sink.code_snapshot).match(
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.code_snapshot);
+        const isValidated = combinedScope.match(
           /\ballowlist\b|\bwhitelist\b|\bvalidateUrl\b|\bURL\b.*\bnew\b|\bstartsWith\b/i
         ) !== null;
 
@@ -767,6 +774,18 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
     /(?:connection[_-]?string)\s*[:=]\s*['"][^'"]{8,}['"]/i,
     // Rust/Go/Kotlin: const/static with credential-like names (allow prefixes like JWT_SECRET, DB_PASSWORD)
     /(?:const|static|val|var)\s+\w*(?:PASSWORD|SECRET|API_KEY|TOKEN|AUTH_TOKEN|PRIVATE_KEY|ACCESS_KEY)\w*\s*[=:][^=].*['"][^'"]{4,}['"]/i,
+    // Module-scope credential assignments: UPPER_CASE names with string literals
+    /\b(?:PASS|SECRET|KEY|TOKEN|CRED)\w*\s*=\s*['"][^'"]{4,}['"]/,
+  ];
+
+  // Safe patterns that suppress findings
+  const safePatterns = [
+    /process\.env\b/,
+    /config\.get\s*\(/,
+    /\benv\s*\(/,
+    /\bvault\b/,
+    /\bsecretManager\b/,
+    /\byour_|\$\{|<[A-Z]|\bREPLACE\b|\bCHANGEME\b|\bTODO\b|\bEXAMPLE\b|\bTEST\b|\bPLACEHOLDER\b/i,
   ];
 
   // Check if there's a META node that marks this value as env-sourced
@@ -778,6 +797,7 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
       .flatMap(n => n.edges.map(e => e.target))
   );
 
+  // Phase 1: scan all neural map nodes (catches in-function and config_value nodes)
   for (const node of map.nodes) {
     // Skip META nodes — except config_value nodes which may contain hardcoded creds
     if (node.node_type === 'META' && node.node_subtype !== 'config_value') continue;
@@ -800,6 +820,55 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
         break; // One finding per node is enough
       }
     }
+  }
+
+  // Phase 2: module-scope fallback — scan raw source_code line by line.
+  // Module-scope const/var declarations are NOT emitted as neural map nodes
+  // by the tree-sitter mapper, so the node walk above misses them entirely.
+  // This fallback catches `const DB_PASSWORD = "secret"` at the top level.
+  if (map.source_code) {
+    const lines = map.source_code.split('\n');
+    // Build a set of code already flagged by Phase 1 (node scan) so we don't double-report.
+    // Use normalized (trimmed, semicolon-stripped) comparison to handle minor formatting differences.
+    const phase1Snippets = findings.map(f => f.source.code.trim().replace(/;$/, ''));
+
+    // Helper: check if a line was already covered by a Phase 1 finding
+    const alreadyCoveredByNodeScan = (lineContent: string): boolean => {
+      const norm = lineContent.trim().replace(/;$/, '');
+      return phase1Snippets.some(s => s.includes(norm) || norm.includes(s));
+    };
+
+    const alreadyFlaggedLines = new Set<number>();
+
+    lines.forEach((line, idx) => {
+      const trimmed = line.trim();
+      // Skip blank lines and pure comment lines
+      if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*')) return;
+      // Skip lines that use safe sourcing patterns
+      if (safePatterns.some(sp => sp.test(line))) return;
+      // Skip if already covered by Phase 1 node scan
+      if (alreadyCoveredByNodeScan(line)) return;
+
+      for (const pattern of secretPatterns) {
+        if (pattern.test(line)) {
+          if (alreadyFlaggedLines.has(idx)) break;
+          alreadyFlaggedLines.add(idx);
+          const snippet = line.trim().slice(0, 200);
+          findings.push({
+            source: { id: `module-scope-line-${idx + 1}`, label: `module-scope (line ${idx + 1})`, line: idx + 1, code: snippet },
+            sink:   { id: `module-scope-line-${idx + 1}`, label: `module-scope (line ${idx + 1})`, line: idx + 1, code: snippet },
+            missing: 'META (external secret reference — environment variable, vault, or secret manager)',
+            severity: 'critical',
+            description: `Hardcoded credential at module scope (line ${idx + 1}). ` +
+              `Secrets in source code can be leaked via version control, logs, or build artifacts.`,
+            fix: 'Move secrets to environment variables or a secret manager. ' +
+              'Use process.env.SECRET_NAME or a vault client. ' +
+              'Never commit secrets to source control.',
+          });
+          break; // One finding per line is enough
+        }
+      }
+    });
   }
 
   return {
@@ -875,7 +944,7 @@ function verifyCWE200(map: NeuralMap): VerificationResult {
       if (hasPathWithoutControl(map, src.id, sink.id)) {
         // Check if the egress node filters fields (strip comments to avoid bypass)
         const isFiltered = stripComments(sink.code_snapshot).match(
-          /\bselect\b|\bpick\b|\bomit\b|\bfilter\b|\bredact\b|\bexclude\b|\bsanitize\b|\btoJSON\b|\b\.map\b/i
+          /\bselect\s*\(|\bpick\s*\(|\bomit\s*\(|\b\.filter\s*\(|\bredact\s*\(|\bexclude\s*\(|\bsanitize\s*\(|\btoJSON\s*\(|\b\.map\s*\(/i
         ) !== null;
 
         if (!isFiltered) {
@@ -923,7 +992,7 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
         // Check if the command uses safe patterns (strip comments to avoid bypass)
         const isSafe = stripComments(sink.code_snapshot).match(
-          /\bexecFile\b|\bspawn\b.*\[|\bshellEscape\b|\bescapeShell\b|\bsanitize\b/i
+          /\bexecFile\b|\bspawn\b.*\[|\bshellEscape\b|\bescapeShell\b|\bsanitize\s*\(/i
         ) !== null;
 
         if (!isSafe) {
@@ -1197,12 +1266,34 @@ function verifyCWE94(map: NeuralMap): VerificationResult {
 function verifyCWE352(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
-  const stateChanging = map.nodes.filter(n =>
-    n.node_type === 'STORAGE' &&
-    (n.node_subtype.includes('write') || n.node_subtype.includes('delete') ||
-     n.node_subtype.includes('update') || n.node_subtype.includes('insert') ||
-     n.code_snapshot.match(/\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE)\b/i) !== null)
-  );
+
+  // Fix 2: Check for global CSRF middleware anywhere in the map
+  const GLOBAL_CSRF_MW = /\bapp\.use\s*\(\s*(?:csrf|csurf)\s*\(|\bapp\.use\s*\(\s*(?:csrfProtection|csrfMiddleware)\b/i;
+  const hasGlobalCsrfMiddleware = map.nodes.some(n => GLOBAL_CSRF_MW.test(stripComments(n.code_snapshot)));
+  if (hasGlobalCsrfMiddleware) {
+    return { cwe: 'CWE-352', name: 'Cross-Site Request Forgery (CSRF)', holds: true, findings };
+  }
+
+  // Fix 1: Broaden sink detection beyond raw SQL DML
+  const STATE_CHANGE_PATTERN = /\b(transfer|delete|remove|update|create|send|pay|purchase|withdraw|admin)\b/i;
+  const stateChanging = map.nodes.filter(n => {
+    if (n.node_type === 'STORAGE') {
+      if (n.node_subtype.includes('write') || n.node_subtype.includes('delete') ||
+          n.node_subtype.includes('update') || n.node_subtype.includes('insert') ||
+          n.node_subtype.includes('db_write') || n.node_subtype.includes('file_write') ||
+          n.node_subtype.includes('cache_write') ||
+          n.code_snapshot.match(/\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE)\b/i) !== null) {
+        return true;
+      }
+    }
+    if (n.node_type === 'EGRESS') {
+      return true;
+    }
+    if (n.node_type === 'TRANSFORM' && STATE_CHANGE_PATTERN.test(n.label + ' ' + n.code_snapshot)) {
+      return true;
+    }
+    return false;
+  });
 
   // CSRF-specific CONTROL check: look for CONTROL nodes with csrf-related labels
   function hasCsrfControl(map: NeuralMap, sourceId: string, sinkId: string): boolean {
@@ -1303,7 +1394,7 @@ function verifyCWE1321(map: NeuralMap): VerificationResult {
     for (const sink of massAssign) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
         const isSafe = stripComments(sink.code_snapshot).match(
-          /\ballowlist\b|\bwhitelist\b|\bpick\b|\bsanitize\b|\bObject\.create\(null\)/i
+          /\ballowlist\b|\bwhitelist\b|\bpick\s*\(|\bsanitize\s*\(|\bObject\.create\(null\)/i
         ) !== null;
 
         if (!isSafe) {
@@ -1446,11 +1537,16 @@ function verifyCWE384(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
   // Auth/login patterns - look for authentication actions
+  // The BCRYPT_AUTH_RE covers cases where bcrypt.compareSync appears in a CONTROL
+  // node (if-condition) rather than as a standalone AUTH node.
+  const BCRYPT_AUTH_RE = /\bbcrypt\.(compare|compareSync|hash|hashSync)\b/i;
   const authNodes = map.nodes.filter(n =>
     (n.node_type === 'AUTH' ||
      // Also check STRUCTURAL nodes that define login/auth routes
-     (n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def')) &&
-    n.code_snapshot.match(/\b(login|authenticate|passport\.authenticate|sign\s*in|logIn|createSession|doLogin)\b/i) !== null
+     (n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def') ||
+     // CONTROL nodes that contain bcrypt auth checks (bcrypt.compareSync in if-condition)
+     (n.node_type === 'CONTROL' && BCRYPT_AUTH_RE.test(n.code_snapshot))) &&
+    n.code_snapshot.match(/\b(login|authenticate|passport\.authenticate|sign\s*in|logIn|createSession|doLogin|bcrypt\.compare|bcrypt\.compareSync)\b/i) !== null
   );
 
   // Also check for direct passport strategy patterns
@@ -1460,8 +1556,9 @@ function verifyCWE384(map: NeuralMap): VerificationResult {
     n.code_snapshot.match(/\bdone\s*\(\s*null\s*,\s*user\b/i) !== null
   );
 
-  // Session regeneration patterns
-  const sessionRegenPattern = /\b(regenerate|session\.regenerate|req\.session\.regenerate|session\.destroy|rotateSession|newSession|req\.session\.destroy\s*\(\s*\)\s*.*session)/i;
+  // Session regeneration patterns — must match actual regeneration calls, not words like
+  // "regenerated" in comments. Use \b on both sides of the root word.
+  const sessionRegenPattern = /\bregenerate\s*\(|\bsession\.regenerate\b|\breq\.session\.regenerate\b|\bsession\.destroy\b|\brotateSession\b|\bnewSession\b|\breq\.session\.destroy\s*\(\s*\)\s*.*session/i;
 
   // Check if there are auth nodes but no session regeneration anywhere in the map
   const allAuthNodes = [...authNodes, ...passportStrategies];
@@ -1474,17 +1571,22 @@ function verifyCWE384(map: NeuralMap): VerificationResult {
 
     if (!hasSessionRegen) {
       // Authentication happens but no session regeneration found
+      // SUCCESS_PATH_RE: patterns that indicate a successful login completes
+      const SUCCESS_PATH_RE = /\bdone\s*\(\s*null\s*,\s*user\b|\bres\.\s*(redirect|json|send)\b|\breq\.login\b|\breq\.logIn\b|\bpassport\.authenticate\b|\breq\.session\.\w+\s*=/i;
       for (const authNode of allAuthNodes) {
-        // Check if this auth node leads to a successful login (done(null, user) or res.redirect)
-        const hasSuccessPath = authNode.code_snapshot.match(
-          /\bdone\s*\(\s*null\s*,\s*user\b|\bres\.\s*(redirect|json|send)\b|\breq\.login\b|\breq\.logIn\b|\bpassport\.authenticate\b/i
-        ) !== null;
+        // Check if this auth node (or any node in the same function scope) leads to a successful login
+        const hasSuccessPath = SUCCESS_PATH_RE.test(authNode.code_snapshot) ||
+          map.nodes.some(n =>
+            n.line_start >= authNode.line_start &&
+            n.line_start <= authNode.line_start + 30 &&
+            SUCCESS_PATH_RE.test(n.code_snapshot)
+          );
 
         if (hasSuccessPath) {
           // Build a reasonable sink - find the closest session/redirect action
           const loginSuccess = map.nodes.find(n =>
             n.line_start >= authNode.line_start &&
-            n.code_snapshot.match(/\bdone\s*\(\s*null\s*,\s*user\b|\bres\.\s*(redirect|json|send)\b/i) !== null
+            n.code_snapshot.match(/\bdone\s*\(\s*null\s*,\s*user\b|\bres\.\s*(redirect|json|send)\b|\breq\.session\.\w+\s*=/i) !== null
           ) ?? authNode;
 
           findings.push({
@@ -1743,7 +1845,7 @@ function verifyCWE1333(map: NeuralMap): VerificationResult {
         if (hasTaintedPathWithoutControl(map, src.id, regNode.id) ||
             sharesFunctionScope(map, src.id, regNode.id)) {
           const isEscaped = stripComments(regNode.code_snapshot).match(
-            /\bescapeRegExp\b|\bescape\b|\bsanitize\b|\bre2\b|\bsafe.*regex/i
+            /\bescapeRegExp\b|\bescape\s*\(|\bsanitize\s*\(|\bre2\b|\bsafe.*regex/i
           ) !== null;
 
           if (!isEscaped) {
@@ -2012,10 +2114,10 @@ function verifyCWE117(map: NeuralMap): VerificationResult {
   const ingress = nodesOfType(map, 'INGRESS');
 
   // Broad logging-function regex across all languages
-  const LOG_SINK_RE = /\b(console\.(log|warn|error|info|debug|trace)|logger\.|log\.(info|warn|error|debug|fatal|Printf|Println|Print)|println|print\s*\(|System\.out\.print|System\.err\.print|NSLog|os_log|error_log|syslog|trigger_error|puts\s|Logger\.(info|warn|error|debug|fatal)|winston|bunyan|pino|Console\.Write|ILogger|_logger\.|logging\.(info|warning|error|debug|critical)|fmt\.Print|fmt\.Fprint|writeLog|appendFile.*log)\b/i;
+  const LOG_SINK_RE = /\b(console\.(log|warn|error|info|debug|trace)|logger\.(log|error|warn|info|debug|trace|fatal|verbose)|log\.(log|error|warn|info|debug|trace|fatal|Printf|Println|Print)|println|print\s*\(|System\.out\.print|System\.err\.print|NSLog|os_log|error_log|syslog|trigger_error|puts\s|Logger\.(info|warn|error|debug|fatal)|winston\.(log|error|warn|info|debug)|bunyan\.(error|warn|info|debug|trace|fatal)|pino\.(error|warn|info|debug|trace|fatal)|log4js\.(error|warn|info|debug|trace|fatal)|morgan\(|app\.log\.|syslog\.(log|write)|audit\.log|accessLog\.|errorLog\.|Console\.Write|ILogger|_logger\.|logging\.(info|warning|error|debug|critical)|fmt\.Print|fmt\.Fprint|writeLog|appendFile.*log)\b/i;
 
   // Safe patterns — encoding or sanitization before logging
-  const LOG_SAFE_RE = /\bescape\b|\bencode\b|\bsanitize\b|\bstrip.*newline\b|\breplace.*\\n\b|\blog.*safe\b|\bneutralize\b|\bstructured.*log\b|\bjson.*log\b/i;
+  const LOG_SAFE_RE = /\bescape\s*\(|\bencode\s*\(|\bsanitize\s*\(|\bstrip.*newline\b|\breplace.*\\n\b|\blog.*safe\b|\bneutralize\s*\(|\bstructured.*log\b|\bjson.*log\b/i;
 
   // Find logging sinks — EGRESS, EXTERNAL, STORAGE, or TRANSFORM nodes that match
   const logSinks = map.nodes.filter(n =>
@@ -2168,7 +2270,9 @@ function verifyCWE601(map: NeuralMap): VerificationResult {
       }
 
       if (vulnerable) {
-        if (!safeRedirect(sink.code_snapshot) && !safeRedirect(src.code_snapshot)) {
+        const scopeSnapshots601 = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope601 = scopeSnapshots601.join('\n') || sink.code_snapshot;
+        if (!safeRedirect(combinedScope601) && !safeRedirect(src.code_snapshot)) {
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
@@ -2287,7 +2391,7 @@ function verifyCWE257(map: NeuralMap): VerificationResult {
 
   const PASSWORD_RE = /\b(password|passwd|pwd|pass_?word|user_?pass|login_?pass)\b/i;
   // Reversible encoding/encryption — NOT one-way hashing
-  const REVERSIBLE_RE = /\bbase64\b|\bbtoa\b|\batob\b|\bBuffer\.from\b.*\btoString\b|\bencode\b|\bAES\b|\bDES\b|\b3DES\b|\bTripleDES\b|\bRC4\b|\bXOR\b|\bencrypt\b|\bcipher\b|\bCryptoJS\.enc\b|\bfernet\b|\bb64encode\b/i;
+  const REVERSIBLE_RE = /\bbase64\b|\bbtoa\b|\batob\b|\bBuffer\.from\b.*\btoString\b|\bencode\s*\(|\bAES\b|\bDES\b|\b3DES\b|\bTripleDES\b|\bRC4\b|\bXOR\b|\bencrypt\s*\(|\bcipher\s*\(|\bcreateCipher\b|\bCryptoJS\.enc\b|\bfernet\b|\bb64encode\b/i;
   // One-way hash — the CORRECT approach for passwords
   const ONEWAY_HASH_RE = /\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bhash(?:Sync|Password|pwd)\b|\bgenSalt\b|\bhashpw\b|\bpassword_hash\b|\bgenerate_password_hash\b|\bmake_password\b/i;
 
@@ -2469,7 +2573,7 @@ function verifyCWE312(map: NeuralMap): VerificationResult {
 
   const SENSITIVE_RE = /\b(password|passwd|pwd|ssn|social.?security|credit.?card|card.?number|cvv|secret|token|api.?key|private.?key|health.?record|medical|dob|date.?of.?birth|bank.?account|routing.?number)\b/i;
   // Encryption or hashing safe patterns — both are valid protections for stored sensitive data
-  const ENCRYPT_SAFE_RE = /\bencrypt\b|\bAES\b|\bcipher\b|\bcreateCipheriv\b|\bcrypto\.subtle\b|\bCryptoJS\b|\bfernet\b|\bseal\b|\bsecretbox\b|\bRSA\b|\bgpg\b|\bpgp\b|\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bhash(?:Sync|Password|pwd)\b|\bgenSalt\b|\bhashpw\b|\bpassword_hash\b|\bgenerate_password_hash\b|\bmake_password\b|\bcreateHash\b/i;
+  const ENCRYPT_SAFE_RE = /\bencrypt\s*\(|\bAES\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bcrypto\.subtle\b|\bCryptoJS\b|\bfernet\b|\b\.seal\s*\(|\bsecretbox\b|\bRSA\b|\bgpg\b|\bpgp\b|\bbcrypt\b|\bscrypt\b|\bargon2\b|\bPBKDF2\b|\bhash(?:Sync|Password|pwd)\b|\bgenSalt\b|\bhashpw\b|\bpassword_hash\b|\bgenerate_password_hash\b|\bmake_password\b|\bcreateHash\b/i;
 
   // Find storage nodes that receive sensitive data without encryption
   const sensitiveStores = map.nodes.filter(n =>
@@ -2557,7 +2661,7 @@ function verifyCWE313(map: NeuralMap): VerificationResult {
 
   const SENSITIVE_RE = /\b(password|secret|token|api.?key|private.?key|ssn|credit.?card|credentials?)\b/i;
   const FILE_WRITE_RE = /\b(writeFile|writeFileSync|appendFile|createWriteStream|fwrite|file_put_contents|open\s*\(.*['"]w|fprintf|fputs|dump|save|to_file|write_text)\b/i;
-  const ENCRYPT_SAFE_RE = /\bencrypt\b|\bAES\b|\bcipher\b|\bcreateCipheriv\b|\bCryptoJS\b|\bfernet\b|\bgpg\b|\bpgp\b|\bseal\b/i;
+  const ENCRYPT_SAFE_RE = /\bencrypt\s*\(|\bAES\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bCryptoJS\b|\bfernet\b|\bgpg\b|\bpgp\b|\b\.seal\s*\(/i;
 
   // Find file-write STORAGE nodes
   const fileStores = map.nodes.filter(n =>
@@ -2616,7 +2720,7 @@ function verifyCWE314(map: NeuralMap): VerificationResult {
 
   const SENSITIVE_RE = /\b(password|secret|token|api.?key|private.?key|credentials?|license.?key)\b/i;
   const REGISTRY_RE = /\b(Registry|RegKey|HKEY_|RegSetValue|RegCreateKey|reg\.set|winreg|OpenKey|SetValueEx|NSUserDefaults|UserDefaults|SharedPreferences|putString|putExtra|CFPreferences|localStorage\.setItem|sessionStorage\.setItem)\b/i;
-  const ENCRYPT_SAFE_RE = /\bencrypt\b|\bAES\b|\bcipher\b|\bDPAPI\b|\bProtectedData\b|\bCryptProtectData\b|\bKeychain\b|\bKeyStore\b|\bEncryptedSharedPreferences\b/i;
+  const ENCRYPT_SAFE_RE = /\bencrypt\s*\(|\bAES\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bDPAPI\b|\bProtectedData\b|\bCryptProtectData\b|\bKeychain\b|\bKeyStore\b|\bEncryptedSharedPreferences\b/i;
 
   for (const node of map.nodes) {
     const code = stripComments(node.code_snapshot);
@@ -2656,7 +2760,7 @@ function verifyCWE315(map: NeuralMap): VerificationResult {
   const SENSITIVE_RE = /\b(password|secret|token|api.?key|ssn|credit.?card|session.?id|auth.?token|user.?id|email|private.?key)\b/i;
   const COOKIE_RE = /\b(setCookie|set-cookie|res\.cookie|response\.cookie|document\.cookie|Set-Cookie|cookies?\.\s*set|setcookie|http\.SetCookie|add_cookie|Cookie\()\b/i;
   const COOKIE_SUBTYPE_RE = /cookie/i;
-  const ENCRYPT_SAFE_RE = /\bencrypt\b|\bAES\b|\bcipher\b|\bjwt\.sign\b|\bJWS\b|\bJWE\b|\bsign\b.*\bsecret\b|\bsigned\s*[:=]\s*true\b|\bsecure\s*[:=]\s*true\b|\bhttpOnly\s*[:=]\s*true\b/i;
+  const ENCRYPT_SAFE_RE = /\bencrypt\s*\(|\bAES\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bjwt\.sign\b|\bJWS\b|\bJWE\b|\bsign\s*\(.*\bsecret\b|\bsigned\s*[:=]\s*true\b|\bsecure\s*[:=]\s*true\b|\bhttpOnly\s*[:=]\s*true\b/i;
 
   // Find cookie-setting nodes
   const cookieNodes = map.nodes.filter(n =>
@@ -3136,7 +3240,7 @@ function verifyCWE290(map: NeuralMap): VerificationResult {
       if (hasTaintedPathWithoutControl(map, src.id, authNode.id)) {
         // The spoofable header flows into an auth decision without validation
         const hasIntegrityCheck = stripComments(authNode.code_snapshot).match(
-          /\bhmac\b|\bsignature\b|\bcryptographic\b|\bjwt\b|\bverify\b.*\btoken\b/i
+          /\bhmac\b|\bsignature\b|\bcryptographic\b|\bjwt\b|\bverify\s*\(.*\btoken\b|\bverifyToken\b/i
         ) !== null;
 
         if (!hasIntegrityCheck) {
@@ -3643,7 +3747,7 @@ function verifyCWE522(map: NeuralMap): VerificationResult {
       if (hasTaintedPathWithoutControl(map, src.id, logSink.id)) {
         // Check if the log entry mentions redaction
         const isRedacted = stripComments(logSink.code_snapshot).match(
-          /\bredact\b|\bmask\b|\b\*{3,}\b|\[REDACTED\]|\[FILTERED\]/i
+          /\bredact\s*\(|\bmask\s*\(|\b\*{3,}\b|\[REDACTED\]|\[FILTERED\]/i
         ) !== null;
 
         if (!isRedacted) {
@@ -3772,10 +3876,14 @@ function verifyCWE119(map: NeuralMap): VerificationResult {
   const UNSAFE_MEM_RE = /\b(memcpy|memmove|memset|strcpy|strcat|sprintf|vsprintf|gets|fgets|sscanf|fscanf|scanf|bcopy|bzero)\s*\(/i;
   const UNSAFE_ALLOC_RE = /\b(malloc|calloc|realloc|alloca|free)\s*\(/i;
   const POINTER_ARITH_RE = /\*\s*\(.*\+|\bptr\s*[\+\-]|\bunsafe\s*\{|\bunsafe\.Pointer|\bslice::from_raw_parts|\b\*mut\b|\b\*const\b/i;
-  const UNSAFE_BUFFER_RE = /\bBuffer\.allocUnsafe\b|\bbuffer\.(write|copy|fill)\s*\((?![^)]*\.length)|\bTypedArray\b.*\[/i;
+  // UNSAFE_BUFFER_RE: Buffer.allocUnsafe, buffer.write/copy/fill without length check,
+  // Buffer.from with user-controlled source (tainted copy without size check),
+  // buffer.writeUInt32BE/writeInt32LE etc. (binary writes at user-controlled offset)
+  const UNSAFE_BUFFER_RE = /\bBuffer\.allocUnsafe\b|\bbuffer\.(write|copy|fill|writeUInt|writeInt|writeFloat|writeDouble)\s*\((?![^)]*\.length\b[^)]*\)[^;]*if)|\bBuffer\.from\b|\bTypedArray\b.*\[/i;
   const BOUNDS_SAFE_RE = /\bbounds\b.*check|\bif\s*\(.*[<>]=?\s*.*\b(length|size|len|cap|capacity)\b|\bstrncpy\b|\bsnprintf\b|\bstrlcpy\b|\bstrlcat\b|\bmemcpy_s\b|\bstrcpy_s\b|\bsizeof\b.*[<>]=?|\bstd::copy\b|\bstd::copy_n\b|\bBuffer\.alloc\b(?!Unsafe)|\bslice\s*\(\s*\d|\bMath\.min\b.*length|\b\.len\(\)\b.*[<>]|\bchecked_add\b|\bchecked_mul\b/i;
   const memNodes = map.nodes.filter(n =>
-    (n.node_type === 'STORAGE' || n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL') &&
+    // Include RESOURCE nodes: Buffer.alloc/Buffer.from are classified RESOURCE/memory
+    (n.node_type === 'STORAGE' || n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL' || n.node_type === 'RESOURCE') &&
     (UNSAFE_MEM_RE.test(n.code_snapshot) || UNSAFE_ALLOC_RE.test(n.code_snapshot) ||
      POINTER_ARITH_RE.test(n.code_snapshot) || UNSAFE_BUFFER_RE.test(n.code_snapshot) ||
      n.node_subtype.includes('buffer') || n.node_subtype.includes('memory') ||
@@ -3784,7 +3892,8 @@ function verifyCWE119(map: NeuralMap): VerificationResult {
   const ingress = nodesOfType(map, 'INGRESS');
   for (const src of ingress) {
     for (const sink of memNodes) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+          sharesFunctionScope(map, src.id, sink.id)) {
         if (!BOUNDS_SAFE_RE.test(stripComments(sink.code_snapshot))) {
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
@@ -4059,17 +4168,30 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
   const OVERFLOW_SAFE_RE = /\bchecked_add\b|\bchecked_mul\b|\bsaturating_add\b|\bsaturating_mul\b|\b__builtin_\w+_overflow\b|\bSafeInt\b|\bNumber\.isSafeInteger\b|\bMAX_SAFE_INTEGER\b|\bif\s*\(.*>\s*MAX|\bif\s*\(.*>\s*INT_MAX|\bif\s*\(.*>\s*SIZE_MAX|\bif\s*\(.*overflow|\bclamp\b|\bMath\.min\b/i;
   const ingress = nodesOfType(map, 'INGRESS');
   const arithNodes = map.nodes.filter(n =>
-    (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE') &&
+    // Include RESOURCE nodes: Buffer.alloc(size + 1) is classified RESOURCE/memory
+    // and contains integer arithmetic used as a size argument.
+    (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE' || n.node_type === 'RESOURCE') &&
     (SIZE_ARITH_RE.test(n.code_snapshot) ||
      (ARITH_RE.test(n.code_snapshot) && CAST_WIDEN_RE.test(n.code_snapshot)) ||
      n.node_subtype.includes('arithmetic') || n.node_subtype.includes('numeric') ||
-     n.node_subtype.includes('integer') || n.attack_surface.includes('numeric_operation'))
+     n.node_subtype.includes('integer') || n.attack_surface.includes('numeric_operation') ||
+     // Buffer.alloc/allocUnsafe with arithmetic argument is a direct integer overflow sink
+     /\bBuffer\.(alloc|allocUnsafe)\s*\([^)]*[\*\+\-][^)]*\)/.test(n.code_snapshot))
   );
   for (const src of ingress) {
     for (const sink of arithNodes) {
       if (src.id === sink.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (!OVERFLOW_SAFE_RE.test(stripComments(sink.code_snapshot))) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+          sharesFunctionScope(map, src.id, sink.id)) {
+        // Check the sink AND the function scope for safety patterns.
+        // Number.isSafeInteger / Math.min may be in a sibling CONTROL node.
+        const scopeSafe = OVERFLOW_SAFE_RE.test(stripComments(sink.code_snapshot)) ||
+          map.nodes.some(n =>
+            n.id !== sink.id &&
+            sharesFunctionScope(map, sink.id, n.id) &&
+            OVERFLOW_SAFE_RE.test(stripComments(n.code_snapshot))
+          );
+        if (!scopeSafe) {
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
             missing: 'CONTROL (integer overflow check before arithmetic)',
@@ -4207,12 +4329,28 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
     (DEREF_RE.test(n.code_snapshot) ||
      n.code_snapshot.match(/\.\w+\s*[\([]|\.length\b|\.toString\b|\.valueOf\b/i) !== null)
   );
+  // Track seen sink IDs to avoid duplicate findings
+  const seenSinks476 = new Set<string>();
   for (const src of nullableSources) {
     for (const sink of derefSinks) {
       if (src.id === sink.id) continue;
-      if (hasPathWithoutControl(map, src.id, sink.id)) {
+      if (seenSinks476.has(sink.id)) continue;
+      // Use either DATA_FLOW path or function scope proximity.
+      // In JavaScript, db.findOne() result stored in a variable that is then
+      // dereferenced in the same function will share scope even without a direct
+      // DATA_FLOW edge from the STORAGE source to the dereference TRANSFORM node.
+      const reachable = hasPathWithoutControl(map, src.id, sink.id) ||
+        sharesFunctionScope(map, src.id, sink.id);
+      if (reachable) {
+        // Check for null guards in the function scope (not just on src/sink nodes)
+        const scopeNullSafe = map.nodes.some(n =>
+          sharesFunctionScope(map, src.id, n.id) &&
+          NULL_SAFE_RE.test(stripComments(n.code_snapshot))
+        );
         if (!NULL_SAFE_RE.test(stripComments(sink.code_snapshot)) &&
-            !NULL_SAFE_RE.test(stripComments(src.code_snapshot))) {
+            !NULL_SAFE_RE.test(stripComments(src.code_snapshot)) &&
+            !scopeNullSafe) {
+          seenSinks476.add(sink.id);
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
             missing: 'CONTROL (null/nil/None check before dereference)',
@@ -4947,7 +5085,7 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
      n.attack_surface.includes('trust_boundary') ||
      SESS501.test(n.code_snapshot) || ENV501.test(n.code_snapshot) || CACHE501.test(n.code_snapshot))
   );
-  const SAFE501 = /\bvalidate\b|\bsanitize\b|\bschema\b|\bz\.\w|\bjoi\b|\byup\b|\bclass-?validator\b|\bassert\b|\bverify\b|\bisValid\b|\bclean\b/i;
+  const SAFE501 = /\bvalidate\s*\(|\bsanitize\s*\(|\bschema\b|\bz\.\w|\bjoi\b|\byup\b|\bclass-?validator\b|\bassert\s*\(|\bverify\s*\(|\bisValid\s*\(|\bclean\s*\(/i;
   for (const src of ingress501) {
     for (const sink of trustSinks501) {
       if (src.id === sink.id) continue;
@@ -5109,9 +5247,12 @@ function verifyCWE776(map: NeuralMap): VerificationResult {
 /** CWE-862: Missing Authorization */
 function verifyCWE862(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
-  const authNodes862 = nodesOfType(map, 'AUTH');
   const ingressNodes862 = nodesOfType(map, 'INGRESS');
-  const sources862 = authNodes862.length > 0 ? authNodes862 : ingressNodes862;
+  // Always use INGRESS nodes as sources. In Express middleware patterns, AUTH nodes
+  // (e.g. jwt.verify in a global middleware) are structurally parallel to route handlers
+  // and have no DATA_FLOW edges to STORAGE sinks. The correct check is whether
+  // user-controlled INGRESS data reaches a state-changing STORAGE without authorization.
+  const sources862 = ingressNodes862;
   const stateChanging862 = map.nodes.filter(n =>
     (n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL') &&
     (n.node_subtype.includes('write') || n.node_subtype.includes('delete') ||
@@ -5145,11 +5286,65 @@ function verifyCWE862(map: NeuralMap): VerificationResult {
     }
     return false;
   }
+  // Scope-based authorization check for a sink node.
+  // Checks three sources of auth coverage:
+  //   1. Any sibling node in the direct containing STRUCTURAL scope matches AUTHZ862
+  //   2. The scope node's own code matches (e.g. the containing function IS the auth check)
+  //   3. Any route_def node whose line range encompasses the sink — this catches auth middleware
+  //      passed as an argument to the route: app.delete('/path', authorize, handler)
+  function scopeHasAuthz862(sink: { id: string; line_start: number; line_end: number }): boolean {
+    // Find all STRUCTURAL nodes that directly CONTAIN the sink
+    const parentScopes = map.nodes.filter(n =>
+      (n.node_type === 'STRUCTURAL' && (n.node_subtype === 'function' || n.node_subtype === 'route_def')) &&
+      n.edges.some(e => e.edge_type === 'CONTAINS' && e.target === sink.id)
+    );
+
+    for (const scope of parentScopes) {
+      // Check if the scope's own code_snapshot mentions auth (catches named auth functions as parent)
+      if (AUTHZ862.test(stripComments(scope.code_snapshot))) return true;
+
+      // Check all children within the scope for auth patterns
+      const scopeChildren = scope.edges
+        .filter(e => e.edge_type === 'CONTAINS')
+        .map(e => map.nodes.find(n => n.id === e.target))
+        .filter((n): n is NonNullable<typeof n> => n != null);
+      if (scopeChildren.some(n => AUTHZ862.test(stripComments(n.code_snapshot)))) return true;
+
+      // Check any route_def that wraps the same line range as this scope.
+      // A route_def like app.delete('/path', authorize, handler) captures the auth middleware
+      // in its code_snapshot even though the handler function is a separate STRUCTURAL node.
+      const routeDefsWrappingScope = map.nodes.filter(n =>
+        n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def' &&
+        n.line_start <= scope.line_start && n.line_end >= scope.line_end
+      );
+      if (routeDefsWrappingScope.some(rd => AUTHZ862.test(stripComments(rd.code_snapshot)))) return true;
+    }
+
+    // Fallback: check any route_def that directly encompasses the sink's line
+    const routeDefsCoveringSink = map.nodes.filter(n =>
+      n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def' &&
+      n.line_start <= sink.line_start && n.line_end >= sink.line_end
+    );
+    if (routeDefsCoveringSink.some(rd => AUTHZ862.test(stripComments(rd.code_snapshot)))) return true;
+
+    return false;
+  }
+  const seenSinks = new Set<string>();
   for (const src of sources862) {
     for (const sink of stateChanging862) {
       if (src.id === sink.id) continue;
-      if (pathNoAuthz862(src.id, sink.id)) {
+      if (seenSinks.has(sink.id)) continue;
+      // A sink is vulnerable only if:
+      //   - There is a data-flow path (BFS) from source to sink with no auth intermediate, OR
+      //     the source and sink share a function scope with no auth in that scope
+      //   - AND the containing scope (or its route_def wrapper) has NO authorization coverage
+      // The scope check is the authoritative gate: if the scope has auth, suppress the finding.
+      const reachable = pathNoAuthz862(src.id, sink.id) ||
+        sharesFunctionScope(map, src.id, sink.id);
+      const hasVulnPath = reachable && !scopeHasAuthz862(sink);
+      if (hasVulnPath) {
         if (!AUTHZ862.test(stripComments(sink.code_snapshot)) && !AUTHZ862.test(stripComments(src.code_snapshot))) {
+          seenSinks.add(sink.id);
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
             missing: 'CONTROL (authorization -- verify user has permission for this resource/action)',
@@ -6924,6 +7119,9 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
   const ERROR_SOURCE_RE = /\b(catch\s*\(|\.catch\s*\(|on_error|onerror|error_handler|rescue|except\s|Exception|Error\b.*\bmessage|err\.stack|error\.stack|stackTrace|traceback|e\.getMessage|err\.toString|exception\.toString)\b/i;
   const LEAK_RE = /\b(stack|stackTrace|traceback|\.message|\.stack|toString\(\)|getMessage|getStackTrace|print_r\s*\(\s*\$e|var_dump|format_exc|exc_info|InnerException|DetailedError|internalError)\b/i;
   const SAFE_RE = /\b(generic.?error|sanitize.?error|safe.?error|error.?code|status.?code|error.?id|obfuscate|redact|custom.?error|err\.code\b|error\.code\b|HTTP.?(4|5)\d\d|statusCode|new\s+(AppError|HttpError|ApiError|CustomError))\b/i;
+  // Only client-facing egress is the CWE-209 attack surface; server-side logging is safe.
+  const CLIENT_EGRESS_RE = /\b(res\.send|res\.json|res\.render|res\.write|res\.end|res\.status|response\.send|response\.json|wfile\.write|self\.wfile|HttpResponse|JsonResponse|render_template|echo\s+|print\s+|printf|cout)\b/i;
+  const LOG_SINK_RE = /\b(console\.(error|warn|log|debug|info)|logger\.(error|warn|info|debug)|log\.(error|warn|info|debug)|winston\.|bunyan\.|pino\.|syslog\.)\b/i;
 
   const errorNodes = map.nodes.filter(n =>
     (n.node_type === 'TRANSFORM' || n.node_type === 'CONTROL' || n.node_type === 'STRUCTURAL' || n.node_type === 'EGRESS') &&
@@ -6933,9 +7131,12 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
 
   for (const errNode of errorNodes) {
     for (const sink of egress) {
+      const sinkCode = stripComments(sink.code_snapshot);
+      // Skip logging sinks — server-side logging of errors is correct practice, not a vulnerability.
+      if (LOG_SINK_RE.test(sinkCode)) continue;
       if (errNode.id === sink.id) {
-        const code = stripComments(sink.code_snapshot);
-        if (LEAK_RE.test(code) && !SAFE_RE.test(code)) {
+        const code = sinkCode;
+        if (LEAK_RE.test(code) && !SAFE_RE.test(code) && CLIENT_EGRESS_RE.test(code)) {
           findings.push({ source: nodeRef(errNode), sink: nodeRef(sink), missing: 'TRANSFORM (error message sanitization before response)', severity: 'medium',
             description: `Error handler at ${errNode.label} exposes detailed error information (stack traces, internal messages) in the response.`,
             fix: 'Return generic error messages to users. Log detailed errors server-side. Use error codes instead of raw exception messages.' });
@@ -6944,8 +7145,7 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
       }
       if (hasPathWithoutControl(map, errNode.id, sink.id)) {
         const errCode = stripComments(errNode.code_snapshot);
-        const sinkCode = stripComments(sink.code_snapshot);
-        if (LEAK_RE.test(errCode) && !SAFE_RE.test(sinkCode)) {
+        if (LEAK_RE.test(errCode) && !SAFE_RE.test(sinkCode) && CLIENT_EGRESS_RE.test(sinkCode)) {
           findings.push({ source: nodeRef(errNode), sink: nodeRef(sink), missing: 'TRANSFORM (error message sanitization before response)', severity: 'medium',
             description: `Error handler at ${errNode.label} sends detailed error info to ${sink.label}. Stack traces or DB error messages may be exposed.`,
             fix: 'Return generic error messages to users. Log detailed errors server-side. Use error codes instead of raw exception messages.' });
@@ -8303,8 +8503,8 @@ function verifyCWE182(map: NeuralMap): VerificationResult {
         const sinkCode = stripComments(sink.code_snapshot);
 
         const usesEncoding = /\b(encode|escape|encodeURI|encodeURIComponent|htmlEncode|escapeHtml|he\.encode|cgi\.escape|html\.escape)\s*\(/i.test(filterCode);
-        const recursiveFilter = /\bwhile\b.*\breplace\b|\bdo\b.*\breplace\b|\bloop\b.*\bsanitize\b|\brecursive\b|\biterative\b|\brepeat\b/i.test(filterCode);
-        const postFilterValidation = /\bvalidate\b|\bcheck\b|\bassert\b|\bverif/i.test(sinkCode);
+        const recursiveFilter = /\bwhile\b.*\breplace\b|\bdo\b.*\breplace\b|\bloop\b.*\bsanitize\s*\(|\brecursive\b|\biterative\b|\brepeat\b/i.test(filterCode);
+        const postFilterValidation = /\bvalidate\s*\(|\bcheck\s*\(|\bassert\s*\(|\bverif\w*\s*\(/i.test(sinkCode);
         const allowlistFilter = /\ballowlist\b|\bwhitelist\b|\b\/\[\^a-z/i.test(filterCode) ||
           /\.match\s*\(\s*\/\[a-z/i.test(filterCode);
         const libraryClean = /\bDOMPurify\b|\bsanitize-html\b|\bbleach\b|\bclean\(/i.test(filterCode);
@@ -9668,7 +9868,7 @@ function verifyCWE345(map: NeuralMap): VerificationResult {
   const POST_MSG_RE = /\b(addEventListener\s*\(\s*['"]message['"]|onmessage\s*=|\.on\s*\(\s*['"]message['"])\b/i;
   const ORIGIN_CHECK_RE = /\b(event\.origin|e\.origin|msg\.origin)\b.*===|===.*\b(event\.origin|e\.origin)\b|\borigin\s*!==?\b/i;
   const DESER_RE = /\bJSON\.parse\b|\byaml\.load\b|\bpickle\.loads?\b|\bunserialize\b|\beval\s*\(/i;
-  const AUTH_VERIFY_RE = /\bverify\b|\bhmac\b|\bsignature\b|\bauthenticate\b|\bvalidateOrigin\b|\bcheckIntegrity\b|\btimingSafeEqual\b|\bcrypto\.verify\b/i;
+  const AUTH_VERIFY_RE = /\bverify\s*\(|\bhmac\b|\bsignature\b|\bauthenticate\s*\(|\bvalidateOrigin\b|\bcheckIntegrity\b|\btimingSafeEqual\b|\bcrypto\.verify\b/i;
   const FETCH_RE = /\bfetch\s*\(|\baxios\b|\bhttps?\.get\b|\brequest\s*\(|\bgot\s*\(|\bsuperagent\b/i;
 
   for (const node of map.nodes) {
@@ -10070,7 +10270,7 @@ function verifyCWE359(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
   const PII_RE = /\b(ssn|social[_-]?security|date[_-]?of[_-]?birth|dob|passport[_-]?number|driver[_-]?license|national[_-]?id|tax[_-]?id|medical[_-]?record|health[_-]?data|diagnosis|prescription|salary|bank[_-]?account|routing[_-]?number|credit[_-]?score|biometric|fingerprint|facial[_-]?recognition|phone[_-]?number|home[_-]?address|email[_-]?address|maiden[_-]?name|ethnicity|religion|sexual[_-]?orientation|disability|genetic[_-]?data)\b/i;
-  const REDACT_RE = /\bredact\b|\bmask\b|\banonymize\b|\bpseudonymize\b|\bhash\b|\bencrypt\b|\btokenize\b|\bstrip[_-]?pii\b|\bsanitize[_-]?pii\b|\bremoveSensitive\b|\b\*{3,}\b|\bX{3,}\b/i;
+  const REDACT_RE = /\bredact\s*\(|\bmask\s*\(|\banonymize\s*\(|\bpseudonymize\s*\(|\bhash\s*\(|\bencrypt\s*\(|\btokenize\s*\(|\bstrip[_-]?pii\b|\bsanitize[_-]?pii\b|\bremoveSensitive\b|\b\*{3,}\b|\bX{3,}\b/i;
 
   const piiNodes = map.nodes.filter(n =>
     n.data_out.some(d => d.sensitivity === 'PII') || PII_RE.test(n.code_snapshot)
@@ -10126,7 +10326,7 @@ function verifyCWE359(map: NeuralMap): VerificationResult {
     for (const eg of egressNodes) {
       if (hasPathWithoutControl(map, pii.id, eg.id)) {
         const egCode = stripComments(eg.code_snapshot);
-        const hasFieldFilter = /\bselect\b|\bpick\b|\bomit\b|\bexclude\b|\bsanitize\b|\btoJSON\b|\bserialize\b|\b\.map\b.*\breturn\b/i.test(egCode) || REDACT_RE.test(egCode);
+        const hasFieldFilter = /\bselect\s*\(|\bpick\s*\(|\bomit\s*\(|\bexclude\s*\(|\bsanitize\s*\(|\btoJSON\s*\(|\bserialize\s*\(|\b\.map\s*\(.*\breturn\b/i.test(egCode) || REDACT_RE.test(egCode);
         if (!hasFieldFilter && PII_RE.test(pii.code_snapshot)) {
           findings.push({
             source: nodeRef(pii), sink: nodeRef(eg),
@@ -11345,10 +11545,19 @@ function verifyCWE415(map: NeuralMap): VerificationResult {
  */
 function verifyCWE416(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
-  const FREE_RE = /\b(free|cfree|kfree|vfree|g_free|delete\s+\w+|delete\s*\[\s*\]\s*\w+|HeapFree|GlobalFree|LocalFree|close|fclose|closesocket|CloseHandle)\s*\(/i;
+  // FREE_RE: matches both C-style free() and JavaScript/managed language deallocation patterns.
+  // Includes .destroy(), .release(), .dispose(), .close() as member calls (stream.destroy(),
+  // resource.release()) which are the JavaScript equivalents of free().
+  // FREE_RE: matches C-style free() and JS deallocation patterns.
+  // .destroy() and .close() are reliable JS "free" indicators.
+  // .end()/.terminate()/.shutdown() excluded from member-call pattern — too broad
+  // (HTTP response .end(), server .terminate(), etc. are not memory frees).
+  const FREE_RE = /\b(free|cfree|kfree|vfree|g_free|delete\s+\w+|delete\s*\[\s*\]\s*\w+|HeapFree|GlobalFree|LocalFree|CoTaskMemFree|fclose|closesocket|CloseHandle)\s*\(|[\w$]+\.(destroy|release|dispose|close)\s*\(\s*\)/i;
   const USE_AFTER_FREE_RE = /\bfree\s*\(\s*(\w+)\s*\)\s*;[^=]*\b\1\s*[\-\.\[>]/;
   const RAII_SAFE_RE = /\bstd::unique_ptr\b|\bstd::shared_ptr\b|\bBox\s*<|\bRc\s*<|\bArc\s*<|\bstd::auto_ptr\b/i;
   const NULL_AFTER_FREE_RE = /\bfree\s*\([^)]+\)\s*;\s*\w+\s*=\s*(NULL|nullptr|0|nil)\b/i;
+  // JS_SAFE_RE: patterns that indicate the resource was safely replaced or not used after
+  const JS_SAFE_RE = /=\s*null\b|=\s*undefined\b|=\s*new\s+\w+/i;
 
   const freeNodes = map.nodes.filter(n =>
     (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL') &&
@@ -11377,31 +11586,119 @@ function verifyCWE416(map: NeuralMap): VerificationResult {
     }
   }
 
-  // Pattern 2: Free in one node, dereference in a subsequent node without null check
+  // Pattern 2: Free in one node, dereference in a subsequent node without null check.
+  // For JavaScript: stream.destroy() followed by stream.read() — these share function scope
+  // but may not have a DATA_FLOW edge. Use sequence order + scope as the indicator.
   for (const src of freeNodes) {
     const srcCode = stripComments(src.code_snapshot);
     if (RAII_SAFE_RE.test(srcCode)) continue;
     if (NULL_AFTER_FREE_RE.test(srcCode)) continue;
+    if (JS_SAFE_RE.test(srcCode)) continue;
 
     for (const sink of derefNodes) {
       if (src.id === sink.id) continue;
       if (src.sequence >= sink.sequence) continue; // free must come before use
       if (!sharesFunctionScope(map, src.id, sink.id)) continue;
+      // Skip if the sink IS the free call (parent container node contains the free as a child)
+      if (FREE_RE.test(stripComments(sink.code_snapshot)) && sink.edges.length === 0) continue;
+      // Skip if the sink is contained within the src (src is a callback containing the free call)
+      if (src.edges.some(e => e.edge_type === 'CONTAINS' && e.target === sink.id)) continue;
 
       const sinkCode = stripComments(sink.code_snapshot);
       if (RAII_SAFE_RE.test(sinkCode)) continue;
-      // Check if there is a flow path from the free to the use
-      if (hasPathWithoutControl(map, src.id, sink.id)) {
+      if (JS_SAFE_RE.test(sinkCode)) continue;
+      // Check if there is a flow path or scope proximity from the free to the use
+      if (hasPathWithoutControl(map, src.id, sink.id) || sink.sequence > src.sequence) {
         findings.push({
           source: nodeRef(src), sink: nodeRef(sink),
-          missing: 'CONTROL (null check or no access after free)',
+          missing: 'CONTROL (null check or no access after free/destroy)',
           severity: 'critical',
-          description: `Memory freed at ${src.label} may be used at ${sink.label}. ` +
-            `If the pointer is not nulled or reassigned between free and use, this is use-after-free.`,
-          fix: 'Set pointer to NULL immediately after free: free(p); p = NULL. ' +
+          description: `Resource freed/destroyed at ${src.label} may be used at ${sink.label}. ` +
+            `If the reference is not nulled or reassigned between free and use, this is use-after-free.`,
+          fix: 'Set pointer/reference to null immediately after free/destroy. ' +
             'Use RAII/smart pointers to tie object lifetime to scope. ' +
             'In Rust, the ownership system prevents use-after-free at compile time.',
         });
+      }
+    }
+  }
+
+  // Pattern 3: Cross-node analysis for JS use-after-free.
+  // Handles cases where destroy(buffer)/release(buffer) are not separate mapper nodes
+  // (truncated code_snapshot at 200 chars), and where member calls like stream.read()
+  // after stream.destroy() have no corresponding node.
+  //
+  // Approach A: Scan STRUCTURAL code_snapshots for the UAF pattern (works when within 200 chars).
+  // Approach B: Look for a free node + later deref node sharing a scope with the same
+  //             variable name extracted from the free node's code_snapshot.
+  if (findings.length === 0) {
+    // Approach A: scan code_snapshots using multiline patterns
+    const JS_UAF_RE = /\b(?:destroy|release|free)\s*\(\s*(\w+)\s*\)[\s\S]*?\b\1\s*\.\s*\w+\s*\(/;
+    const MEMBER_DESTROY_UAF_RE = /(\w+)\s*\.\s*(?:destroy|close|end)\s*\(\s*\)[\s\S]*?\b\1\s*\.\s*(?!destroy|close|end)\w+\s*\(/;
+    for (const node of map.nodes) {
+      if (node.node_type !== 'STRUCTURAL') continue;
+      const code = stripComments(node.code_snapshot);
+      if (JS_UAF_RE.test(code) || MEMBER_DESTROY_UAF_RE.test(code)) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'CONTROL (do not access object after destroy/release/free)',
+          severity: 'critical',
+          description: `Use-after-free pattern at ${node.label}: resource is freed/destroyed and then accessed. ` +
+            `Accessing a destroyed object causes undefined behavior or runtime errors.`,
+          fix: 'Set reference to null immediately after destroy/release. Do not call methods on closed resources. ' +
+            'Restructure code so the resource is not used after it is freed.',
+        });
+        break;
+      }
+    }
+
+    // Approach B: scan raw source_code lines for JS UAF patterns.
+    // Handles the case where post-free accesses (stream.read(), stream.pipe()) are
+    // not mapper nodes due to 200-char code_snapshot truncation.
+    if (findings.length === 0 && map.source_code) {
+      const srcLines = stripComments(map.source_code).split('\n');
+      const JS_FREE_LINE_RE = /\b(?:destroy|release|free)\s*\(\s*(\w+)\s*\)/;
+      // Use .destroy() or .close() as free indicators (not .end() — too broad for HTTP responses)
+      const MEMBER_FREE_LINE_RE = /\b(\w+)\s*\.\s*(?:destroy|close)\s*\(\s*\)/;
+      // Exclude HTTP response/reply objects and common framework objects where .end()/.close()
+      // means "send response" not "free resource"
+      const RESPONSE_VARS = /^(?:res|response|reply|ctx|context|next)$/i;
+      const NULL_ASSIGN_RE = /=\s*null\b|=\s*undefined\b/;
+
+      for (let i = 0; i < srcLines.length; i++) {
+        const line = srcLines[i];
+        const m1 = JS_FREE_LINE_RE.exec(line);
+        const m2 = MEMBER_FREE_LINE_RE.exec(line);
+        const subject = m1?.[1] || m2?.[1];
+        if (!subject) continue;
+        // Skip HTTP response/server objects — .end()/.close() on these means finalize response
+        if (RESPONSE_VARS.test(subject)) continue;
+
+        const lookAheadLimit = Math.min(i + 20, srcLines.length);
+        for (let j = i + 1; j < lookAheadLimit; j++) {
+          const afterLine = srcLines[j];
+          if (NULL_ASSIGN_RE.test(afterLine) && afterLine.includes(subject)) break;
+          if (/^\s*\}\s*$/.test(afterLine)) break;
+          if (new RegExp(`\\b${subject}\\s*\\.(?!destroy|release|close|end)\\w`).test(afterLine)) {
+            const freeNodeRef = map.nodes.find(n => n.line_start === i + 1 && FREE_RE.test(n.code_snapshot)) ??
+              map.nodes.find(n => FREE_RE.test(n.code_snapshot));
+            const afterNodeRef = map.nodes.find(n => n.line_start === j + 1) ??
+              map.nodes.find(n => n.line_start > i + 1) ??
+              freeNodeRef;
+            if (freeNodeRef) {
+              findings.push({
+                source: nodeRef(freeNodeRef), sink: nodeRef(afterNodeRef ?? freeNodeRef),
+                missing: 'CONTROL (do not access object after destroy/release/free)',
+                severity: 'critical',
+                description: `Resource '${subject}' freed/destroyed at line ${i + 1} is accessed at line ${j + 1}. ` +
+                  `Accessing a destroyed/closed object leads to undefined behavior or runtime errors.`,
+                fix: 'Set reference to null immediately after free/destroy. Restructure code so the resource is not used after it is freed.',
+              });
+              break;
+            }
+          }
+        }
+        if (findings.length > 0) break;
       }
     }
   }
@@ -18245,11 +18542,15 @@ function verifyCWE942(map: NeuralMap): VerificationResult {
 // ---------------------------------------------------------------------------
 function verifyCWE943(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+  const NOSQL_SAFE_RE = /\b(?:sanitize|mongo-sanitize|express-mongo-sanitize|mongoSanitize|ObjectId\.isValid|Types\.ObjectId|validator|Joi|yup|zod)\b/i;
   const Q943: Array<{ pattern: RegExp; name: string; safeRe: RegExp; severity: 'critical' | 'high' }> = [
-    { pattern: /\b(?:find|findOne|aggregate|updateOne|updateMany|deleteOne|deleteMany|countDocuments)\s*\(\s*(?:\{[\s\S]*?\$(?:where|regex|expr|gt|lt|ne|in|nin|exists|or|and|not)[\s\S]*?(?:req\.|params\.|query\.|body\.|input\.|user\.))/i,
-      name: 'NoSQL injection via MongoDB operator injection', safeRe: /\b(?:sanitize|mongo-sanitize|express-mongo-sanitize|ObjectId\.isValid|Types\.ObjectId)\b/i, severity: 'critical' },
-    { pattern: /\b(?:collection|db)\s*\.\s*(?:find|update|remove|delete|aggregate)\s*\(\s*(?:JSON\.parse\s*\(\s*(?:req\.|body\.|query\.|params\.)|(?:req|body|query|params)\.)/i,
-      name: 'NoSQL query built from user input', safeRe: /\b(?:sanitize|mongo-sanitize|express-mongo-sanitize|validator|Joi|yup|zod)\b/i, severity: 'critical' },
+    // MongoDB operator injection: user input with $ operators
+    { pattern: /\b(?:find|findOne|findMany|aggregate|updateOne|updateMany|deleteOne|deleteMany|countDocuments|findOneAndUpdate|findOneAndDelete)\s*\(\s*(?:\{[\s\S]*?\$(?:where|regex|expr|gt|lt|ne|in|nin|exists|or|and|not)[\s\S]*?(?:req\.|params\.|query\.|body\.|input\.|user\.))/i,
+      name: 'NoSQL injection via MongoDB operator injection', safeRe: NOSQL_SAFE_RE, severity: 'critical' },
+    // Direct user input as argument to any NoSQL query method — covers chained calls like
+    // db.collection('users').findOne(req.query) and db.find(req.body) and JSON.parse variants
+    { pattern: /\b(?:find|findOne|findMany|findById|aggregate|updateOne|updateMany|deleteOne|deleteMany|countDocuments|findOneAndUpdate|findOneAndDelete|remove)\s*\(\s*(?:JSON\.parse\s*\(\s*(?:req\.|body\.|query\.|params\.)|(?:req|body|query|params)\.\w)/i,
+      name: 'NoSQL query built from user input (direct argument)', safeRe: NOSQL_SAFE_RE, severity: 'critical' },
     { pattern: /\b(?:graphql|gql)\b[\s\S]{0,200}?(?:\$\{|` ?\+|req\.|body\.query)/i,
       name: 'GraphQL query built via string concatenation', safeRe: /\b(?:gql`|graphql-tag|preparedStatement|parameterized)\b/i, severity: 'high' },
     { pattern: /\b(?:ldap_search|LDAPConnection\.search|search_s|search_ext_s)\s*\([^)]*?(?:req\.|params\.|query\.|body\.|input\.|user\.)/i,
@@ -18268,22 +18569,38 @@ function verifyCWE943(map: NeuralMap): VerificationResult {
         if (!q.safeRe.test(code) && !sibs.some(n => q.safeRe.test(stripComments(n.code_snapshot)))) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: `CONTROL (query parameterization — ${q.name})`, severity: q.severity,
             description: `${node.label}: ${q.name}. User input reaches data query without neutralization.`,
-            fix: 'Use parameterized queries. NoSQL: mongo-sanitize. LDAP: ldap_escape. GraphQL: use variables.' });
+            fix: 'Use parameterized queries. NoSQL: mongo-sanitize / express-mongo-sanitize. LDAP: ldap_escape. GraphQL: use variables.' });
           break;
         }
       }
     }
   }
+  // BFS taint path: INGRESS -> STORAGE(db_read|db_write) where the storage node contains a NoSQL method call.
+  // The previous sink filter required subtype "nosql"/"mongo" which the mapper never assigns (it uses db_read/db_write).
+  // Fix: also accept db_read/db_write nodes whose code contains a NoSQL query method call.
+  const NOSQL_METHOD_RE = /\b(?:find|findOne|findMany|findById|aggregate|updateOne|updateMany|deleteOne|deleteMany|countDocuments|findOneAndUpdate|findOneAndDelete|remove)\s*\(/i;
   const src943 = nodesOfType(map, 'INGRESS');
-  const qSinks943 = map.nodes.filter(n => n.node_type === 'STORAGE' && (n.node_subtype.includes('nosql') || n.node_subtype.includes('mongo') || n.node_subtype.includes('ldap') || n.node_subtype.includes('xpath') || n.node_subtype.includes('graphql') || n.node_subtype.includes('query')));
+  const qSinks943 = map.nodes.filter(n =>
+    n.node_type === 'STORAGE' && (
+      n.node_subtype.includes('nosql') ||
+      n.node_subtype.includes('mongo') ||
+      n.node_subtype.includes('ldap') ||
+      n.node_subtype.includes('xpath') ||
+      n.node_subtype.includes('graphql') ||
+      n.node_subtype.includes('query') ||
+      // Accept standard db_read/db_write nodes that contain NoSQL method calls
+      ((n.node_subtype.includes('db_read') || n.node_subtype.includes('db_write')) &&
+        NOSQL_METHOD_RE.test(n.code_snapshot))
+    )
+  );
   for (const s of src943) {
     for (const sk of qSinks943) {
       if (hasTaintedPathWithoutControl(map, s.id, sk.id)) {
         const code = stripComments(sk.code_snapshot);
-        if (!/\b(parameterized|prepared|sanitize|escape|bind|placeholder)\b/i.test(code)) {
-          findings.push({ source: nodeRef(s), sink: nodeRef(sk), missing: 'CONTROL (query neutralization)', severity: 'high',
-            description: `User input from ${s.label} reaches ${sk.node_subtype} query at ${sk.label} without sanitization.`,
-            fix: 'Add parameterized queries or input sanitization specific to the query language.' });
+        if (!NOSQL_SAFE_RE.test(code) && !/\b(parameterized|prepared|sanitize|escape|bind|placeholder)\b/i.test(code)) {
+          findings.push({ source: nodeRef(s), sink: nodeRef(sk), missing: 'CONTROL (query neutralization)', severity: 'critical',
+            description: `User input from ${s.label} reaches NoSQL query at ${sk.label} without sanitization.`,
+            fix: 'Add input sanitization: mongo-sanitize, express-mongo-sanitize, or validate/whitelist query fields.' });
         }
       }
     }
@@ -19171,6 +19488,11 @@ function verifyCWE1094(map: NeuralMap): VerificationResult {
 function verifyCWE1108(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // Skip test files entirely
+  if (/\b(test|spec|mock|fixture|__test__|\.test\.|\.spec\.)\b/i.test(map.source_file)) {
+    return { cwe: 'CWE-1108', name: 'Excessive Reliance on Global Variables', holds: true, findings };
+  }
+
   // Patterns that declare mutable globals / module-level mutable state
   const JS_GLOBAL_MUT = /\b(?:var|let)\s+\w+\s*=\s*/;
   const GLOBAL_KEYWORD_PY = /\bglobal\s+\w+/;
@@ -19183,10 +19505,65 @@ function verifyCWE1108(map: NeuralMap): VerificationResult {
   // Security-sensitive globals: auth, config, session, db connections, secrets
   const SEC_GLOBAL_RE = /\b(token|secret|password|apiKey|api_key|session|currentUser|current_user|db|conn|connection|pool|config|credentials|auth|permission|role|admin|cache)\b/i;
 
+  // --- Primary scan: raw source_code at module scope ---
+  // Root cause fix: the tree-sitter mapper classifies module-level var declarations as
+  // TRANSFORM or INGRESS nodes and does NOT embed the declaration keyword in code_snapshot.
+  // The original verifier filtered by node_type === STRUCTURAL/META, so it never saw these
+  // nodes, making it completely blind to JS module-scope globals. Scanning map.source_code
+  // directly (brace-depth tracking to stay at module scope) is the correct fix.
+  if (map.source_code) {
+    const rawCode = stripComments(map.source_code);
+    let globalCount = 0;
+    const secGlobals: string[] = [];
+    let braceDepth = 0;
+    for (const line of rawCode.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (braceDepth === 0) {
+        let isGlobal = false;
+        if (JS_GLOBAL_MUT.test(trimmed) && !SAFE_IMMUTABLE.test(trimmed)) isGlobal = true;
+        if (GLOBAL_KEYWORD_PY.test(trimmed)) isGlobal = true;
+        if (JAVA_STATIC_MUT.test(trimmed)) isGlobal = true;
+        if (CSHARP_STATIC_MUT.test(trimmed)) isGlobal = true;
+        if (isGlobal) {
+          globalCount++;
+          const m = trimmed.match(SEC_GLOBAL_RE);
+          if (m) secGlobals.push(m[0]);
+        }
+      }
+      braceDepth += (trimmed.match(/\{/g) || []).length - (trimmed.match(/\}/g) || []).length;
+      if (braceDepth < 0) braceDepth = 0;
+    }
+    if (globalCount > 5 || secGlobals.length > 0) {
+      const severity: 'critical' | 'high' | 'medium' | 'low' = secGlobals.length > 0 ? 'high' : 'medium';
+      const secNote = secGlobals.length > 0
+        ? ` Security-sensitive globals found: ${[...new Set(secGlobals)].join(', ')}. ` +
+          `These can be overwritten by unrelated code paths or leaked across request boundaries.`
+        : '';
+      const moduleNode = map.nodes.find(n => n.node_type === 'STRUCTURAL' && n.node_subtype === 'module') || map.nodes[0];
+      if (moduleNode) {
+        findings.push({
+          source: nodeRef(moduleNode), sink: nodeRef(moduleNode),
+          missing: 'STRUCTURAL (encapsulated state instead of mutable globals)',
+          severity,
+          description: `${map.source_file} has ${globalCount} mutable global/module-level variables.${secNote} ` +
+            `In server environments, module-scope mutable state is shared across all requests, ` +
+            `creating race conditions and cross-request data leakage.`,
+          fix: 'Move mutable state into function-scoped variables, class instances, or request-scoped contexts. ' +
+            'Use const/final/readonly for module-level values. For Node.js: use AsyncLocalStorage for request-scoped data. ' +
+            'For config: use frozen objects (Object.freeze) or environment-based injection.',
+        });
+      }
+    }
+  }
+
+  // --- Secondary scan: node code_snapshots (non-JS contexts / multi-file scenarios) ---
+  // Node type filter removed: module-level var declarations can be TRANSFORM or INGRESS.
   for (const node of map.nodes) {
-    if (node.node_type !== 'STRUCTURAL' && node.node_type !== 'META') continue;
-    const code = stripComments(node.code_snapshot);
     if (/\b(test|spec|mock|fixture|__test__|\.test\.|\.spec\.)\b/i.test(node.label || node.file)) continue;
+    if (node.node_subtype === 'module') continue;
+    const code = stripComments(node.code_snapshot);
+    if (!code) continue;
 
     let globalCount = 0;
     const secGlobals: string[] = [];
@@ -19194,7 +19571,6 @@ function verifyCWE1108(map: NeuralMap): VerificationResult {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      // Skip class/function body internals — only top-level
       if (/^\s{4,}/.test(line) && !/^(?:var|let|static)\b/.test(trimmed)) continue;
 
       let isGlobal = false;
@@ -19212,7 +19588,6 @@ function verifyCWE1108(map: NeuralMap): VerificationResult {
       }
     }
 
-    // Threshold: > 5 mutable globals in a single module, OR any security-sensitive globals
     if (globalCount > 5 || secGlobals.length > 0) {
       const severity: 'critical' | 'high' | 'medium' | 'low' = secGlobals.length > 0 ? 'high' : 'medium';
       const secNote = secGlobals.length > 0
@@ -22444,7 +22819,7 @@ function verifyCWE311(map: NeuralMap): VerificationResult {
 
   const SENSITIVE_RE = /\b(password|passwd|secret|token|api[-_]?key|credit[-_]?card|ssn|social[-_]?security|private[-_]?key|session|auth|credential|bank|routing[-_]?number|cvv|pin)\b/i;
   const PLAINTEXT_PROTO_RE = /\bhttp:\/\/|\bftp:\/\/|\btelnet:\/\/|\bsmtp:\/\/(?!.*starttls)|\bredis:\/\/(?!.*tls)|\bmongodb:\/\/(?!.*tls)|\bamqp:\/\/(?!.*ssl)|\bmysql:\/\/(?!.*ssl)|\bpostgres:\/\/(?!.*ssl)/i;
-  const ENCRYPTED_RE = /\bhttps:\/\/|\bftps:\/\/|\bssl\b|\btls\b|\bstarttls\b|\bwss:\/\/|\bencrypt\b|\bcipher\b|\bcrypto\b/i;
+  const ENCRYPTED_RE = /\bhttps:\/\/|\bftps:\/\/|\bssl\b|\btls\b|\bstarttls\b|\bwss:\/\/|\bencrypt\s*\(|\bcipher\s*\(|\bcreateCipher\w*\b|\bcrypto\.\w/i;
   const EGRESS_PLAIN_RE = /\b(http\.request|http\.get|http\.post|fetch\s*\(\s*['"]http:|\baxios\s*\(\s*\{[^}]*url\s*:\s*['"]http:|\burllib\.request\.urlopen\s*\(\s*['"]http:|\brequests\.(?:get|post)\s*\(\s*['"]http:)/i;
 
   // Check all nodes for plaintext transmission of sensitive data
@@ -24129,7 +24504,7 @@ function verifyCWE355(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   // Sensitive data displayed in UI without masking
   const DISPLAY_SENSITIVE_RE = /\b(?:innerHTML|textContent|innerText|\.text\s*=|\.value\s*=|\.html\s*\(|\.text\s*\(|render|display|show)\b.*\b(?:password|secret|token|ssn|credit[_-]?card|cvv|pin|api[_-]?key)\b/i;
-  const MASK_RE = /\bmask\b|\b\*{3,}\b|\bpassword[_-]?mask\b|\bhidden\b|\bobscure\b|\bredact\b|\btype\s*[:=]\s*['"]password['"]/i;
+  const MASK_RE = /\bmask\s*\(|\b\*{3,}\b|\bpassword[_-]?mask\b|\bhidden\b|\bobscure\b|\bredact\s*\(|\btype\s*[:=]\s*['"]password['"]/i;
   // Autocomplete on sensitive fields not disabled
   const AUTOCOMPLETE_ON_RE = /autocomplete\s*[:=]\s*['"](?:on|name|email|cc-number|cc-exp)['"]/i;
   const SENSITIVE_FIELD_RE = /\b(?:password|credit[_-]?card|ccn|cvv|ssn|secret|token|pin)\b/i;
@@ -26663,7 +27038,7 @@ function verifyCWE451(map: NeuralMap): VerificationResult {
   const URL_TRUNC_RE451 = /\.slice\s*\(|\.substring\s*\(|\.substr\s*\(|\.truncate\s*\(|\.ellipsis\b|text-overflow:\s*ellipsis|overflow:\s*hidden/i;
   const FN_RE451 = /\b(filename|file[_-]?name|name|basename|originalname|original[_-]?name)\b/i;
   const HIDE_EXT_RE451 = /\.replace\s*\(\s*\/\\.\w+\$\/|\.split\s*\(\s*['"]\.['"].*\[0\]|path\.parse.*\.name\b|\.slice\s*\(\s*0\s*,\s*[^)]*\.lastIndexOf\s*\(\s*['"]\.['"].*\)/i;
-  const SANITIZE_RE451 = /\bDOMPurify\b|\bsanitize\b|\bsanitizeHtml\b|\bxss\b|\bescape[_-]?html\b|\btextContent\s*=/i;
+  const SANITIZE_RE451 = /\bDOMPurify\b|\bsanitize\s*\(|\bsanitizeHtml\b|\bxss\s*\(|\bescape[_-]?html\b|\btextContent\s*=/i;
 
   for (const node of map.nodes) {
     const code = stripComments(node.code_snapshot);
