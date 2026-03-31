@@ -4555,22 +4555,44 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
 function verifyCWE191(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const SUB_RE = /\b\w+\s*-\s*\w+|\b\w+\s*-=\s*\w+/;
+  const MUL_RE = /\b\w+\s*\*\s*\w+|\b\w+\s*\*=\s*\w+/;
+  const ADD_RE = /\b\w+\s*\+\s*\w+|\b\w+\s*\+=\s*\w+/;
+  const NARROW_CAST_ARITH_RE = /\(\s*(byte|short|char)\s*\)\s*\([^)]*[\*\+\-][^)]*\)/i;
   const SIZE_SUB_RE = /\b(size|count|len|length|offset|remaining|available)\w*\s*-|\b-\s*\w*(size|count|len|length|header)\b/i;
   const UNSIGNED_SUB_RE = /\b(size_t|unsigned|uint\d*|usize|u32|u64|uint)\b.*-/i;
   const UNDERFLOW_SAFE_RE = /\bif\s*\(.*>=\s*\w+|\bif\s*\(.*>\s*\w+.*-|\bchecked_sub\b|\bsaturating_sub\b|\b__builtin_sub_overflow\b|\bMath\.max\s*\(\s*0|\bif\s*\(\s*\w+\s*>=?\s*\w+\s*\).*-/i;
+  const MUL_ADD_SAFE_RE = /\bMIN_VALUE\s*\/|\bMAX_VALUE\s*\/|\bMIN_VALUE\s*\+|\bMAX_VALUE\s*-|\bchecked_mul\b|\bsaturating_mul\b|\b__builtin_mul_overflow\b|\bMath\.multiplyHigh\b|\bchecked_add\b|\bsaturating_add\b|\b__builtin_add_overflow\b|\baddExact\b|\bmultiplyExact\b|\bsubtractExact\b/i;
+  // Patterns for function-level fallback (when no TRANSFORM node captures the arithmetic)
+  const FUNC_ARITH_RE = /\(\s*(byte|short|char|int|long)\s*\)\s*\([^)]*[\+\*\-][^)]*\)|\b\w+\s*[\*\+\-]\s*\w+/;
+  const REAL_BOUNDS_CHECK_RE = /\bif\s*\(.*\b(MIN_VALUE|MAX_VALUE)\b.*\/|\bif\s*\(.*\b(MIN_VALUE|MAX_VALUE)\b|\bchecked_sub\b|\bchecked_mul\b|\bchecked_add\b|\bsaturating_sub\b|\bsaturating_mul\b|\bsaturating_add\b|\b__builtin_\w+_overflow\b|\baddExact\b|\bmultiplyExact\b|\bsubtractExact\b/i;
   const ingress = nodesOfType(map, 'INGRESS');
-  const subNodes = map.nodes.filter(n =>
-    (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE') &&
-    (SIZE_SUB_RE.test(n.analysis_snapshot || n.code_snapshot) || UNSIGNED_SUB_RE.test(n.analysis_snapshot || n.code_snapshot) ||
-     n.node_subtype.includes('arithmetic') || n.node_subtype.includes('numeric') ||
-     n.attack_surface.includes('numeric_operation'))
-  );
+  // Strip string literals to avoid false matches on e.g. "UTF-8" matching subtraction regex
+  const stripStrLit = (s: string) => s.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+  const arithNodes = map.nodes.filter(n => {
+    if (n.node_subtype.includes('arithmetic') || n.node_subtype.includes('numeric') ||
+        n.attack_surface.includes('numeric_operation')) return true;
+    if (n.node_type !== 'TRANSFORM' && n.node_type !== 'STORAGE' && n.node_type !== 'RESOURCE') return false;
+    const snap = stripStrLit(n.analysis_snapshot || n.code_snapshot);
+    return SIZE_SUB_RE.test(snap) || UNSIGNED_SUB_RE.test(snap) ||
+      MUL_RE.test(snap) || ADD_RE.test(snap) ||
+      NARROW_CAST_ARITH_RE.test(snap) ||
+      (n.node_subtype === 'assignment' && (MUL_RE.test(snap) || SUB_RE.test(snap)));
+  });
   for (const src of ingress) {
-    for (const sink of subNodes) {
+    for (const sink of arithNodes) {
       if (src.id === sink.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const code = stripComments(sink.analysis_snapshot || sink.code_snapshot);
-        if (SUB_RE.test(code) && !UNDERFLOW_SAFE_RE.test(code)) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+          sharesFunctionScope(map, src.id, sink.id)) {
+        const code = stripStrLit(stripComments(sink.analysis_snapshot || sink.code_snapshot));
+        const scopeSafe = MUL_ADD_SAFE_RE.test(code) || UNDERFLOW_SAFE_RE.test(code) ||
+          map.nodes.some(n =>
+            n.id !== sink.id &&
+            sharesFunctionScope(map, sink.id, n.id) &&
+            (MUL_ADD_SAFE_RE.test(stripStrLit(stripComments(n.analysis_snapshot || n.code_snapshot))) ||
+             UNDERFLOW_SAFE_RE.test(stripStrLit(stripComments(n.analysis_snapshot || n.code_snapshot))))
+          );
+        if (scopeSafe) continue;
+        if (SUB_RE.test(code)) {
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
             missing: 'CONTROL (underflow check — verify minuend >= subtrahend before subtraction)',
@@ -4580,6 +4602,47 @@ function verifyCWE191(map: NeuralMap): VerificationResult {
             fix: 'Check before subtracting: if (a < b) return error, else result = a - b. ' +
               'Use checked_sub/saturating_sub in Rust. Use Math.max(0, a - b) in JS.',
           });
+        }
+        if (MUL_RE.test(code)) {
+          findings.push({
+            source: nodeRef(src), sink: nodeRef(sink),
+            missing: 'CONTROL (underflow check — verify value > MIN_VALUE/multiplier before multiplication)',
+            severity: 'high',
+            description: `User input from ${src.label} influences multiplication at ${sink.label} without underflow protection. ` +
+              `Multiplying a negative value can wrap past MIN_VALUE causing integer underflow.`,
+            fix: 'Check before multiplying: if (data > (MIN_VALUE / N)) { result = data * N; }. ' +
+              'Use Math.multiplyExact() in Java, checked_mul in Rust.',
+          });
+        }
+      }
+    }
+
+    // Fallback: check STRUCTURAL/function nodes containing arithmetic for cases
+    // where no TRANSFORM node was created (e.g., Java local_variable_declaration
+    // with cast+arithmetic: byte result = (byte)(data * 2))
+    if (arithNodes.length === 0) {
+      const funcNodes = map.nodes.filter(n =>
+        n.node_type === 'STRUCTURAL' && n.node_subtype === 'function' &&
+        FUNC_ARITH_RE.test(n.analysis_snapshot || '')
+      );
+      for (const funcNode of funcNodes) {
+        if (sharesFunctionScope(map, src.id, funcNode.id) ||
+            hasTaintedPathWithoutControl(map, src.id, funcNode.id)) {
+          const funcCode = stripComments(funcNode.analysis_snapshot || funcNode.code_snapshot);
+          // Only count REAL bounds checks (MIN_VALUE/MAX_VALUE comparisons) as underflow protection.
+          // NumberFormatException catch is parse error handling, NOT underflow protection.
+          const hasBoundsCheck = REAL_BOUNDS_CHECK_RE.test(funcCode);
+          if (!hasBoundsCheck) {
+            findings.push({
+              source: nodeRef(src), sink: nodeRef(funcNode),
+              missing: 'CONTROL (underflow check — verify bounds before arithmetic on narrow type)',
+              severity: 'high',
+              description: `User input from ${src.label} feeds into arithmetic in ${funcNode.label} without underflow protection. ` +
+                `Arithmetic on narrow types (byte/short) without MIN_VALUE/MAX_VALUE bounds checks can wrap, causing integer underflow.`,
+              fix: 'Check before arithmetic: if (data > (MIN_VALUE / N)) { result = data * N; }. ' +
+                'Use Math.multiplyExact/addExact/subtractExact in Java, checked_* in Rust.',
+            });
+          }
         }
       }
     }
@@ -4597,7 +4660,7 @@ function verifyCWE369(map: NeuralMap): VerificationResult {
   const DIV_RE = /\s\/\s|\s%\s|\bdiv\b|\bmod\b|\bdivmod\b|\bquotient\b|\bremainder\b/i;
   const DIV_FUNC_RE = /\bMath\.floor\s*\(.*\/|\bMath\.ceil\s*\(.*\/|\bMath\.trunc\s*\(.*\/|\bBigInt\b.*\/|\bidiv\b/i;
   const MODULO_RE = /\b\w+\s*%\s*\w+|\bfmod\b|\bmodulo\b/i;
-  const ZERO_SAFE_RE = /\b!==?\s*0\b|\b!=\s*0\b|\b>\s*0\b|\b>=\s*1\b|\bif\s*\(.*divisor|\bif\s*\(\s*\w+\s*\)\s*\{?\s*.*\/|\bzero.*check\b|\bdivisor.*valid\b|\bisNaN\b|\bisFinite\b|\b\|\|\s*1\b|\b\?\?\s*1\b|\bdefault\b.*\b[1-9]/i;
+  const ZERO_SAFE_RE = /\b!==?\s*0\b|\b!=\s*0\b|\b>\s*0\b|\b>=\s*1\b|\bif\s*\(.*divisor|\bif\s*\(\s*\w+\s*\)\s*\{?\s*.*\/|\bzero.*check\b|\bdivisor.*valid\b|\bisNaN\b|\bisFinite\b|\b\|\|\s*1\b|\b\?\?\s*1\b|\bdefault\b.*\b[1-9]|\bMath\.abs\s*\(.*\)\s*>\s*0/i;
   const ingress = nodesOfType(map, 'INGRESS');
   const divNodes = map.nodes.filter(n =>
     (n.node_type === 'TRANSFORM' || n.node_type === 'STORAGE') &&
@@ -4639,6 +4702,74 @@ function verifyCWE369(map: NeuralMap): VerificationResult {
           description: `Division at ${node.label} uses tainted data as divisor without zero check.`,
           fix: 'Always validate divisors are non-zero before division.',
         });
+      }
+    }
+  }
+  // --- Source-line fallback: scan raw source for division of tainted variables ---
+  // The graph approach above misses cases where the division expression is embedded
+  // inside a cast or compound expression that tree-sitter does NOT emit as a
+  // standalone TRANSFORM node (e.g. Java: int result = (int)(100.0 / data)).
+  if (findings.length === 0 && map.source_code) {
+    const srcLines = map.source_code.split('\n');
+    // Collect tainted variable names from INGRESS/tainted-TRANSFORM nodes
+    const taintedVars = new Set<string>();
+    for (const n of map.nodes) {
+      const snap = n.analysis_snapshot || n.code_snapshot || '';
+      if (n.node_type === 'INGRESS' || (n.node_type === 'TRANSFORM' && n.data_in?.some(d => d.tainted))) {
+        // Extract LHS variable from assignment snapshots like "data = Float.parseFloat(...)"
+        const assignMatch = snap.match(/^(\w+)\s*=/);
+        if (assignMatch) taintedVars.add(assignMatch[1]);
+        // Also extract variable from readLine/getParameter/etc calls
+        const callMatch = snap.match(/(\w+)\s*=\s*\w+\.\w+\(/);
+        if (callMatch) taintedVars.add(callMatch[1]);
+      }
+    }
+    // Also scan source for common taint patterns: var = parseXxx(...), readLine(), getParameter(...)
+    const TAINT_ASSIGN_RE = /(\w+)\s*=\s*(?:\w+\.)?(?:parse\w+|read\w+|get\w+|next\w+)\s*\(/i;
+    for (const line of srcLines) {
+      const m = line.match(TAINT_ASSIGN_RE);
+      if (m) taintedVars.add(m[1]);
+    }
+    if (taintedVars.size > 0) {
+      // Build regex matching division by a tainted variable: / varName or % varName
+      const SRC_DIV_RE = /[\/]\s*(\w+)|\s%\s*(\w+)/;
+      for (let i = 0; i < srcLines.length; i++) {
+        const line = srcLines[i];
+        const trimmed = line.trim();
+        // Skip comments
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+        const divMatch = line.match(SRC_DIV_RE);
+        if (!divMatch) continue;
+        const divisorVar = divMatch[1] || divMatch[2];
+        if (!divisorVar || !taintedVars.has(divisorVar)) continue;
+        // Skip if this line contains import/package/comment patterns
+        if (/^\s*(?:import|package)\s/.test(line)) continue;
+        // Check preceding lines (up to 10) for zero guard on this variable
+        let guarded = false;
+        for (let j = Math.max(0, i - 10); j < i; j++) {
+          const prev = srcLines[j];
+          if (ZERO_SAFE_RE.test(prev)) { guarded = true; break; }
+          // Also check explicit zero comparisons with the tainted var name
+          const varGuardRE = new RegExp(`\\b${divisorVar}\\b\\s*[!=><]=?\\s*0|\\bif\\s*\\(\\s*${divisorVar}\\b`, 'i');
+          if (varGuardRE.test(prev)) { guarded = true; break; }
+        }
+        // Also check if the division is inside a guarded block (if on same line)
+        if (ZERO_SAFE_RE.test(line)) guarded = true;
+        if (!guarded) {
+          const lineNum = i + 1;
+          const snippet = trimmed.slice(0, 200);
+          findings.push({
+            source: { id: `src-line-${lineNum}`, label: `source (line ${lineNum})`, line: lineNum, code: snippet },
+            sink: { id: `src-line-${lineNum}`, label: `division (line ${lineNum})`, line: lineNum, code: snippet },
+            missing: 'CONTROL (zero divisor check before division/modulo)',
+            severity: 'medium',
+            description: `Tainted variable '${divisorVar}' used as divisor at line ${lineNum} without zero check. ` +
+              `Division by zero causes crashes (SIGFPE in C/C++), exceptions, or NaN/Infinity propagation.`,
+            fix: 'Check divisor before dividing: if (divisor != 0) or if (Math.abs(divisor) > epsilon). ' +
+              'Use || 1 or ?? 1 as fallback. In Rust: checked_div(). In Go: explicit if divisor == 0.',
+          });
+          break; // one finding per function is sufficient
+        }
       }
     }
   }
@@ -23109,6 +23240,92 @@ function verifyCWE192(map: NeuralMap): VerificationResult {
 }
 
 // ---------------------------------------------------------------------------
+// CWE-193: Off-by-One Error
+//
+// A loop condition uses <= array.length (or <= size()) instead of < array.length,
+// causing an access one past the end of the buffer. This is a structural/syntactic
+// bug — not a taint-flow bug — so we scan raw source lines for the pattern.
+//
+// Vulnerable patterns:
+//   while (i <= arr.length)       — should be <
+//   for (i = 0; i <= arr.length)  — should be <
+//   while (i < arr.length + 1)    — equivalent off-by-one
+//   for (i = 0; i <= sizeof(buf)) — C/C++ variant
+//
+// Safe patterns:
+//   while (i < arr.length)        — correct strict bound
+//   while (i <= arr.length - 1)   — correct adjusted bound
+// ---------------------------------------------------------------------------
+
+function verifyCWE193(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  if (!map.source_code) {
+    return { cwe: 'CWE-193', name: 'Off-by-One Error', holds: true, findings };
+  }
+
+  const src = stripComments(map.source_code);
+  const lines = src.split('\n');
+
+  // Vulnerable: <= *.length, <= *.size(), <= sizeof(...)
+  // These should be < not <= when used as loop bounds on zero-indexed arrays.
+  const VULN_LE_LENGTH = /<=\s*\w+\s*\.\s*(length|size\s*\(\s*\)|count|Length|Count|Size)/;
+  const VULN_LE_SIZEOF = /<=\s*sizeof\s*\(/;
+  // Vulnerable: < *.length + 1 or < *.size() + 1 — equivalent off-by-one
+  const VULN_LT_PLUS1 = /<\s*\w+\s*\.\s*(length|size\s*\(\s*\)|count|Length|Count|Size)\s*\+\s*1/;
+  // Also: < sizeof(...) + 1
+  const VULN_LT_SIZEOF_PLUS1 = /<\s*sizeof\s*\([^)]*\)\s*\+\s*1/;
+
+  // Safe: <= *.length - 1 (adjusted bound is correct)
+  const SAFE_LE_MINUS1 = /<=\s*\w+\s*\.\s*(length|size\s*\(\s*\)|count|Length|Count|Size)\s*-\s*1/;
+  const SAFE_LE_SIZEOF_MINUS1 = /<=\s*sizeof\s*\([^)]*\)\s*-\s*1/;
+
+  // Only flag lines that are in loop conditions (while, for, do-while)
+  const LOOP_CONTEXT = /\b(while|for)\s*\(/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Skip blank lines and pure comment lines (residual after strip)
+    if (!trimmed) continue;
+
+    // Must be in a loop context — check current line and previous line (for do-while)
+    const inLoopContext = LOOP_CONTEXT.test(line);
+    // For do-while, the while(...) is on its own line after the closing brace
+    const isDoWhile = /^\}?\s*while\s*\(/.test(trimmed);
+
+    if (!inLoopContext && !isDoWhile) continue;
+
+    // Skip safe patterns first (they contain <= but are correct)
+    if (SAFE_LE_MINUS1.test(line) || SAFE_LE_SIZEOF_MINUS1.test(line)) continue;
+
+    // Check for vulnerable patterns
+    const isVuln = VULN_LE_LENGTH.test(line) || VULN_LE_SIZEOF.test(line) ||
+                   VULN_LT_PLUS1.test(line) || VULN_LT_SIZEOF_PLUS1.test(line);
+
+    if (isVuln) {
+      const snippet = trimmed.slice(0, 200);
+      const lineNum = i + 1;
+      findings.push({
+        source: { id: `obo-line-${lineNum}`, label: `loop condition (line ${lineNum})`, line: lineNum, code: snippet },
+        sink:   { id: `obo-line-${lineNum}`, label: `loop condition (line ${lineNum})`, line: lineNum, code: snippet },
+        missing: 'CONTROL (correct boundary — use < length, not <= length)',
+        severity: 'high',
+        description: `Off-by-one error at line ${lineNum}: loop condition uses <= with array/buffer length ` +
+          `(or < length + 1), which iterates one past the last valid index. ` +
+          `For zero-indexed arrays, the condition should be < length.`,
+        fix: 'Use < array.length (not <= array.length) for zero-indexed loop bounds. ' +
+          'If you need to include the last element, use <= array.length - 1. ' +
+          'Account for null terminators in C string buffers.',
+      });
+    }
+  }
+
+  return { cwe: 'CWE-193', name: 'Off-by-One Error', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
 // CWE-194: Unexpected Sign Extension
 //
 // A signed value is widened (e.g., int8 to int32) and the sign bit propagates,
@@ -23295,12 +23512,14 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
   const DOUBLE_TO_FLOAT = /\(\s*float\s*\)\s*\w+|\bfloat\s+\w+\s*=\s*(?:\w+\s*;).*\bdouble\b|\bf32\s+.*\bf64\b/i;
   // 64-bit to 32-bit truncation
   const INT64_TO_32 = /\(\s*(int|int32_t|i32|uint32_t|u32|DWORD)\s*\)\s*\(?\s*(?:\w+).*\b(long\s+long|int64_t|i64|uint64_t|u64|size_t|__int64)\b/i;
+  // Java/C narrowing cast: int/long to byte, short, or char (e.g. (byte)data, (short)val)
+  const NARROWING_CAST = /\(\s*(byte|short|char|int8_t|int16_t|uint8_t|uint16_t)\s*\)\s*\w+/;
   // Large return truncated to small
   const TRUNCATED_RETURN = /\b(int|short|char|int32_t|int16_t|int8_t)\s+\w+\s*\(\s*\).*return\s+\w+/;
   // JavaScript: large number operations that lose precision
   const JS_PRECISION_LOSS = /\bNumber\(\s*\w+\s*\).*(?:id|key|timestamp|snowflake)|\b(?:id|key|timestamp|snowflake)\w*\s*=\s*(?:parseInt|Number|\+)\s*\(/i;
 
-  const SAFE_PATTERN = /\bif\s*\(.*(?:>|<=?)\s*(?:FLT_MAX|FLOAT_MAX|INT32_MAX|INT_MAX|MAX_SAFE_INTEGER|Number\.MAX_SAFE_INTEGER|2147483647|f32::MAX)\b|\bBigInt\b|\btry_from\b|\btry_into\b|\bsafe_cast\b|\bnarrow_cast\b/i;
+  const SAFE_PATTERN = /\bif\s*\(.*(?:>|<=?)\s*(?:FLT_MAX|FLOAT_MAX|INT32_MAX|INT_MAX|MAX_SAFE_INTEGER|Number\.MAX_SAFE_INTEGER|2147483647|f32::MAX|Byte\.MIN_VALUE|Byte\.MAX_VALUE|Short\.MIN_VALUE|Short\.MAX_VALUE|Character\.MIN_VALUE|Character\.MAX_VALUE|CHAR_MAX|SCHAR_MAX|SHRT_MAX|UCHAR_MAX|USHRT_MAX)\b|\bBigInt\b|\btry_from\b|\btry_into\b|\bsafe_cast\b|\bnarrow_cast\b|\bMath\.toIntExact\b/i;
 
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
@@ -23329,6 +23548,22 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
           `0x40000000 (1GB) — security checks on the truncated value are meaningless.`,
         fix: 'Validate before truncation: if (val > INT32_MAX) error. Use 64-bit types consistently. ' +
           'For IDs that may exceed 32 bits, use string representation.',
+      });
+    }
+
+    if (NARROWING_CAST.test(code)) {
+      const m = code.match(NARROWING_CAST);
+      const targetType = m ? m[1] : 'smaller type';
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: `CONTROL (validate value fits in ${targetType} range before narrowing cast)`,
+        severity: 'medium',
+        description: `${node.label} narrows a value to ${targetType} via cast. ` +
+          `Java/C narrowing casts silently discard upper bits — an int value of 256 becomes 0 ` +
+          `when cast to byte, and -129 becomes 127. Data from external sources (network, file, ` +
+          `user input) can be any value, making unchecked narrowing a truncation vulnerability.`,
+        fix: `Validate before cast: if (val < ${targetType === 'byte' ? 'Byte' : targetType === 'short' ? 'Short' : 'Character'}.MIN_VALUE || val > ${targetType === 'byte' ? 'Byte' : targetType === 'short' ? 'Short' : 'Character'}.MAX_VALUE) error. ` +
+          'Use the wider type throughout, or use Math.toIntExact() for long-to-int in Java.',
       });
     }
 
@@ -33241,6 +33476,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-187': verifyCWE187,
   'CWE-188': verifyCWE188,
   'CWE-192': verifyCWE192,
+  'CWE-193': verifyCWE193,
   'CWE-194': verifyCWE194,
   'CWE-195': verifyCWE195,
   'CWE-196': verifyCWE196,

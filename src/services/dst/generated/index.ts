@@ -78,7 +78,7 @@ const HAND_WRITTEN_OVERRIDES: ReadonlySet<string> = new Set([
   'CWE-99', 'CWE-116', 'CWE-117', 'CWE-134', 'CWE-158', 'CWE-170',
   'CWE-176', 'CWE-177', 'CWE-178', 'CWE-179', 'CWE-180', 'CWE-182',
   'CWE-183', 'CWE-185', 'CWE-186', 'CWE-187', 'CWE-188', 'CWE-192',
-  'CWE-194', 'CWE-195', 'CWE-196', 'CWE-197', 'CWE-198',
+  'CWE-193', 'CWE-194', 'CWE-195', 'CWE-196', 'CWE-197', 'CWE-198',
   // --- Memory safety & arithmetic ---
   'CWE-119', 'CWE-120', 'CWE-125', 'CWE-126', 'CWE-127', 'CWE-131',
   'CWE-190', 'CWE-191', 'CWE-369', 'CWE-476',
