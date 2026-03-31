@@ -908,6 +908,105 @@ export function scopeBasedTaintReaches(
 }
 
 // ---------------------------------------------------------------------------
+// Sink domain classification — prevents cross-domain false positives
+// ---------------------------------------------------------------------------
+// When a factory CWE targets a broad node type (e.g. EXTERNAL), we need to
+// know whether the actual sink is a shell command, SQL query, URL request,
+// LDAP query, etc.  A shell-injection CWE should not fire on a URL sink.
+//
+// Backported from ZeroDay ZDAY-002 domain mismatch detection.
+
+export type SinkDomain = 'SQL' | 'HTML' | 'SHELL' | 'FILE' | 'LDAP' | 'URL' | 'XML' | 'CRYPTO' | 'UNKNOWN';
+
+const DOMAIN_SQL_RE   = /\b(query|execute|prepare|sql|SELECT\s|INSERT\s|UPDATE\s|DELETE\s|\.run\s*\(|\.exec\s*\(|Statement|ResultSet|hibernate|HQL|JPQL|criteria|createQuery|createNativeQuery|preparedStatement)\b/i;
+const DOMAIN_HTML_RE  = /\b(render|\.send\s*\(|\.write\s*\(|\.html\s*\(|innerHTML|document\.write|\.append\(|response\.getWriter|HttpServletResponse|\.setContentType.*text\/html)\b/i;
+const DOMAIN_SHELL_RE = /\b(exec\s*\(|spawn\s*\(|system\s*\(|popen|child_process|Runtime\.exec|Runtime\.getRuntime|ProcessBuilder|shell_exec|os\.system|subprocess|execSync|execFile|ShellExecute)\b/i;
+const DOMAIN_FILE_RE  = /\b(readFile|writeFile|open\s*\(|createStream|FileInputStream|FileOutputStream|fopen|fwrite|fread|createReadStream|createWriteStream|path\.join|path\.resolve|File\s*\(|RandomAccessFile|BufferedReader.*FileReader)\b/i;
+const DOMAIN_LDAP_RE  = /\b(ldap|LDAP|ldap_search|ldap_bind|ldap_connect|DirContext|InitialDirContext|LdapContext|searchFilter)\b/i;
+const DOMAIN_URL_RE   = /\b(URL|openStream|openConnection|HttpClient|HttpURLConnection|fetch\s*\(|axios|request\s*\(|http\.get|https\.get|curl|wget|URLConnection|HttpGet|HttpPost|RestTemplate|WebClient|\.getInputStream\s*\(\s*\))\b/i;
+const DOMAIN_XML_RE   = /\b(XQuery|xquery|xmldb|XPath|xpath|SAXParser|DocumentBuilder|XMLReader|XMLParser|parseXML|etree\.parse|xml\.parse|DTD|DOCTYPE)\b/i;
+
+/**
+ * Classify what security domain a sink node operates in.
+ * Uses code_snapshot + node_subtype for classification.
+ * Returns UNKNOWN if no confident match — UNKNOWN sinks are never filtered out.
+ */
+export function classifySinkDomain(node: NeuralMapNode): SinkDomain {
+  const code = node.code_snapshot + ' ' + (node.analysis_snapshot || '') + ' ' + node.node_subtype;
+
+  // Order matters: more specific before less specific.
+  // LDAP before SQL (ldap_search contains "search" but is LDAP, not SQL).
+  // SHELL before URL (exec could be SQL exec or shell exec — check shell-specific first).
+  if (DOMAIN_LDAP_RE.test(code))  return 'LDAP';
+  if (DOMAIN_SHELL_RE.test(code)) return 'SHELL';
+  if (DOMAIN_SQL_RE.test(code))   return 'SQL';
+  if (DOMAIN_XML_RE.test(code))   return 'XML';
+  if (DOMAIN_URL_RE.test(code))   return 'URL';
+  if (DOMAIN_HTML_RE.test(code))  return 'HTML';
+  if (DOMAIN_FILE_RE.test(code))  return 'FILE';
+  return 'UNKNOWN';
+}
+
+/**
+ * Map of CWE IDs to the sink domain(s) they apply to.
+ * CWEs NOT listed here are domain-agnostic and fire on any sink.
+ *
+ * This is the core of the cross-domain false-positive suppression:
+ * if a CWE is listed here, the factory verifier will only create a finding
+ * when the sink's classified domain is in the CWE's allowed set.
+ *
+ * UNKNOWN-domain sinks are NEVER filtered out (conservative: if we can't
+ * classify the sink, we let the CWE fire to avoid false negatives).
+ */
+const CWE_DOMAIN_MAP: Record<string, ReadonlySet<SinkDomain>> = {
+  // Shell / command injection
+  'CWE-77':  new Set(['SHELL']),
+  'CWE-78':  new Set(['SHELL']),
+  'CWE-88':  new Set(['SHELL']),
+  'CWE-214': new Set(['SHELL']),        // visible sensitive info in process args
+
+  // SQL injection
+  'CWE-89':  new Set(['SQL']),
+  'CWE-564': new Set(['SQL']),           // Hibernate SQL injection
+
+  // XSS / HTML injection
+  'CWE-79':  new Set(['HTML']),
+  'CWE-80':  new Set(['HTML']),
+
+  // LDAP injection
+  'CWE-90':  new Set(['LDAP']),
+
+  // XML/XQuery injection
+  'CWE-91':  new Set(['XML']),
+  'CWE-643': new Set(['XML']),           // XPath injection
+  'CWE-652': new Set(['XML']),           // XQuery injection
+  'CWE-827': new Set(['XML']),           // DTD control
+
+  // SSRF / URL
+  'CWE-918': new Set(['URL']),
+
+  // Path traversal / file
+  'CWE-22':  new Set(['FILE']),
+  'CWE-23':  new Set(['FILE']),
+  'CWE-36':  new Set(['FILE']),
+  'CWE-73':  new Set(['FILE']),
+};
+
+/**
+ * Check whether a CWE should fire on a given sink node.
+ * Returns true if the CWE should fire (domain matches or CWE is domain-agnostic).
+ * Returns false only when the CWE is domain-specific AND the sink's domain
+ * is confidently classified as a DIFFERENT domain.
+ */
+export function cweDomainMatchesSink(cweId: string, sink: NeuralMapNode): boolean {
+  const allowedDomains = CWE_DOMAIN_MAP[cweId];
+  if (!allowedDomains) return true;                     // domain-agnostic CWE: always fires
+  const sinkDomain = classifySinkDomain(sink);
+  if (sinkDomain === 'UNKNOWN') return true;            // can't classify sink: let it fire (conservative)
+  return allowedDomains.has(sinkDomain);
+}
+
+// ---------------------------------------------------------------------------
 // Generic factory — configurable source, sink, safe pattern
 // ---------------------------------------------------------------------------
 
@@ -926,6 +1025,8 @@ export function createGenericVerifier(
 
     for (const src of sources) {
       for (const sink of sinks) {
+        // Domain filter: skip sinks whose domain doesn't match this CWE
+        if (!cweDomainMatchesSink(cweId, sink)) continue;
         if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
           // V4-D: check scope snapshots (analysis_snapshot) so safe patterns on prior lines are visible
           const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
@@ -1022,6 +1123,8 @@ export function makeVerifier(
     for (const src of sources) {
       for (const sink of sinks) {
         if (src.id === sink.id) continue;
+        // Domain filter: skip sinks whose domain doesn't match this CWE
+        if (!cweDomainMatchesSink(cweId, sink)) continue;
         if (bfsCheck(map, src.id, sink.id)) {
           if (!safePattern.test(sink.code_snapshot) && !safePattern.test(src.code_snapshot)) {
             findings.push({

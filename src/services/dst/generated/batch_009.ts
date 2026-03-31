@@ -10,7 +10,7 @@
 
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
-  nodeRef, nodesOfType, hasPathWithoutTransform,
+  nodeRef, nodesOfType, hasPathWithoutTransform, cweDomainMatchesSink,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -76,6 +76,8 @@ function createExternalNoTransformVerifier(
 
     for (const src of ingress) {
       for (const sink of sinks) {
+        // Domain filter: skip sinks whose domain doesn't match this CWE
+        if (!cweDomainMatchesSink(cweId, sink)) continue;
         if (hasPathWithoutTransform(map, src.id, sink.id)) {
           if (!safePattern.test(sink.code_snapshot)) {
             findings.push({
