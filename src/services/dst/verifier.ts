@@ -286,6 +286,108 @@ function isLibraryCode(map: NeuralMap): boolean {
 }
 
 /**
+ * Detect whether the code under analysis operates in a web/API framework context.
+ *
+ * Auth/authz CWEs (287, 306, 862, 602, 639) check for the ABSENCE of authentication
+ * or authorization on data flows.  In standalone utility code, console tools, math
+ * operations, etc., there is no expectation of auth — flagging them is pure noise.
+ *
+ * This gate returns `true` when positive evidence of a web/API context is found:
+ *   - Java: HttpServlet, Spring MVC/Boot, Struts, JAX-RS, JSF
+ *   - Node: Express, Fastify, Koa, Hapi, NestJS route definitions
+ *   - Python: Flask, Django, FastAPI, Tornado, WSGI
+ *   - PHP: Laravel, Symfony, WordPress, $_GET/$_POST
+ *   - Go: net/http, gin, chi, echo, fiber
+ *   - Rust: actix-web, axum, rocket, warp
+ *   - Ruby: Rails, Sinatra
+ *   - C#: ASP.NET, [ApiController], MapGet/MapPost
+ *   - Kotlin: Ktor, Spring
+ *   - Swift: Vapor
+ *   - Graph structure: STRUCTURAL nodes with subtype route_def, or INGRESS nodes
+ *     with HTTP-related subtypes
+ *
+ * If none of these signals are present, the code is not web-facing and auth CWEs
+ * should not fire.
+ */
+function hasWebFrameworkContext(map: NeuralMap): boolean {
+  // --- Graph-level signals ---
+  // Any route_def STRUCTURAL node means the mapper already identified route handlers
+  if (map.nodes.some(n => n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def')) {
+    return true;
+  }
+  // INGRESS nodes with HTTP-related subtypes
+  if (map.nodes.some(n =>
+    n.node_type === 'INGRESS' &&
+    /http|request_param|query_param|route|api/.test(n.node_subtype)
+  )) {
+    return true;
+  }
+
+  // --- Source-code-level signals ---
+  const allCode = map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+
+  // Java web frameworks — NOTE: do NOT match bare "import javax.servlet" because Juliet
+  // includes that import in ALL files (even console-only ones). Require structural evidence:
+  // class extends a servlet, method accepts HTTP params, or Spring/JAX-RS annotations.
+  if (/\b(extends\s+(?:HttpServlet|AbstractTestCaseServlet\w*|GenericServlet)|@WebServlet|@Controller\b|@RestController\b|@RequestMapping\b|@GetMapping\b|@PostMapping\b|@PutMapping\b|@DeleteMapping\b|@PatchMapping\b|@WebFilter\b|ActionForm|ActionMapping|@Path\b|@GET\b|@POST\b|@PUT\b|@DELETE\b|FacesServlet|@ManagedBean)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Node.js / JS web frameworks
+  if (/\b(app\.(get|post|put|delete|patch|use|route)\s*\(|router\.(get|post|put|delete|patch|use|route)\s*\(|fastify\.(get|post|put|delete|register)\s*\(|server\.route\s*\(|@Controller\s*\(|@Get\s*\(|@Post\s*\(|@Put\s*\(|@Delete\s*\(|Elysia\s*\()\b/.test(allCode)) {
+    return true;
+  }
+
+  // Python web frameworks
+  if (/\b(@app\.route|@app\.(get|post|put|delete)|@blueprint\.route|url_patterns\b|urlpatterns\b|path\s*\(\s*['"]|@api_view|class\s+\w+.*\bAPIView\b|class\s+\w+.*\bViewSet\b|@router\.(get|post|put|delete))\b/.test(allCode)) {
+    return true;
+  }
+
+  // PHP web frameworks
+  if (/\b(Route::(get|post|put|delete|patch|middleware)|->middleware\s*\(|\$_(GET|POST|REQUEST|SERVER|COOKIE)|class\s+\w+Controller\s+extends\s+Controller)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Go web frameworks
+  if (/\b(http\.Handle(?:Func)?\s*\(|\.GET\s*\(|\.POST\s*\(|\.PUT\s*\(|\.DELETE\s*\(|r\.Route\s*\(|chi\.NewRouter|echo\.New|gin\.Default|gin\.New|fiber\.New)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Rust web frameworks
+  if (/\b(#\[(?:get|post|put|delete|patch)\s*\(|web::\w+|HttpServer::new|axum::Router|rocket::routes|warp::path)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Ruby web frameworks
+  if (/\b(Rails\.application\.routes|resources?\s+:\w+|get\s+['"]\/|post\s+['"]\/|class\s+\w+Controller\s*<\s*ApplicationController|Sinatra::Base)\b/.test(allCode)) {
+    return true;
+  }
+
+  // C# / ASP.NET
+  if (/\b(\[ApiController\]|\[HttpGet\]|\[HttpPost\]|\[HttpPut\]|\[HttpDelete\]|\[Route\s*\(|MapGet\s*\(|MapPost\s*\(|MapPut\s*\(|MapDelete\s*\(|ControllerBase|Controller\s*:\s*Controller)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Kotlin Ktor / Spring
+  if (/\b(routing\s*\{|get\s*\(\s*["']\/|post\s*\(\s*["']\/|call\.respond|call\.receive|@RequestMapping|@GetMapping|@PostMapping)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Swift Vapor
+  if (/\b(app\.(get|post|put|delete)\s*\(|req\.content\.decode|routes\s*\(\s*\w+\s*:\s*RoutesBuilder)\b/.test(allCode)) {
+    return true;
+  }
+
+  // Generic: method parameters with HTTP request/response types.
+  // Match as method parameter (after '(' or ',') not just in import statements.
+  if (/[,(]\s*(HttpServletRequest|HttpServletResponse|HttpRequest|HttpResponse|ServerRequest|ServerResponse)\s+\w+/.test(allCode)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Check if tainted data flows from source to sink without passing through a CONTROL node.
  * Delegates to the unified hasPathWithoutGate from _helpers.ts (index-based O(n) BFS).
  */
@@ -415,13 +517,39 @@ function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: string): 
 function verifyCWE89(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
-  const storage = map.nodes.filter(n =>
-    n.node_type === 'STORAGE' &&
-    (n.node_subtype.includes('sql') || n.node_subtype.includes('query') ||
-     n.node_subtype.includes('db_read') || n.node_subtype.includes('db_write') ||
-     n.attack_surface.includes('sql_sink') ||
-     (n.analysis_snapshot || n.code_snapshot).match(/\b(query|exec|execute\w*|prepare|raw)\s*\(/i) !== null)
-  );
+
+  // Cross-domain exclusion: subtypes belonging to other injection domains must NOT
+  // trigger SQL injection.  "xpath_query" and "ldap_query" contain the substring
+  // "query" which caused CWE-89 to fire on XPath/LDAP code.
+  const NON_SQL_QUERY_DOMAINS = /^(xpath_query|ldap_query|nosql_query|graphql_query|mongo_query|redis_query)$/;
+
+  // File-domain exclusion: STORAGE nodes that are file operations (file_read, file_write,
+  // file_access, etc.) should not be treated as SQL sinks. These fire on path traversal
+  // code where file.exists()/FileInputStream are misidentified as "query" sinks.
+  const FILE_DOMAIN_SUBTYPE = /\bfile/i;
+  const FILE_DOMAIN_CODE = /\b(File|FileInputStream|FileOutputStream|FileReader|FileWriter|BufferedReader|BufferedWriter|RandomAccessFile|file\.exists|file\.isFile|file\.isDirectory|Files\.(read|write|copy|move|delete)|createReadStream|createWriteStream|readFile|writeFile|fopen|fread|fwrite)\b/;
+  const SQL_DOMAIN_CODE = /\b(Statement|PreparedStatement|ResultSet|Connection|DriverManager|executeQuery|executeUpdate|executeBatch|createStatement|prepareStatement|SELECT\s|INSERT\s|UPDATE\s|DELETE\s|FROM\s|WHERE\s|CREATE\s+TABLE|DROP\s+TABLE|sql|SQL|jdbc)\b/;
+
+  const storage = map.nodes.filter(n => {
+    if (n.node_type !== 'STORAGE') return false;
+    if (NON_SQL_QUERY_DOMAINS.test(n.node_subtype)) return false;
+
+    // If node subtype is file-related and NOT sql-related, skip it
+    if (FILE_DOMAIN_SUBTYPE.test(n.node_subtype) && !n.node_subtype.includes('sql')) return false;
+
+    const matchesSubtype = n.node_subtype.includes('sql') || n.node_subtype.includes('query') ||
+      n.node_subtype.includes('db_read') || n.node_subtype.includes('db_write');
+    const matchesAttack = n.attack_surface.includes('sql_sink');
+    const snap = n.analysis_snapshot || n.code_snapshot;
+    const matchesCode = /\b(query|exec|execute\w*|prepare|raw)\s*\(/i.test(snap);
+
+    if (!matchesSubtype && !matchesAttack && !matchesCode) return false;
+
+    // If the code snapshot looks like file-domain code with no SQL indicators, exclude it
+    if (FILE_DOMAIN_CODE.test(snap) && !SQL_DOMAIN_CODE.test(snap)) return false;
+
+    return true;
+  });
 
   for (const src of ingress) {
     for (const sink of storage) {
@@ -1055,6 +1183,11 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
  * Similar to CONTROL-gating but checks specifically for AUTH nodes.
  */
 function verifyCWE306(map: NeuralMap): VerificationResult {
+  // Auth CWEs only apply to web/API code. Standalone utilities, console apps,
+  // math operations, etc. have no expectation of authentication.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-306', name: 'Missing Authentication', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
   const sensitive = map.nodes.filter(n =>
@@ -1289,8 +1422,12 @@ function verifyCWE611(map: NeuralMap): VerificationResult {
 
   // XML parser regex — matches across TRANSFORM, EXTERNAL, and STORAGE nodes
   const xmlParserPattern = /\b(parseXml|parseXmlString|parseXML|DOMParser|SAXParser|xml2js|libxml|libxmljs2?|etree\.parse|etree\.fromstring|xml\.sax|minidom\.parseString|XmlReader|ElementTree\.parse|lxml\.etree|parseFromString)\b/i;
+  // Cross-domain exclusion: XPath evaluation (xpath_query) selects nodes in an
+  // already-parsed document — it does NOT parse XML or process external entities.
+  // Including xpath_query caused CWE-611 to fire on CWE-643 XPath injection code.
   const xmlParsers = map.nodes.filter(n =>
     (n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL' || n.node_type === 'STORAGE') &&
+    n.node_subtype !== 'xpath_query' &&
     (n.node_subtype.includes('xml') || n.node_subtype.includes('xpath') ||
      n.attack_surface.includes('xml_parse') ||
      xmlParserPattern.test(n.analysis_snapshot || n.code_snapshot))
@@ -3851,6 +3988,11 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
  *  2. Find AUTH nodes that use weak/improper patterns (client-only checks, always-true)
  */
 function verifyCWE287(map: NeuralMap): VerificationResult {
+  // Auth CWEs only apply to web/API code. Standalone utilities, console apps,
+  // math operations, etc. have no expectation of authentication.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-287', name: 'Improper Authentication', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
   const authNodes = nodesOfType(map, 'AUTH');
@@ -3943,6 +4085,10 @@ function verifyCWE287(map: NeuralMap): VerificationResult {
  * check if ANY other INGRESS can reach the same sink WITHOUT auth.
  */
 function verifyCWE288(map: NeuralMap): VerificationResult {
+  // Auth bypass via alternate path only applies to web/API code.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-288', name: 'Authentication Bypass Using an Alternate Path or Channel', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
 
@@ -4448,7 +4594,9 @@ function verifyCWE521(map: NeuralMap): VerificationResult {
   );
 
   // Weak length patterns — min length below 8
-  const weakLengthPattern = /\.(length|len)\s*(<|<=|>=?|==)\s*[1-7]\b|minlength\s*[:=]\s*[1-7]\b|min\s*[:=]\s*[1-7]\b.*password|password.*min\s*[:=]\s*[1-7]\b/i;
+  // Note: The first alternative requires a password-related identifier before .length
+  // to avoid false positives from array-length checks like tokens.length < 2 in non-password contexts.
+  const weakLengthPattern = /\b(?:password|passwd|pwd|passphrase|pass)\w*\.(length|len)\s*(<|<=|>=?|==)\s*[1-7]\b|minlength\s*[:=]\s*[1-7]\b|min\s*[:=]\s*[1-7]\b.*password|password.*min\s*[:=]\s*[1-7]\b/i;
 
   // Good password validation patterns
   const strongPasswordPattern = /\b(minlength|min[_-]?length)\s*[:=]\s*([89]|\d{2,})\b|\.(length|len)\s*>=?\s*([89]|\d{2,})\b|\b(zxcvbn|haveibeenpwned|breach|complexity|strength)\b/i;
@@ -6738,6 +6886,11 @@ function verifyCWE776(map: NeuralMap): VerificationResult {
 
 /** CWE-862: Missing Authorization */
 function verifyCWE862(map: NeuralMap): VerificationResult {
+  // Auth CWEs only apply to web/API code. Standalone utilities, console apps,
+  // math operations, etc. have no expectation of authorization.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-862', name: 'Missing Authorization', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingressNodes862 = nodesOfType(map, 'INGRESS');
   // Always use INGRESS nodes as sources. In Express middleware patterns, AUTH nodes
@@ -11619,7 +11772,10 @@ function verifyCWE509(map: NeuralMap): VerificationResult {
 
   const SELF_READ_RE = /\b(__filename|__FILE__|process\.argv\[1\]|sys\.argv\[0\]|import\.meta\.url|module\.filename|inspect\.getfile|__file__|os\.path\.abspath\(__file__\))\b/i;
   const MODIFY_EXEC_RE = /\b(appendFile|writeFile|fs\.write|fwrite|file_put_contents|open\s*\(.*['"]a).*\.(js|py|rb|sh|bat|ps1|exe|dll|so|php|pl)|chmod\s+\+x|chmod\s+7/i;
-  const INJECT_RE = /\b(ptrace|WriteProcessMemory|VirtualAllocEx|CreateRemoteThread|NtWriteVirtualMemory|dlopen|LD_PRELOAD|DYLD_INSERT_LIBRARIES|process\.dlopen|ctypes\.windll|inject|hook.*process)/i;
+  // Note: bare "inject" was removed — it matched "Injection" in class/package names
+  // (e.g., CWE643_Xpath_Injection), causing cross-domain false positives.
+  // Kept specific process-injection APIs only.
+  const INJECT_RE = /\b(ptrace|WriteProcessMemory|VirtualAllocEx|CreateRemoteThread|NtWriteVirtualMemory|dlopen|LD_PRELOAD|DYLD_INSERT_LIBRARIES|process\.dlopen|ctypes\.windll|inject(?:_code|_dll|_shellcode|_payload|_thread|_process)\b|hook.*process)/i;
   const NET_SPREAD_RE = /\b(scp|rsync|psexec|wmic\s+.*process\s+call|net\s+use|ssh.*cat\s+.*>>|replicate|propagate|spread|infect)\b/i;
 
   for (const node of map.nodes) {
@@ -13277,6 +13433,10 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
  * patterns) with no server-side validation present.
  */
 function verifyCWE602(map: NeuralMap): VerificationResult {
+  // Client-side enforcement only matters in web/API contexts where there IS a client.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-602', name: 'Client-Side Enforcement of Server-Side Security', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingress602 = nodesOfType(map, 'INGRESS');
   const sinks602 = map.nodes.filter(n =>
@@ -13327,6 +13487,10 @@ function verifyCWE602(map: NeuralMap): VerificationResult {
  * client-side auth patterns without corresponding server-side verification.
  */
 function verifyCWE603(map: NeuralMap): VerificationResult {
+  // Client-side auth only matters in web contexts.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-603', name: 'Use of Client-Side Authentication', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingress603 = nodesOfType(map, 'INGRESS');
   // Client-side auth patterns -- auth logic that runs in the browser
@@ -13393,6 +13557,10 @@ function verifyCWE603(map: NeuralMap): VerificationResult {
  * uses it directly without verifying the user owns/has access to that resource.
  */
 function verifyCWE639(map: NeuralMap): VerificationResult {
+  // IDOR / user-controlled key only applies to web/API code with user-facing endpoints.
+  if (!hasWebFrameworkContext(map)) {
+    return { cwe: 'CWE-639', name: 'Authorization Bypass Through User-Controlled Key', holds: true, findings: [] };
+  }
   const findings: Finding[] = [];
   const ingress639 = nodesOfType(map, 'INGRESS');
   const idInputs639 = ingress639.filter(n =>
@@ -32455,10 +32623,20 @@ function verifyCWE533(map: NeuralMap): VerificationResult {
   const LOG_CALL_RE = /\b(?:this\.)?log\s*\(|\blogger\.\w+\s*\(|\bLOG\.\w+\s*\(|\bgetServletContext\(\)\.log\s*\(/i;
   const SENSITIVE_DATA_RE = /\b(session\.getId|password|token|secret|credential|ssn|creditCard|sessionId|Session\s*ID|getId\s*\(\))\b/i;
   const SAFE_LOG_RE = /\b(logged\s+in|login\s+successful|invalid\s+characters)\b/i;
+  // Cross-domain filter: a sensitive keyword like "password" appearing as a variable name
+  // in the same code block as an unrelated log call (e.g. error handling) is NOT a finding.
+  // Only flag when the sensitive data keyword appears on the SAME line as a log call.
+  const LOG_WITH_SENSITIVE_RE = /\b(?:(?:this\.)?log|logger\.\w+|LOG\.\w+|getServletContext\(\)\.log)\s*\([^)]*\b(session\.getId|password|token|secret|credential|ssn|creditCard|sessionId|getId\s*\(\))\b/i;
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (!code) continue;
-    if (LOG_CALL_RE.test(code) && SENSITIVE_DATA_RE.test(code) && !SAFE_LOG_RE.test(code)) {
+    if (SAFE_LOG_RE.test(code)) continue;
+    // Check line-level co-occurrence: sensitive data must appear in a line that also has a log call
+    const lines = code.split('\n');
+    const hasLogWithSensitive = lines.some(line =>
+      LOG_CALL_RE.test(line) && SENSITIVE_DATA_RE.test(line)
+    ) || LOG_WITH_SENSITIVE_RE.test(code);
+    if (hasLogWithSensitive) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (filter sensitive data from server logs)', severity: 'medium',
         description: `Code at ${node.label} logs sensitive information to server log files.`,
         fix: 'Do not log session IDs, passwords, or other sensitive data.' });
