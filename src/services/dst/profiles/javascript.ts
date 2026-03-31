@@ -2376,6 +2376,8 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
             name: 'return', source: funcNode.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE',
           });
         }
+        // Set the functionReturnTaint flag for PASS 2 Step 4b
+        ctx.functionReturnTaint.set(funcNodeId, true);
       }
     }
   }
@@ -2396,6 +2398,8 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
                   name: 'return', source: funcNode.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE',
                 });
               }
+              // Set the functionReturnTaint flag for PASS 2 Step 4b
+              ctx.functionReturnTaint.set(funcNodeId, true);
             }
           }
         }

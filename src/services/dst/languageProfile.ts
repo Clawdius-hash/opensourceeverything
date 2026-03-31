@@ -249,6 +249,9 @@ export interface MapperContextLike {
   readonly functionRegistry: Map<string, string>;
   readonly pendingCalls: Array<{ callerContainerId: string; calleeName: string; isAsync: boolean }>;
   readonly pendingCallbackTaint: Map<string, string>;
+  /** Maps function STRUCTURAL node ID -> whether the function returns tainted data.
+   *  Set by postVisitFunction, read by PASS 2 return taint propagation. */
+  readonly functionReturnTaint: Map<string, boolean>;
   lastCreatedNodeId: string | null;
   nodeSequence: number;
   currentScope: any | null;

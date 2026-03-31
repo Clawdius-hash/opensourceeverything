@@ -97,6 +97,11 @@ export class MapperContext {
    *  Consumed by processFunctionParams to mark the params as tainted. */
   readonly pendingCallbackTaint = new Map<string, string>();
 
+  /** Maps function STRUCTURAL node ID -> whether the function returns tainted data.
+   *  Set by postVisitFunction during the walk, read by PASS 2 Step 4b
+   *  to propagate return taint to local_call nodes for forward-referenced functions. */
+  readonly functionReturnTaint = new Map<string, boolean>();
+
   /** The language profile driving this mapping session */
   readonly profile: LanguageProfile;
 
@@ -608,6 +613,53 @@ export class MapperContext {
             name: 'result', source: lc.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE',
           });
           break;
+        }
+      }
+    }
+
+    // Step 4b: Mark local_call nodes tainted if the called function's
+    // STRUCTURAL node has tainted data_out (set by postVisitFunction).
+    // This handles forward-referenced functions that RETURN tainted data
+    // but have no taint summary (e.g., readConfig() with internal System.getenv()).
+    for (const lc of allLocalCalls) {
+      if (lc.data_out.some(d => d.tainted)) continue; // already tainted
+      for (const [funcName, funcNodeId] of this.functionRegistry) {
+        const escaped = funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if ((lc.analysis_snapshot || lc.code_snapshot).match(
+          new RegExp('\\b' + escaped + '\\s*\\(')
+        ) !== null) {
+          const funcNode = nodeById.get(funcNodeId);
+          // Check STRUCTURAL node's data_out (set by postVisitFunction)
+          // OR the functionReturnTaint map (set during the walk)
+          if ((funcNode?.data_out.some(d => d.tainted)) ||
+              this.functionReturnTaint.get(funcNodeId) === true) {
+            lc.data_out.push({
+              name: 'return',
+              source: lc.id,
+              data_type: 'unknown',
+              tainted: true,
+              sensitivity: 'NONE' as const,
+            });
+            // Create DATA_FLOW from the function's INGRESS to this local_call
+            const contained = functionContainedNodes.get(funcNodeId) || [];
+            const ingressInFunc = contained.find(n => n.node_type === 'INGRESS');
+            if (ingressInFunc) {
+              const alreadyExists = ingressInFunc.edges.some(
+                e => e.edge_type === 'DATA_FLOW' && e.target === lc.id
+              );
+              if (!alreadyExists) {
+                const edge: Edge = {
+                  target: lc.id,
+                  edge_type: 'DATA_FLOW',
+                  conditional: false,
+                  async: false,
+                };
+                ingressInFunc.edges.push(edge);
+                this.neuralMap.edges.push({ ...edge, source: ingressInFunc.id });
+              }
+            }
+            break;
+          }
         }
       }
     }

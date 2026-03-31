@@ -2118,12 +2118,40 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       ctx.neuralMap.nodes.push(assignN); ctx.lastCreatedNodeId = assignN.id; ctx.emitContainsIfNeeded(assignN.id);
 
       const assignRight = node.childForFieldName('right');
+      let assignTainted = false;
       if (assignRight) {
         const taintSources = extractTaintSources(assignRight, ctx);
         if (taintSources.length > 0) {
           for (const source of taintSources) {
             ctx.addDataFlow(source.nodeId, assignN.id, source.name, 'unknown', true);
           }
+          assignTainted = true;
+        }
+
+        // Cross-function taint: result = getInput(request) via assignment
+        if (!assignTainted && assignRight.type === 'method_invocation') {
+          const callName = assignRight.childForFieldName('name');
+          if (callName?.type === 'identifier') {
+            const funcNodeId = ctx.functionRegistry.get(callName.text);
+            if (funcNodeId) {
+              // Check 1: funcReturnsTaint (function already walked)
+              const funcStructNode = ctx.neuralMap.nodes.find((n: any) => n.id === funcNodeId);
+              if (funcStructNode?.data_out.some((d: any) => d.tainted)) {
+                assignTainted = true;
+              }
+              // Check 2: findIngressInFunction (function has internal INGRESS)
+              if (!assignTainted) {
+                const ingressInFunc = findIngressInFunction(funcNodeId, ctx);
+                if (ingressInFunc) {
+                  assignTainted = true;
+                  ctx.addDataFlow(ingressInFunc, assignN.id, 'return_value', 'unknown', true);
+                }
+              }
+            }
+          }
+        }
+
+        if (assignTainted) {
           // Propagate taint to the variable being assigned
           if (assignLeft?.type === 'identifier') {
             const varInfo = ctx.resolveVariable(assignLeft.text);
@@ -2132,13 +2160,15 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
               varInfo.producingNodeId = assignN.id;
             }
           }
-          assignN.data_out.push({
-            name: 'result',
-            source: assignN.id,
-            data_type: 'unknown',
-            tainted: true,
-            sensitivity: 'NONE',
-          });
+          if (!assignN.data_out.some((d: any) => d.tainted)) {
+            assignN.data_out.push({
+              name: 'result',
+              source: assignN.id,
+              data_type: 'unknown',
+              tainted: true,
+              sensitivity: 'NONE',
+            });
+          }
         }
       }
 
@@ -2249,6 +2279,8 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
                 name: 'return', source: funcNode.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE',
               });
             }
+            // Also set the functionReturnTaint flag for PASS 2 Step 4b
+            ctx.functionReturnTaint.set(funcNodeId, true);
           }
           return; // one tainted return is enough
         }
