@@ -73,7 +73,7 @@ import type { VerificationResult } from './_helpers';
  */
 const HAND_WRITTEN_OVERRIDES: ReadonlySet<string> = new Set([
   // --- Injection, traversal, deserialization, SSRF, config control ---
-  'CWE-15', 'CWE-20', 'CWE-22', 'CWE-74', 'CWE-77', 'CWE-78', 'CWE-79', 'CWE-89',
+  'CWE-15', 'CWE-20', 'CWE-22', 'CWE-23', 'CWE-36', 'CWE-74', 'CWE-77', 'CWE-78', 'CWE-79', 'CWE-81', 'CWE-83', 'CWE-89',
   'CWE-90', 'CWE-91', 'CWE-93', 'CWE-94', 'CWE-95', 'CWE-96', 'CWE-98',
   'CWE-99', 'CWE-111', 'CWE-114', 'CWE-116', 'CWE-117', 'CWE-134', 'CWE-158', 'CWE-170',
   'CWE-176', 'CWE-177', 'CWE-178', 'CWE-179', 'CWE-180', 'CWE-182',

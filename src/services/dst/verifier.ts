@@ -708,6 +708,242 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
 }
 
 /**
+ * CWE-81: XSS in Error Message
+ * Pattern: INGRESS → error-output-sink without CONTROL(error-message encoding)
+ * Property: User input reflected in error pages/responses (sendError, error handler
+ * output, exception.getMessage() in response) must be encoded.
+ *
+ * This is a SPECIFIC sub-variant of CWE-79. The distinguishing factor is that the
+ * sink is an error-handling output path: sendError(), error page rendering, or
+ * exception message displayed to the user. Uses a different missingCategory than
+ * CWE-79 so family dedup keeps both findings.
+ */
+function verifyCWE81(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Sinks specific to CWE-81: error message output paths
+  const errorSinks = map.nodes.filter(n => {
+    const code = n.analysis_snapshot || n.code_snapshot;
+    const sub = n.node_subtype;
+    // Must be EGRESS or have output-like characteristics
+    if (n.node_type !== 'EGRESS' && n.node_type !== 'TRANSFORM') return false;
+    // Specific error-output sinks:
+    //   - response.sendError(status, message) — Java Servlet
+    //   - sendError / send_error patterns
+    //   - error page rendering (error.jsp, error handler, error template)
+    //   - exception.getMessage() flowing to response output
+    //   - res.status(4xx/5xx).send() patterns
+    //   - HttpServletResponse error methods
+    return (
+      /\bsendError\s*\(/i.test(code) ||
+      /\bsend_error\s*\(/i.test(code) ||
+      /\berror\s*page\b|\berror\s*handler\b|\berror\s*template\b/i.test(code) ||
+      /\b(get)?[Mm]essage\s*\(\s*\)/.test(code) && /\b(print|write|send|render|display)\b/i.test(code) ||
+      /\bres\s*\.\s*status\s*\(\s*[45]\d{2}\s*\)\s*\.\s*send\b/i.test(code) ||
+      /\bresponse\.sendError\b/i.test(code) ||
+      sub.includes('error') ||
+      sub.includes('sendError')
+    );
+  });
+
+  // Also check all EGRESS nodes whose containing scope has sendError / error-output patterns
+  const egressWithErrorScope = map.nodes.filter(n => {
+    if (n.node_type !== 'EGRESS') return false;
+    if (errorSinks.some(s => s.id === n.id)) return false; // already captured
+    const scopeSnaps = getContainingScopeSnapshots(map, n.id);
+    const scopeCode = stripComments(scopeSnaps.join('\n'));
+    return /\bsendError\s*\(/i.test(scopeCode) ||
+           /\bresponse\.sendError\b/i.test(scopeCode);
+  });
+
+  const allErrorSinks = [...errorSinks, ...egressWithErrorScope];
+
+  for (const src of ingress) {
+    for (const sink of allErrorSinks) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+          sinkHasTaintedDataIn(map, sink.id) ||
+          scopeBasedTaintReaches(map, src.id, sink.id)) {
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+        const isEncoded = /\bescape\s*\(|\bescapeHtml\b|\bhtmlEncode\s*\(|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i.test(combinedScope);
+
+        if (!isEncoded) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'ERROR_ENCODING (encode user data in error responses)',
+            severity: 'high',
+            description: `User input from ${src.label} is reflected in an error response at ${sink.label} without encoding. ` +
+              `Error pages that echo user input (e.g. sendError with tainted data) enable reflected XSS.`,
+            fix: 'HTML-encode all user-controlled values before including them in error messages or error pages. ' +
+              'Use HttpServletResponse.sendError() only with static messages, or encode dynamic values with ESAPI/HtmlUtils.',
+          });
+        }
+      }
+    }
+  }
+
+  // Source-line scan: look for sendError with string concatenation (direct pattern match)
+  if (findings.length === 0) {
+    for (const node of map.nodes) {
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      // Pattern: sendError(statusCode, <anything> + variable) — tainted data in error message
+      if (/\bsendError\s*\(\s*\d+\s*,\s*[^)]*\+\s*\w/i.test(code)) {
+        // Check if any INGRESS variable is referenced
+        for (const src of ingress) {
+          const srcLabel = src.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Check if the ingress label or common tainted variable names appear near the sendError
+          if (new RegExp(`\\b(data|input|param|${srcLabel})\\b`, 'i').test(code)) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(node),
+              missing: 'ERROR_ENCODING (encode user data in error responses)',
+              severity: 'high',
+              description: `User input flows to sendError() at ${node.label} via string concatenation. ` +
+                `Error messages that include unsanitized user data enable reflected XSS in error pages.`,
+              fix: 'HTML-encode user-controlled values before passing to sendError(). ' +
+                'Use ESAPI.encoder().encodeForHTML() or HtmlUtils.htmlEscape() on dynamic values.',
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-81',
+    name: 'XSS in Error Message',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
+/**
+ * CWE-83: XSS in HTML Attribute
+ * Pattern: INGRESS → attribute-context-sink without CONTROL(attribute encoding)
+ * Property: User input inserted into HTML attribute values (href, src, onclick, style,
+ * event handlers, etc.) must be attribute-encoded.
+ *
+ * This is a SPECIFIC sub-variant of CWE-79. The distinguishing factor is that the
+ * output context is an HTML attribute value, where the attacker can break out of
+ * the attribute or inject event handlers. Uses a different missingCategory than
+ * CWE-79 so family dedup keeps both findings.
+ */
+function verifyCWE83(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Attribute-context HTML output pattern
+  const ATTR_CONTEXT_RE = /\b(href|src|action|formaction|onclick|onload|onerror|onmouseover|onfocus|onblur|onchange|onsubmit|style|data-\w+|value|class|id|name|type|alt|title)\s*=\s*["']/i;
+  const IMG_TAG_RE = /<img\b[^>]*\bsrc\s*=\s*["'][^"']*\+|<img\b[^>]*\bsrc\s*=\s*["']\s*"\s*\+/i;
+  const ATTR_CONCAT_RE = /\b(href|src|action|formaction|onclick|onload|onerror|onmouseover|style)\s*=\s*["'][^"']*["']\s*\+\s*\w|\b(href|src|action|formaction|onclick|onload|onerror|onmouseover|style)\s*=\s*["'][^"']*\+\s*\w/i;
+
+  // Sinks specific to CWE-83: EGRESS nodes that produce output in an attribute context
+  const attrSinks = map.nodes.filter(n => {
+    if (n.node_type !== 'EGRESS') return false;
+    const code = n.analysis_snapshot || n.code_snapshot;
+    const sub = n.node_subtype;
+    return (
+      // Direct attribute-context patterns in code
+      ATTR_CONTEXT_RE.test(code) ||
+      IMG_TAG_RE.test(code) ||
+      ATTR_CONCAT_RE.test(code) ||
+      // Subtype hints for attribute context
+      sub.includes('attribute') ||
+      sub.includes('attr') ||
+      // setAttribute calls
+      /\bsetAttribute\s*\(/i.test(code) ||
+      // HTML output with attribute patterns: println("<tag attr=\"" + data + "\">")
+      /\bprintln\s*\(\s*"[^"]*<\w+\s+[^>]*=\s*\\?["'][^"]*"\s*\+/i.test(code) ||
+      /\bprint\s*\(\s*"[^"]*<\w+\s+[^>]*=\s*\\?["'][^"]*"\s*\+/i.test(code) ||
+      /\bwrite\s*\(\s*"[^"]*<\w+\s+[^>]*=\s*\\?["'][^"]*"\s*\+/i.test(code)
+    );
+  });
+
+  // Also check EGRESS nodes whose containing scope reveals attribute-context output
+  const egressWithAttrScope = map.nodes.filter(n => {
+    if (n.node_type !== 'EGRESS') return false;
+    if (attrSinks.some(s => s.id === n.id)) return false;
+    const scopeSnaps = getContainingScopeSnapshots(map, n.id);
+    const scopeCode = stripComments(scopeSnaps.join('\n'));
+    return (
+      IMG_TAG_RE.test(scopeCode) ||
+      ATTR_CONCAT_RE.test(scopeCode) ||
+      // Common Juliet pattern: response.getWriter().println("<br>bad() - <img src=\"" + data + "\">");
+      /\bprintln\s*\(\s*"[^"]*<img\s+src\s*=\s*\\"/i.test(scopeCode) ||
+      /\bprintln\s*\(\s*"[^"]*<\w+\s+\w+\s*=\s*\\"/i.test(scopeCode)
+    );
+  });
+
+  const allAttrSinks = [...attrSinks, ...egressWithAttrScope];
+
+  for (const src of ingress) {
+    for (const sink of allAttrSinks) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+          sinkHasTaintedDataIn(map, sink.id) ||
+          scopeBasedTaintReaches(map, src.id, sink.id)) {
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+
+        // Attribute-context requires attribute-specific encoding (not just HTML encoding)
+        const isEncoded = /\bescapeHtml\b|\bescapeAttribute\b|\bhtmlEncode\s*\(|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bencodeForHTMLAttribute\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b|\bencodeURIComponent\b/i.test(combinedScope);
+        // URL validation for href/src attributes
+        const hasUrlValidation = /\ballowlist\b|\bwhitelist\b|\bvalid.*url\b|\burl.*valid\b|\bhttps?:\/\/\b.*\bonly\b/i.test(combinedScope);
+
+        if (!isEncoded && !hasUrlValidation) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'ATTRIBUTE_ENCODING (encode user data in HTML attributes)',
+            severity: 'high',
+            description: `User input from ${src.label} is inserted into an HTML attribute context at ${sink.label} without encoding. ` +
+              `Attacker can break out of the attribute value or inject event handlers (e.g. " onmouseover="alert(1)).`,
+            fix: 'Use attribute-context encoding (encodeForHTMLAttribute / ESAPI) for all user input in HTML attributes. ' +
+              'Always quote attribute values. For URL attributes (href, src), validate against an allowlist of safe schemes.',
+          });
+        }
+      }
+    }
+  }
+
+  // Source-line scan: look for attribute-context concatenation patterns
+  if (findings.length === 0) {
+    for (const node of map.nodes) {
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      // Pattern: println/print/write with HTML attribute + string concatenation
+      if (/\b(println|print|write)\s*\(\s*"[^"]*<\w+\s+\w+\s*=\s*\\?["'][^"]*"\s*\+\s*\w/i.test(code) ||
+          /\b(println|print|write)\s*\(\s*"[^"]*<img\s+src\s*=\s*\\"/i.test(code)) {
+        for (const src of ingress) {
+          const srcLabel = src.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (new RegExp(`\\b(data|input|param|${srcLabel})\\b`, 'i').test(code)) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(node),
+              missing: 'ATTRIBUTE_ENCODING (encode user data in HTML attributes)',
+              severity: 'high',
+              description: `User input flows into an HTML attribute at ${node.label} via string concatenation. ` +
+                `Tainted data in attribute values (src, href, event handlers) enables XSS via attribute injection.`,
+              fix: 'Use encodeForHTMLAttribute() or ESAPI encoding for user input in attributes. ' +
+                'Validate URL attributes against an allowlist of safe protocols.',
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-83',
+    name: 'XSS in Attribute',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
+/**
  * CWE-22: Path Traversal
  * Pattern: INGRESS → STORAGE(filesystem) without CONTROL(path validation)
  * Property: All file operations validate that paths stay within allowed directories
@@ -937,6 +1173,414 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   return {
     cwe: 'CWE-22',
     name: 'Path Traversal',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
+/**
+ * CWE-23: Relative Path Traversal
+ * UPGRADED — hand-written with specific detection for relative traversal sequences.
+ *
+ * Distinct from CWE-22 (generic path traversal):
+ *   CWE-23 specifically targets the case where tainted input is CONCATENATED to a base
+ *   directory path (e.g. `root + data`, `basePath + userInput`). The risk is that the
+ *   attacker sends "../../../etc/passwd" to escape the base directory.
+ *
+ * Missing category: SANITIZE (different from CWE-22's CONTROL) so family dedup preserves both.
+ *
+ * Safe patterns: getCanonicalPath/getCanonicalFile, realpath, path.resolve followed by
+ *   startsWith, explicit ".." rejection, normalize + boundary check.
+ */
+function verifyCWE23(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+  const fileOps = map.nodes.filter(n =>
+    (n.node_type === 'STORAGE' &&
+     (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
+      n.node_subtype === 'file_access' || n.node_subtype === 'file_read' || n.node_subtype === 'file_write' ||
+      n.attack_surface.includes('file_access') ||
+      (n.analysis_snapshot || n.code_snapshot).match(/\b(readFile|writeFile|createReadStream|open|unlink|readdir)\b/i) !== null)) ||
+    (n.node_type === 'INGRESS' && n.node_subtype === 'file_read') ||
+    (n.node_type === 'EGRESS' && n.node_subtype === 'file_write') ||
+    (n.node_type === 'EGRESS' && n.node_subtype === 'file_serve')
+  );
+
+  // CWE-23-specific safe patterns: canonicalization or explicit dot-dot rejection
+  const RELATIVE_SAFE_RE = /\bgetCanonicalPath\b|\bgetCanonicalFile\b|\brealpath\b|\bpath\.resolve\b.*\bstartsWith\b|\bstartsWith\b.*\bpath\.resolve\b|\b\.contains\s*\(\s*["']\.\.["']\s*\)|\bindexOf\s*\(\s*["']\.\.["']\s*\)|\bincludes\s*\(\s*["']\.\.["']\s*\)|\bnormalize\b.*\bstartsWith\b|\bfilepath\.Clean\b|\bFilenameUtils\.normalize\b/i;
+
+  // Dead-branch neutralization detection (same as CWE-22)
+  let hasDeadBranchNeutralization = false;
+  if (map.source_code) {
+    const cleanSrc = stripComments(map.source_code);
+    const arithCondMatch = cleanSrc.match(/\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*>\s*(\d+)/);
+    if (arithCondMatch) {
+      const a = parseInt(arithCondMatch[1]!);
+      const b = parseInt(arithCondMatch[2]!);
+      const op = arithCondMatch[3]!;
+      const varName = arithCondMatch[4]!;
+      const threshold = parseInt(arithCondMatch[5]!);
+      const varDeclMatch = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
+      if (varDeclMatch) {
+        const varVal = parseInt(varDeclMatch[1]!);
+        const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
+        if (lhs > threshold) hasDeadBranchNeutralization = true;
+      }
+    }
+    if (!hasDeadBranchNeutralization) {
+      const charAtMatch = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
+      if (charAtMatch) {
+        const receiverVar = charAtMatch[1]!;
+        const charIdx = parseInt(charAtMatch[2]!);
+        const strDeclMatch = cleanSrc.match(new RegExp('String\\s+' + receiverVar + '\\s*=\\s*"([^"]*)"'));
+        if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
+          const selectedChar = strDeclMatch[1]![charIdx]!;
+          const caseMatch = cleanSrc.match(new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\""));
+          if (caseMatch) hasDeadBranchNeutralization = true;
+        }
+      }
+    }
+  }
+
+  // --- Strategy 1: Graph-based detection — INGRESS->file-op with path concatenation ---
+  for (const src of ingress) {
+    for (const sink of fileOps) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        if (hasDeadBranchNeutralization) continue;
+
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+
+        // CWE-23 specific: look for path concatenation at the SINK itself (base + input)
+        // This is the signature of relative traversal: the input is appended to a base dir
+        // Check the sink's own code snapshot for concatenation, not the full scope
+        const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
+        const hasSinkConcat = /new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter)\s*\(\s*\w+\s*\+/i.test(sinkCode) ||
+          /\bPaths\.get\s*\(\s*\w+\s*,/i.test(sinkCode) ||
+          /\bPath\.of\s*\(\s*\w+\s*,/i.test(sinkCode) ||
+          /\bpath\.join\s*\(/i.test(sinkCode) ||
+          /\bpath\.resolve\s*\(\s*\w+\s*,/i.test(sinkCode);
+        // Also check scope for base directory + variable concatenation patterns
+        const hasBaseDirConcat = /(?:root|base|dir|prefix|folder|upload)\s*\+\s*\w+/i.test(combinedScope) &&
+          /new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream)\b/i.test(combinedScope);
+
+        if ((hasSinkConcat || hasBaseDirConcat) && !RELATIVE_SAFE_RE.test(combinedScope)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'SANITIZE (relative path sequence filtering / canonicalization)',
+            severity: 'high',
+            description: `User input from ${src.label} is concatenated to a base directory at ${sink.label} without canonicalization. ` +
+              `An attacker can send "../" sequences to escape the intended directory and read/write arbitrary files.`,
+            fix: 'Canonicalize the combined path with File.getCanonicalPath() or path.resolve(), then verify the result ' +
+              'starts with the intended base directory. Reject any input containing ".." sequences.',
+          });
+        }
+      }
+    }
+  }
+
+  // --- Strategy 2: Source-code scanning fallback for Java ---
+  if (findings.length === 0 && map.source_code) {
+    const src = stripComments(map.source_code);
+    const normalized = src.replace(/\n\s*/g, ' ');
+    const stmts = normalized.split(';').map(s => s.trim());
+
+    // Detect taint sources (network, HTTP, etc.)
+    const javaSourceRe = /\b(?:request|req|httpRequest)\s*\.\s*(?:getParameter|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(|\.getValue\s*\(\s*\)|\.readLine\s*\(\s*\)/;
+    const hasUserSource = javaSourceRe.test(src);
+
+    // CWE-23 specific: file sink with concatenation (base + tainted)
+    // Pattern: new File(someBase + taintedVar) or Paths.get(base, taintedVar)
+    const concatFileSinkRe = /new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile|PrintWriter)\s*\(\s*(?:\w+\s*\+|\w+\s*,)/;
+    const hasConcatFileSink = concatFileSinkRe.test(normalized);
+
+    // Also detect: explicit base directory variable assigned then concatenated
+    const hasBaseDirConcat = /(?:root|base|dir|prefix|folder|upload|path)\s*\+\s*\w+/i.test(normalized) &&
+      /new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream)\b/i.test(normalized);
+
+    if (hasUserSource && (hasConcatFileSink || hasBaseDirConcat)) {
+      // Track tainted variables
+      const taintedVars = new Set<string>();
+      for (const stmt of stmts) {
+        const assignMatch = stmt.match(/\b(\w+)\s*=\s*.*(?:getParameter|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader|\.getValue|\.readLine)\s*\(/);
+        if (assignMatch) taintedVars.add(assignMatch[1]!);
+        const cookieMatch = stmt.match(/\b(\w+)\s*=\s*.*(?:URLDecoder\.decode|java\.net\.URLDecoder\.decode)\s*\(/);
+        if (cookieMatch) taintedVars.add(cookieMatch[1]!);
+        const headerMatch = stmt.match(/\b(\w+)\s*=\s*\w+\.nextElement\s*\(/);
+        if (headerMatch) taintedVars.add(headerMatch[1]!);
+      }
+
+      // Propagate taint
+      if (taintedVars.size > 0) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const stmt of stmts) {
+            const propMatch = stmt.match(/\b(\w+)\s*=\s*(.*)/s);
+            if (propMatch) {
+              const lhs = propMatch[1]!;
+              const rhs = propMatch[2]!;
+              if (!taintedVars.has(lhs)) {
+                if (rhs.includes('?') && rhs.includes(':')) continue;
+                if (/\bcase\s+|default\s*:/.test(stmt)) continue;
+                for (const tv of taintedVars) {
+                  if (wholeWord(rhs, tv)) {
+                    taintedVars.add(lhs);
+                    changed = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Check if a file sink uses concatenation with a tainted var and a base dir
+        const concatSinkRe = /new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile|PrintWriter)\s*\(\s*(\w+)\s*\+/g;
+        let concatMatch;
+        let sinkUsesConcat = false;
+        while ((concatMatch = concatSinkRe.exec(normalized)) !== null) {
+          // Extract the full argument region after the opening paren
+          let depth = 1;
+          let pos = concatMatch.index + concatMatch[0].length;
+          while (pos < normalized.length && depth > 0) {
+            if (normalized[pos] === '(') depth++;
+            else if (normalized[pos] === ')') depth--;
+            pos++;
+          }
+          const argsRegion = normalized.slice(concatMatch.index + concatMatch[0].length - concatMatch[1]!.length - 1, pos - 1);
+          for (const tv of taintedVars) {
+            if (wholeWord(argsRegion, tv)) {
+              sinkUsesConcat = true;
+              break;
+            }
+          }
+          if (sinkUsesConcat) break;
+        }
+
+        const isValidated = RELATIVE_SAFE_RE.test(src);
+
+        if (sinkUsesConcat && !isValidated) {
+          const bestSrc = ingress.find(n => n.node_subtype === 'http_request') || ingress[0];
+          const bestSink = fileOps[0] || map.nodes.find(n =>
+            (n.analysis_snapshot || n.code_snapshot).match(/new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream)\s*\(/) !== null
+          );
+          if (bestSrc && bestSink) {
+            findings.push({
+              source: nodeRef(bestSrc),
+              sink: nodeRef(bestSink),
+              missing: 'SANITIZE (relative path sequence filtering / canonicalization)',
+              severity: 'high',
+              description: `User input from ${bestSrc.label} is concatenated to a base directory at ${bestSink.label} without canonicalization. ` +
+                `An attacker can send "../" sequences to escape the intended directory and read/write arbitrary files.`,
+              fix: 'Canonicalize the combined path with File.getCanonicalPath(), then verify the result ' +
+                'starts with the intended base directory. Reject any input containing ".." sequences.',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-23',
+    name: 'Relative Path Traversal',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
+/**
+ * CWE-36: Absolute Path Traversal
+ * UPGRADED — hand-written with specific detection for absolute path injection.
+ *
+ * Distinct from CWE-22 (generic path traversal):
+ *   CWE-36 specifically targets the case where tainted input is used as the ENTIRE
+ *   file path (e.g. `new File(data)`) without being restricted to a base directory.
+ *   The risk is that the attacker sends "/etc/passwd" or "C:\Windows\System32\..."
+ *   to access any file on the filesystem.
+ *
+ * Missing category: VALIDATE (different from CWE-22's CONTROL) so family dedup preserves both.
+ *
+ * Safe patterns: startsWith check against allowed base, path.isAbsolute() + reject,
+ *   forced prefix concatenation (base + input), chroot/jail.
+ */
+function verifyCWE36(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+  const fileOps = map.nodes.filter(n =>
+    (n.node_type === 'STORAGE' &&
+     (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
+      n.node_subtype === 'file_access' || n.node_subtype === 'file_read' || n.node_subtype === 'file_write' ||
+      n.attack_surface.includes('file_access') ||
+      (n.analysis_snapshot || n.code_snapshot).match(/\b(readFile|writeFile|createReadStream|open|unlink|readdir)\b/i) !== null)) ||
+    (n.node_type === 'INGRESS' && n.node_subtype === 'file_read') ||
+    (n.node_type === 'EGRESS' && n.node_subtype === 'file_write') ||
+    (n.node_type === 'EGRESS' && n.node_subtype === 'file_serve')
+  );
+
+  // CWE-36-specific safe patterns: enforce a base directory prefix, or reject absolute paths
+  const ABSOLUTE_SAFE_RE = /\bstartsWith\b|\bisAbsolute\b.*reject|\bisAbsolute\b.*throw|\bisAbsolute\b.*return|\bpath\.relative\b|\bchroot\b|\bjail\b|\bsandbox\b|\bwhitelist\b.*path|\ballowedPaths\b|\bgetCanonicalPath\b.*\bstartsWith\b|\bstartsWith\b.*\bgetCanonicalPath\b|\bFilenameUtils\.normalize\b.*\bstartsWith\b/i;
+
+  // Dead-branch neutralization detection (same as CWE-22)
+  let hasDeadBranchNeutralization = false;
+  if (map.source_code) {
+    const cleanSrc = stripComments(map.source_code);
+    const arithCondMatch = cleanSrc.match(/\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*>\s*(\d+)/);
+    if (arithCondMatch) {
+      const a = parseInt(arithCondMatch[1]!);
+      const b = parseInt(arithCondMatch[2]!);
+      const op = arithCondMatch[3]!;
+      const varName = arithCondMatch[4]!;
+      const threshold = parseInt(arithCondMatch[5]!);
+      const varDeclMatch = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
+      if (varDeclMatch) {
+        const varVal = parseInt(varDeclMatch[1]!);
+        const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
+        if (lhs > threshold) hasDeadBranchNeutralization = true;
+      }
+    }
+    if (!hasDeadBranchNeutralization) {
+      const charAtMatch = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
+      if (charAtMatch) {
+        const receiverVar = charAtMatch[1]!;
+        const charIdx = parseInt(charAtMatch[2]!);
+        const strDeclMatch = cleanSrc.match(new RegExp('String\\s+' + receiverVar + '\\s*=\\s*"([^"]*)"'));
+        if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
+          const selectedChar = strDeclMatch[1]![charIdx]!;
+          const caseMatch = cleanSrc.match(new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\""));
+          if (caseMatch) hasDeadBranchNeutralization = true;
+        }
+      }
+    }
+  }
+
+  // --- Strategy 1: Graph-based detection — INGRESS->file-op where input is used as entire path ---
+  for (const src of ingress) {
+    for (const sink of fileOps) {
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        if (hasDeadBranchNeutralization) continue;
+
+        const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+
+        // CWE-36 specific: detect when tainted input is used DIRECTLY as file path
+        // without being concatenated to a base directory. This is the absolute path pattern.
+        // Negative indicator: if there's base dir concatenation, it's CWE-23 not CWE-36
+        const hasBaseConcat = /\w+\s*\+\s*\w+\s*\)|root\s*\+|base\s*\+|dir\s*\+|prefix\s*\+|folder\s*\+|uploads.*\+/i.test(combinedScope);
+
+        // Positive indicator: direct use of tainted input as path
+        const hasDirectPathUse = /new\s+(?:java\.io\.)?File\s*\(\s*\w+\s*\)|open\s*\(\s*\w+|readFile\s*\(\s*\w+|createReadStream\s*\(\s*\w+|FileInputStream\s*\(\s*\w+\s*\)|FileOutputStream\s*\(\s*\w+\s*\)/i.test(combinedScope);
+
+        if (!hasBaseConcat && hasDirectPathUse && !ABSOLUTE_SAFE_RE.test(combinedScope)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'VALIDATE (absolute path rejection / base directory enforcement)',
+            severity: 'high',
+            description: `User input from ${src.label} is used as the entire file path at ${sink.label} without restricting to a base directory. ` +
+              `An attacker can send an absolute path like "/etc/passwd" or "C:\\Windows\\..." to access any file on the filesystem.`,
+            fix: 'Never use user input as the entire file path. Always prepend a base directory and canonicalize: ' +
+              'new File(BASE_DIR, input).getCanonicalPath() then verify startsWith(BASE_DIR). Reject absolute paths.',
+          });
+        }
+      }
+    }
+  }
+
+  // --- Strategy 2: Source-code scanning fallback for Java ---
+  if (findings.length === 0 && map.source_code) {
+    const src = stripComments(map.source_code);
+    const normalized = src.replace(/\n\s*/g, ' ');
+    const stmts = normalized.split(';').map(s => s.trim());
+
+    // Detect taint sources
+    const javaSourceRe = /\b(?:request|req|httpRequest)\s*\.\s*(?:getParameter|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(|\.getValue\s*\(\s*\)|\.readLine\s*\(\s*\)/;
+    const hasUserSource = javaSourceRe.test(src);
+
+    // CWE-36 specific: file sink with DIRECT variable use (no concatenation)
+    // Pattern: new File(data) — where data is the tainted variable, used alone as the entire path
+    const directFileSinkRe = /new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile|PrintWriter)\s*\(\s*(\w+)\s*\)/g;
+
+    // Negative: skip if there's base-dir concatenation (that's CWE-23)
+    const hasBaseDirConcat = /(?:root|base|dir|prefix|folder|upload)\s*\+/i.test(normalized);
+
+    if (hasUserSource && !hasBaseDirConcat) {
+      // Track tainted variables
+      const taintedVars = new Set<string>();
+      for (const stmt of stmts) {
+        const assignMatch = stmt.match(/\b(\w+)\s*=\s*.*(?:getParameter|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader|\.getValue|\.readLine)\s*\(/);
+        if (assignMatch) taintedVars.add(assignMatch[1]!);
+        const cookieMatch = stmt.match(/\b(\w+)\s*=\s*.*(?:URLDecoder\.decode|java\.net\.URLDecoder\.decode)\s*\(/);
+        if (cookieMatch) taintedVars.add(cookieMatch[1]!);
+        const headerMatch = stmt.match(/\b(\w+)\s*=\s*\w+\.nextElement\s*\(/);
+        if (headerMatch) taintedVars.add(headerMatch[1]!);
+      }
+
+      // Propagate taint
+      if (taintedVars.size > 0) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const stmt of stmts) {
+            const propMatch = stmt.match(/\b(\w+)\s*=\s*(.*)/s);
+            if (propMatch) {
+              const lhs = propMatch[1]!;
+              const rhs = propMatch[2]!;
+              if (!taintedVars.has(lhs)) {
+                if (rhs.includes('?') && rhs.includes(':')) continue;
+                if (/\bcase\s+|default\s*:/.test(stmt)) continue;
+                for (const tv of taintedVars) {
+                  if (wholeWord(rhs, tv)) {
+                    taintedVars.add(lhs);
+                    changed = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Check if a file sink uses a tainted variable DIRECTLY (not concatenated)
+        let sinkUsesDirect = false;
+        let directMatch;
+        while ((directMatch = directFileSinkRe.exec(normalized)) !== null) {
+          const argVar = directMatch[1]!;
+          if (taintedVars.has(argVar)) {
+            sinkUsesDirect = true;
+            break;
+          }
+        }
+
+        const isValidated = ABSOLUTE_SAFE_RE.test(src);
+
+        if (sinkUsesDirect && !isValidated) {
+          const bestSrc = ingress.find(n => n.node_subtype === 'http_request') || ingress[0];
+          const bestSink = fileOps[0] || map.nodes.find(n =>
+            (n.analysis_snapshot || n.code_snapshot).match(/new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream)\s*\(/) !== null
+          );
+          if (bestSrc && bestSink) {
+            findings.push({
+              source: nodeRef(bestSrc),
+              sink: nodeRef(bestSink),
+              missing: 'VALIDATE (absolute path rejection / base directory enforcement)',
+              severity: 'high',
+              description: `User input from ${bestSrc.label} is used as the entire file path at ${bestSink.label} without restricting to a base directory. ` +
+                `An attacker can send an absolute path like "/etc/passwd" or "C:\\Windows\\..." to access any file on the filesystem.`,
+              fix: 'Never use user input as the entire file path. Always prepend a base directory and canonicalize: ' +
+                'new File(BASE_DIR, input).getCanonicalPath() then verify startsWith(BASE_DIR). Reject absolute paths.',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-36',
+    name: 'Absolute Path Traversal',
     holds: findings.length === 0,
     findings,
   };
@@ -35303,7 +35947,11 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   // Hand-written verifiers — these are the authoritative versions for their CWEs
   'CWE-89': verifyCWE89,
   'CWE-79': verifyCWE79,
+  'CWE-81': verifyCWE81,
+  'CWE-83': verifyCWE83,
   'CWE-22': verifyCWE22,
+  'CWE-23': verifyCWE23,
+  'CWE-36': verifyCWE36,
   'CWE-502': verifyCWE502,
   'CWE-918': verifyCWE918,
   'CWE-798': verifyCWE798,
