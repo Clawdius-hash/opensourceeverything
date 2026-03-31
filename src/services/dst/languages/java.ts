@@ -182,9 +182,18 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'writer.println':             { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'writer.print':               { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
   'writer.write':               { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
-  'PrintWriter.println':        { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
-  'PrintWriter.print':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
-  'PrintWriter.write':          { nodeType: 'EGRESS', subtype: 'display',       tainted: false },
+  'PrintWriter.println':        { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.print':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.write':          { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.printf':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.format':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'PrintWriter.append':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+
+  // -- ServletOutputStream --
+  'ServletOutputStream.write':    { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'ServletOutputStream.print':    { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'ServletOutputStream.println':  { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
+  'ServletOutputStream.flush':    { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
 
   // -- Servlet response --
   'response.getWriter':         { nodeType: 'EGRESS', subtype: 'http_response', tainted: false },
@@ -249,10 +258,17 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // -- HttpURLConnection (legacy Java HTTP) --
   'URL.openConnection':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'url.openConnection':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'URL.openStream':             { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'url.openStream':             { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'HttpURLConnection.connect':  { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'HttpURLConnection.getInputStream':  { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
+  'HttpURLConnection.getOutputStream': { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
+  'URLConnection.getInputStream':      { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
+  'URLConnection.getOutputStream':     { nodeType: 'EXTERNAL', subtype: 'api_call', tainted: false },
   'connection.connect':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'connection.getInputStream':  { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'connection.getOutputStream': { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'connection.openStream':      { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'new URL':                    { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'URI.create':                 { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'new URI':                    { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
@@ -263,6 +279,12 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'HttpClient.newHttpClient':   { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'HttpClient.newBuilder':      { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
   'HttpRequest.newBuilder':     { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+
+  // -- Apache HttpClient (legacy) --
+  'HttpClient.execute':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'CloseableHttpClient.execute': { nodeType: 'EXTERNAL', subtype: 'api_call',   tainted: false },
+  'httpClient.execute':         { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+  'client.execute':             { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
 
   // -- RestTemplate (Spring) --
   'RestTemplate.getForObject':  { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
@@ -645,6 +667,9 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   'isr': 'InputStreamReader',
   'dataInputStream': 'DataInputStream', 'dis': 'DataInputStream',
   'dataOutputStream': 'DataOutputStream', 'dos': 'DataOutputStream',
+  // Servlet response — resolve chained calls like response.getWriter().println()
+  'getWriter': 'PrintWriter', 'printWriter': 'PrintWriter', 'pw': 'PrintWriter',
+  'getOutputStream': 'ServletOutputStream', 'servletOutputStream': 'ServletOutputStream', 'sos': 'ServletOutputStream',
   // Network
   'socket': 'Socket', 'serverSocket': 'ServerSocket',
   'datagramSocket': 'DatagramSocket',
@@ -774,6 +799,8 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
     'createStatement': { nodeType: 'STORAGE', subtype: 'db_read', tainted: false },
     'exec':          { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
     'lookup':        { nodeType: 'EXTERNAL', subtype: 'jndi_lookup', tainted: true },
+    'openStream':    { nodeType: 'EXTERNAL', subtype: 'api_call',    tainted: false },
+    'openConnection': { nodeType: 'EXTERNAL', subtype: 'api_call',  tainted: false },
   };
   if (!NON_DB_OBJECTS.has(objectName)) {
     const dangerousMatch = DANGEROUS_METHOD_PATTERNS[methodName];
@@ -786,7 +813,7 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
 export const sinkPatterns: Record<string, RegExp> = {
   'CWE-78':  /Runtime\.(?:getRuntime\(\)\.)?exec\s*\(\s*[^"]/,
   'CWE-89':  /"(?:SELECT|INSERT|UPDATE|DELETE)\s+.*"\s*\+\s*\w+|(?:Statement|statement|stmt)\.execute(?:Query|Update)?\s*\(\s*[^")]/,
-  'CWE-79':  /(?:response\.getWriter\(\)\.(?:print|write)\s*\(\s*(?:request|param|input|query|user|data|name|value)|PrintWriter\.(?:print|write)\s*\(\s*(?:request|param|input))/,
+  'CWE-79':  /(?:response\.getWriter\(\)\.(?:println|print|write|printf|format|append)\s*\(\s*(?:[^)]*(?:request|param|input|query|user|data|name|value))|(?:PrintWriter|ServletOutputStream)\.(?:println|print|write|printf|format|append)\s*\(\s*(?:[^)]*(?:request|param|input|query|user|data|name|value))|(?:out|writer|pw)\.(?:println|print|write)\s*\(\s*(?:[^)]*(?:request|param|input|query|user|data|name|value)))/,
   'CWE-22':  /new\s+(?:java\.io\.)?File\s*\([^)]*(?:param|input|request|user|path|fileName|filePath|name)|new\s+(?:java\.io\.)?FileInputStream\s*\([^)]*(?:param|input|request|user|path|fileName|name)/,
   'CWE-90':  /(?:search|lookup)\s*\(\s*[^"]*(?:param|input|request|user|query|filter|dn|name)|(?:DirContext|LdapContext|InitialDirContext).*search\s*\(/,
   'CWE-327': /Cipher\.getInstance\s*\(\s*"(?:DES|RC2|RC4|Blowfish|DESede|AES\/ECB)|MessageDigest\.getInstance\s*\(\s*"(?:MD5|MD2|SHA-1|SHA1)"/,
@@ -795,7 +822,7 @@ export const sinkPatterns: Record<string, RegExp> = {
   'CWE-502': /ObjectInputStream\s*\(\s*(?:request|socket|input)/,
   'CWE-611': /SAXParserFactory\.newInstance\(\)(?![^\n]*setFeature)/,
   'CWE-798': /(?:apiKey|secret|password|token)\s*=\s*"[^"]{4,}"/,
-  'CWE-918': /(?:URL\s*\(\s*request\.getParameter|HttpClient.*URI\.create\s*\(\s*request)/,
+  'CWE-918': /(?:new\s+URL\s*\([^")]*\)\.(?:openStream|openConnection)|URL\s*\(\s*(?:request\.getParameter|url|uri|param|input|host|target|endpoint|dest|redirect)|HttpClient.*URI\.create\s*\(\s*(?:request|url|uri|param|input)|(?:openStream|openConnection)\s*\(\s*\))/,
 };
 
 export const safePatterns: Record<string, RegExp> = {

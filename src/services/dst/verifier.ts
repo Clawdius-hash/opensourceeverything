@@ -558,9 +558,9 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         // Check if the sink or containing scope uses parameterized queries
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
-        const isParameterized = combinedScope.match(
-          /\$\d|\?\s*[,)]|\bprepare\b|\bparameterized\b|\bplaceholder/i
-        ) !== null;
+        const sinkSnap = stripComments(sink.analysis_snapshot || sink.code_snapshot);
+        const paramRegex = /\$\d|\?\s*[,)"']|\bprepare(?:Statement|d)?\b|\bparameterized\b|\bplaceholder/i;
+        const isParameterized = paramRegex.test(combinedScope) || paramRegex.test(sinkSnap);
 
         if (!isParameterized) {
           findings.push({
@@ -7482,11 +7482,17 @@ function verifyCWE776(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress776 = nodesOfType(map, 'INGRESS');
   const XML776 = /\b(parseXml|parseXmlString|parseXML|DOMParser|SAXParser|xml2js|libxml|libxmljs2?|etree\.parse|etree\.fromstring|xml\.sax|minidom\.parseString|XmlReader|ElementTree\.parse|lxml\.etree|parseFromString|DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|XMLReader)\b/i;
-  const xmlParsers776 = map.nodes.filter(n =>
-    (n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL' || n.node_type === 'STORAGE') &&
-    (n.node_subtype.includes('xml') || n.node_subtype.includes('parse') ||
-     n.attack_surface.includes('xml_parse') || XML776.test(n.analysis_snapshot || n.code_snapshot))
-  );
+  // Exclude regex compilation, string literals, and non-XML parse contexts from XML parser detection.
+  // Pattern.compile, re.compile, new RegExp etc. get node_subtype 'parse' but are not XML parsers.
+  const NOT_XML776 = /\bPattern\.compile\b|\bre\.compile\b|\bnew\s+RegExp\b|\bRegex\b|\bregex\b|\bPattern\.matches\b|\bPattern\.quote\b/i;
+  const xmlParsers776 = map.nodes.filter(n => {
+    if (!(n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL' || n.node_type === 'STORAGE')) return false;
+    const snap = n.analysis_snapshot || n.code_snapshot;
+    // Exclude regex/pattern compilation contexts — these are not XML parsers
+    if (NOT_XML776.test(snap)) return false;
+    return n.node_subtype.includes('xml') ||
+     n.attack_surface.includes('xml_parse') || XML776.test(snap);
+  });
   const DANGER776 = /\bnoent\s*:\s*true\b|\bentity.*expand\b.*true|\bDTDProcessing\.Parse\b/i;
   const SAFE776 = /\bdefusedxml\b|\bdisallow.*doctype\b|\bentityExpansionLimit\b|\bmaxEntityExpansions\b|\bresolveEntities\s*:\s*false\b|\bnoent\s*:\s*false\b|\bsafe.*parse\b|\bsetFeature.*disallow-doctype-decl.*true\b|\bXMLInputFactory\.SUPPORT_DTD.*false\b/i;
   for (const src of ingress776) {

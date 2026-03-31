@@ -25,20 +25,31 @@ export type { VerificationResult, Finding, NodeRef };
 // Sink filters — each returns nodes matching a specific vulnerability class
 // ---------------------------------------------------------------------------
 
+// Domain subtypes that must NOT match as file storage nodes.
+// "xpath_query" contains the substring "path" which causes cross-domain misfires
+// where path traversal CWEs fire on XPath code.  Similarly "ldap_query", "sql_query"
+// etc. are query-domain sinks, not file operations.
+const NON_FILE_DOMAINS = /^(xpath_query|ldap_query|sql_query|nosql_query|graphql_query|mongo_query|redis_query|query)$/;
+
 function fileStorageNodes(map: NeuralMap): NeuralMapNode[] {
-  return map.nodes.filter(n =>
-    // Primary: STORAGE nodes with file-related subtypes
-    (n.node_type === 'STORAGE' &&
-     (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
-      n.node_subtype.includes('path') || n.attack_surface.includes('file_access') ||
-      n.code_snapshot.match(
-        /\b(readFile|writeFile|createReadStream|createWriteStream|open|unlink|readdir|rename|copyFile|stat|lstat|mkdir|rmdir|appendFile|chmod|chown|access|fopen|fread|fwrite|include|require_once)\b/i
-      ) !== null)) ||
-    // Fallback: INGRESS/file_read (e.g. Python open(), or legacy mistyped Java File constructors)
-    (n.node_type === 'INGRESS' && n.node_subtype === 'file_read') ||
-    // Fallback: EGRESS/file_write (e.g. Java FileOutputStream, Files.write) with user-controlled path
-    (n.node_type === 'EGRESS' && (n.node_subtype === 'file_write' || n.node_subtype === 'file_serve'))
-  );
+  return map.nodes.filter(n => {
+    // Cross-domain exclusion: skip nodes that belong to query/injection domains
+    if (NON_FILE_DOMAINS.test(n.node_subtype)) return false;
+
+    return (
+      // Primary: STORAGE nodes with file-related subtypes
+      (n.node_type === 'STORAGE' &&
+       (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
+        n.node_subtype.includes('path') || n.attack_surface.includes('file_access') ||
+        n.code_snapshot.match(
+          /\b(readFile|writeFile|createReadStream|createWriteStream|open|unlink|readdir|rename|copyFile|stat|lstat|mkdir|rmdir|appendFile|chmod|chown|access|fopen|fread|fwrite|include|require_once)\b/i
+        ) !== null)) ||
+      // Fallback: INGRESS/file_read (e.g. Python open(), or legacy mistyped Java File constructors)
+      (n.node_type === 'INGRESS' && n.node_subtype === 'file_read') ||
+      // Fallback: EGRESS/file_write (e.g. Java FileOutputStream, Files.write) with user-controlled path
+      (n.node_type === 'EGRESS' && (n.node_subtype === 'file_write' || n.node_subtype === 'file_serve'))
+    );
+  });
 }
 
 function bufferStorageNodes(map: NeuralMap): NeuralMapNode[] {

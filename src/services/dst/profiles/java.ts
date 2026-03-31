@@ -457,11 +457,12 @@ function extractCalleeChain(node: SyntaxNode): string[] {
 // with tainted=true. This handles any alias: req, request, httpReq, etc.
 // ---------------------------------------------------------------------------
 const SERVLET_TAINT_METHODS: ReadonlySet<string> = new Set([
-  'getParameter', 'getParameterMap', 'getParameterValues',
+  'getParameter', 'getParameterMap', 'getParameterValues', 'getParameterNames',
   'getHeader', 'getHeaders', 'getCookies',
   'getInputStream', 'getReader', 'getRequestURI',
   'getRequestURL', 'getQueryString', 'getPathInfo',
   'getRemoteAddr', 'getAttribute', 'getPart', 'getParts',
+  'getContentType', 'getMethod', 'getSession',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1431,6 +1432,23 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       ctx.lastCreatedNodeId = classNode.id;
       ctx.emitContainsIfNeeded(classNode.id);
       if (ctx.currentScope) ctx.currentScope.containerNodeId = classNode.id;
+
+      // ── Pre-register method names so forward-reference calls (e.g.,
+      //    doGet calling helperMethod defined below) get local_call nodes.
+      //    The placeholder ID '__pre_<name>' is overwritten when the actual
+      //    method_declaration is classified during the walk. ──
+      const classBody = node.childForFieldName('body');
+      if (classBody) {
+        for (let ci = 0; ci < classBody.namedChildCount; ci++) {
+          const member = classBody.namedChild(ci);
+          if (member && (member.type === 'method_declaration' || member.type === 'constructor_declaration')) {
+            const methodName = member.childForFieldName('name')?.text;
+            if (methodName && !ctx.functionRegistry.has(methodName)) {
+              ctx.functionRegistry.set(methodName, `__pre_${methodName}`);
+            }
+          }
+        }
+      }
       break;
     }
 
@@ -2348,7 +2366,9 @@ export const javaProfile: LanguageProfile = {
   },
 
   // Layer 4: Taint Source Detection
-  ingressPattern: /(?:request\.(?:getParameter|getHeader|getCookies|getInputStream|getReader|getQueryString|getPathInfo|getRequestURI|getRequestURL|getAttribute|getPart|getRemoteAddr|getMethod)|req\.(?:getParameter|getHeader|getCookies|getInputStream)|scanner\.(?:nextLine|next|nextInt)|@(?:RequestBody|PathVariable|RequestParam|RequestHeader|CookieValue|ModelAttribute)|BufferedReader\.readLine|Console\.readLine|System\.in|ObjectInputStream\.readObject)/,
+  // Use \w+ for servlet receiver names so ANY variable name (r2, myReq, etc.)
+  // is recognised — the SERVLET_TAINT_METHODS set already validates the method name.
+  ingressPattern: /(?:\w+\.(?:getParameter|getParameterMap|getParameterValues|getParameterNames|getHeader|getHeaders|getCookies|getInputStream|getReader|getQueryString|getPathInfo|getRequestURI|getRequestURL|getAttribute|getPart|getParts|getRemoteAddr|getMethod|getContentType|getSession)|scanner\.(?:nextLine|next|nextInt)|@(?:RequestBody|PathVariable|RequestParam|RequestHeader|CookieValue|ModelAttribute)|BufferedReader\.readLine|Console\.readLine|System\.in|ObjectInputStream\.readObject)/,
   taintedPaths: TAINTED_PATHS,
 
   // Layer 5: Node Classification

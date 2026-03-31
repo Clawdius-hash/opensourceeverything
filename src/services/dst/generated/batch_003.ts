@@ -50,16 +50,22 @@ function bufferStorageNodes(map: NeuralMap): NeuralMapNode[] {
   );
 }
 
+// Domain subtypes that must NOT match as file storage nodes (cross-domain exclusion).
+const NON_FILE_DOMAINS_B3 = /^(xpath_query|ldap_query|sql_query|nosql_query|graphql_query|mongo_query|redis_query|query)$/;
+
 function fileStorageNodes(map: NeuralMap): NeuralMapNode[] {
-  return map.nodes.filter(n =>
-    n.node_type === 'STORAGE' &&
-    (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
-     n.node_subtype.includes('temp') || n.node_subtype.includes('directory') ||
-     n.attack_surface.includes('file_access') || n.attack_surface.includes('file_write') ||
-     n.code_snapshot.match(
-       /\b(writeFile|createWriteStream|open|mktemp|tmpfile|tmpnam|tempnam|mkstemp|chmod|chown|mkdir)\b/i
-     ) !== null)
-  );
+  return map.nodes.filter(n => {
+    if (NON_FILE_DOMAINS_B3.test(n.node_subtype)) return false;
+    return (
+      n.node_type === 'STORAGE' &&
+      (n.node_subtype.includes('file') || n.node_subtype.includes('fs') ||
+       n.node_subtype.includes('temp') || n.node_subtype.includes('directory') ||
+       n.attack_surface.includes('file_access') || n.attack_surface.includes('file_write') ||
+       n.code_snapshot.match(
+         /\b(writeFile|createWriteStream|open|mktemp|tmpfile|tmpnam|tempnam|mkstemp|chmod|chown|mkdir)\b/i
+       ) !== null)
+    );
+  });
 }
 
 function sharedStorageNodes(map: NeuralMap): NeuralMapNode[] {
