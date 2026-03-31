@@ -72,15 +72,15 @@ import type { VerificationResult } from './_helpers';
  * that also has a generated version, add its key here.
  */
 const HAND_WRITTEN_OVERRIDES: ReadonlySet<string> = new Set([
-  // --- Injection, traversal, deserialization, SSRF ---
-  'CWE-20', 'CWE-22', 'CWE-74', 'CWE-77', 'CWE-78', 'CWE-79', 'CWE-89',
+  // --- Injection, traversal, deserialization, SSRF, config control ---
+  'CWE-15', 'CWE-20', 'CWE-22', 'CWE-74', 'CWE-77', 'CWE-78', 'CWE-79', 'CWE-89',
   'CWE-90', 'CWE-91', 'CWE-93', 'CWE-94', 'CWE-95', 'CWE-96', 'CWE-98',
-  'CWE-99', 'CWE-116', 'CWE-117', 'CWE-134', 'CWE-158', 'CWE-170',
+  'CWE-99', 'CWE-111', 'CWE-114', 'CWE-116', 'CWE-117', 'CWE-134', 'CWE-158', 'CWE-170',
   'CWE-176', 'CWE-177', 'CWE-178', 'CWE-179', 'CWE-180', 'CWE-182',
   'CWE-183', 'CWE-185', 'CWE-186', 'CWE-187', 'CWE-188', 'CWE-192',
   'CWE-193', 'CWE-194', 'CWE-195', 'CWE-196', 'CWE-197', 'CWE-198', 'CWE-681',
-  // --- Memory safety & arithmetic ---
-  'CWE-119', 'CWE-120', 'CWE-125', 'CWE-126', 'CWE-127', 'CWE-131',
+  // --- Memory safety, arithmetic & array index ---
+  'CWE-119', 'CWE-120', 'CWE-125', 'CWE-126', 'CWE-127', 'CWE-129', 'CWE-131',
   'CWE-190', 'CWE-191', 'CWE-369', 'CWE-476',
   // --- Side channel, error handling & info exposure ---
   'CWE-207', 'CWE-208', 'CWE-209', 'CWE-210', 'CWE-211', 'CWE-212',

@@ -1762,3 +1762,244 @@ describe('CWE Verification Summary Report', () => {
     console.log('---\n');
   });
 });
+
+// ---------------------------------------------------------------------------
+// CWE-111: Direct Use of Unsafe JNI
+// ---------------------------------------------------------------------------
+
+describe('CWE-111: Direct Use of Unsafe JNI', () => {
+  it('VULNERABLE: native method called with user input (no validation)', () => {
+    const map = buildMap(
+      `native String test(String s1, int len);
+       static { System.loadLibrary("JNITest"); }
+       String stringLine = readerBuffered.readLine();
+       int intNumber = Integer.parseInt(readerBuffered.readLine());
+       test(stringLine, intNumber);`,
+      [
+        {
+          id: 'CLASS', node_type: 'STRUCTURAL',
+          label: 'CWE111_Unsafe_JNI',
+          code_snapshot: 'native String test(String s1, int len);',
+          edges: [
+            { target: 'INPUT', edge_type: 'CONTAINS', conditional: false, async: false },
+            { target: 'CALL', edge_type: 'CONTAINS', conditional: false, async: false },
+          ],
+        },
+        {
+          id: 'INPUT', node_type: 'INGRESS',
+          label: 'readerBuffered.readLine()',
+          node_subtype: 'user_input',
+          code_snapshot: 'readerBuffered.readLine()',
+          attack_surface: ['user_input'],
+          data_out: [{ name: 'stringLine', source: 'EXTERNAL', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [{ target: 'CALL', edge_type: 'DATA_FLOW', conditional: false, async: false }],
+        },
+        {
+          id: 'CALL', node_type: 'TRANSFORM',
+          label: 'test(stringLine, intNumber)',
+          code_snapshot: 'test(stringLine, intNumber)',
+          data_in: [{ name: 'stringLine', source: 'INPUT', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-111');
+    console.log(`  VULNERABLE: holds=${result.holds}, findings=${result.findings.length} ${!result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(false);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings[0].severity).toBe('high');
+  });
+
+  it('SAFE: native method called with validated input (bounds check)', () => {
+    const map = buildMap(
+      `native String test(String s1, int len);
+       String stringLine = readerBuffered.readLine();
+       if (stringLine.length() <= 100) { test(stringLine, Math.min(intNumber, 100)); }`,
+      [
+        {
+          id: 'CLASS', node_type: 'STRUCTURAL',
+          label: 'CWE111_Safe',
+          code_snapshot: 'native String test(String s1, int len);',
+          edges: [
+            { target: 'INPUT', edge_type: 'CONTAINS', conditional: false, async: false },
+            { target: 'VALIDATE', edge_type: 'CONTAINS', conditional: false, async: false },
+            { target: 'CALL', edge_type: 'CONTAINS', conditional: false, async: false },
+          ],
+        },
+        {
+          id: 'INPUT', node_type: 'INGRESS',
+          label: 'readerBuffered.readLine()',
+          node_subtype: 'user_input',
+          code_snapshot: 'readerBuffered.readLine()',
+          attack_surface: ['user_input'],
+          data_out: [{ name: 'stringLine', source: 'EXTERNAL', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [{ target: 'VALIDATE', edge_type: 'DATA_FLOW', conditional: false, async: false }],
+        },
+        {
+          id: 'VALIDATE', node_type: 'CONTROL',
+          label: 'bounds check',
+          code_snapshot: 'if (stringLine.length() <= 100)',
+          data_in: [{ name: 'stringLine', source: 'INPUT', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [{ target: 'CALL', edge_type: 'DATA_FLOW', conditional: false, async: false }],
+        },
+        {
+          id: 'CALL', node_type: 'TRANSFORM',
+          label: 'test(stringLine, intNumber)',
+          code_snapshot: 'test(stringLine, Math.min(intNumber, 100))',
+          data_in: [{ name: 'stringLine', source: 'VALIDATE', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-111');
+    console.log(`  SAFE: holds=${result.holds}, findings=${result.findings.length} ${result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(true);
+    expect(result.findings.length).toBe(0);
+  });
+
+  it('VULNERABLE: tainted loadLibrary (user controls library name)', () => {
+    const map = buildMap(
+      'String libName = request.getParameter("lib"); System.loadLibrary(libName);',
+      [
+        {
+          id: 'SRC', node_type: 'INGRESS',
+          label: 'request.getParameter("lib")',
+          node_subtype: 'http_param',
+          code_snapshot: 'request.getParameter("lib")',
+          attack_surface: ['user_input'],
+          data_out: [{ name: 'libName', source: 'EXTERNAL', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
+        },
+        {
+          id: 'SINK', node_type: 'EXTERNAL',
+          label: 'System.loadLibrary(libName)',
+          node_subtype: 'system_exec',
+          code_snapshot: 'System.loadLibrary(libName)',
+          data_in: [{ name: 'libName', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-111');
+    console.log(`  VULNERABLE (tainted loadLibrary): holds=${result.holds}, findings=${result.findings.length} ${!result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(false);
+    expect(result.findings.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CWE-114: Process Control
+// ---------------------------------------------------------------------------
+
+describe('CWE-114: Process Control', () => {
+  it('VULNERABLE: System.loadLibrary() with relative name', () => {
+    const map = buildMap(
+      'String libraryName = "test.dll"; System.loadLibrary(libraryName);',
+      [
+        {
+          id: 'BAD', node_type: 'STRUCTURAL',
+          label: 'bad',
+          code_snapshot: 'System.loadLibrary(libraryName)',
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-114');
+    console.log(`  VULNERABLE (loadLibrary): holds=${result.holds}, findings=${result.findings.length} ${!result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(false);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings[0].severity).toBe('medium');
+  });
+
+  it('SAFE: System.load() with hardcoded absolute path', () => {
+    const map = buildMap(
+      'System.load("/opt/myapp/libs/test.so");',
+      [
+        {
+          id: 'GOOD', node_type: 'STRUCTURAL',
+          label: 'good1',
+          code_snapshot: 'System.load("/opt/myapp/libs/test.so")',
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-114');
+    console.log(`  SAFE (absolute path): holds=${result.holds}, findings=${result.findings.length} ${result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(true);
+    expect(result.findings.length).toBe(0);
+  });
+
+  it('SAFE: System.load() with root + libraryName (Juliet good pattern)', () => {
+    const map = buildMap(
+      'String root = "C:\\\\libs\\\\"; System.load(root + libraryName);',
+      [
+        {
+          id: 'GOOD', node_type: 'STRUCTURAL',
+          label: 'good',
+          code_snapshot: 'System.load(root + libraryName)',
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-114');
+    console.log(`  SAFE (root+name): holds=${result.holds}, findings=${result.findings.length} ${result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(true);
+    expect(result.findings.length).toBe(0);
+  });
+
+  it('VULNERABLE: Runtime.exec with tainted input', () => {
+    const map = buildMap(
+      'String cmd = request.getParameter("cmd"); Runtime.getRuntime().exec(cmd);',
+      [
+        {
+          id: 'SRC', node_type: 'INGRESS',
+          label: 'request.getParameter("cmd")',
+          node_subtype: 'http_param',
+          code_snapshot: 'request.getParameter("cmd")',
+          attack_surface: ['user_input'],
+          data_out: [{ name: 'cmd', source: 'EXTERNAL', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [{ target: 'SINK', edge_type: 'DATA_FLOW', conditional: false, async: false }],
+        },
+        {
+          id: 'SINK', node_type: 'EXTERNAL',
+          label: 'Runtime.getRuntime().exec(cmd)',
+          node_subtype: 'system_exec',
+          code_snapshot: 'Runtime.getRuntime().exec(cmd)',
+          data_in: [{ name: 'cmd', source: 'SRC', data_type: 'string', tainted: true, sensitivity: 'NONE' }],
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-114');
+    console.log(`  VULNERABLE (Runtime.exec): holds=${result.holds}, findings=${result.findings.length} ${!result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(false);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings[0].severity).toBe('critical');
+  });
+
+  it('SAFE: System.loadLibrary with SecurityManager', () => {
+    const map = buildMap(
+      'SecurityManager sm = System.getSecurityManager(); sm.checkLink("test"); System.loadLibrary("test");',
+      [
+        {
+          id: 'GOOD', node_type: 'STRUCTURAL',
+          label: 'secureLoad',
+          code_snapshot: 'SecurityManager sm = System.getSecurityManager(); sm.checkLink("test"); System.loadLibrary("test");',
+          edges: [],
+        },
+      ]
+    );
+
+    const result = verify(map, 'CWE-114');
+    console.log(`  SAFE (SecurityManager): holds=${result.holds}, findings=${result.findings.length} ${result.holds ? '✓' : '✗'}`);
+    expect(result.holds).toBe(true);
+    expect(result.findings.length).toBe(0);
+  });
+});

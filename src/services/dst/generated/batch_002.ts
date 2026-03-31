@@ -16,7 +16,8 @@
 import type { NeuralMap, NeuralMapNode } from '../types';
 import {
   nodeRef, nodesOfType, hasTaintedPathWithoutControl, createGenericVerifier,
-  sinkHasNonZeroRange, detectLanguage,
+  sinkHasNonZeroRange, detectLanguage, scopeBasedTaintReaches,
+  getContainingScopeSnapshots, stripComments, findNearestNode,
   type VerificationResult, type Finding, type Severity,
 } from './_helpers';
 
@@ -194,13 +195,14 @@ function xmlParserTransformNodes(map: NeuralMap): NeuralMapNode[] {
   );
 }
 
-/** TRANSFORM nodes performing memory allocation */
+/** TRANSFORM nodes performing memory allocation — includes Java/C/JS collection constructors with size params */
 function memAllocTransformNodes(map: NeuralMap): NeuralMapNode[] {
   return map.nodes.filter(n =>
     n.node_type === 'TRANSFORM' &&
     (n.node_subtype.includes('alloc') || n.node_subtype.includes('memory') ||
+     n.node_subtype.includes('collection') || n.node_subtype.includes('container') ||
      n.code_snapshot.match(
-       /\b(malloc|calloc|realloc|new\s+\w+\[|Buffer\.alloc|Array\(|new\s+ArrayBuffer|new\s+Uint8Array)\b/i
+       /\b(malloc|calloc|realloc|new\s+\w+\[|Buffer\.alloc|Array\(|new\s+ArrayBuffer|new\s+Uint8Array|new\s+ArrayList\s*\(|new\s+HashMap\s*\(|new\s+HashSet\s*\(|new\s+LinkedList\s*\(|new\s+Vector\s*\(|new\s+StringBuilder\s*\(|new\s+StringBuffer\s*\(|new\s+byte\s*\[|new\s+char\s*\[|new\s+int\s*\[|new\s+long\s*\[|ByteBuffer\.allocate|make\s*\(\s*\[\]|make\s*\(\s*map\[)\b/i
      ) !== null)
   );
 }
@@ -725,26 +727,120 @@ export function verifyCWE776(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-776', name: 'XML Entity Expansion (Billion Laughs)', holds: findings.length === 0, findings };
 }
 
-/** CWE-789: Memory Allocation with Excessive Size Value */
+/**
+ * CWE-789: Memory Allocation with Excessive Size Value
+ *
+ * Patterns detected:
+ *   A. Graph taint: INGRESS -> TRANSFORM (alloc/collection constructor) without CONTROL
+ *   B. Scope-based taint fallback: tainted variable in same scope as allocation
+ *   C. Source-line scanning: Integer.parseInt(taintedInput) -> new ArrayList(data)
+ *      without bounds check between them
+ *
+ * Safe patterns: bounds check (if data < MAX), Math.min, clamp, limit, MAX_SIZE
+ */
 export function verifyCWE789(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
   const sinks = memAllocTransformNodes(map);
 
+  // Bounds-check safe pattern — more comprehensive than ALLOC_SIZE_SAFE alone
+  const BOUNDS_SAFE_789 = /\bmax\b.*\bsize\b|\blimit\b|\bclamp\b|\b[<>]=?\s*\d{3,}\b|\bvalidate.*size\b|\bMAX_SIZE\b|\bMath\.min\b|\bMath\.max\b|\bif\s*\(.*\b(?:data|size|len|cap|capacity|count)\b\s*[<>]/i;
+
+  // ---- Strategy 1: Graph taint flow — INGRESS -> alloc sink without CONTROL ----
   for (const src of ingress) {
     for (const sink of sinks) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (!ALLOC_SIZE_SAFE.test(sink.code_snapshot)) {
+      const hasUnsafePath = hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+        scopeBasedTaintReaches(map, src.id, sink.id);
+
+      if (hasUnsafePath) {
+        const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnaps.join('\n'));
+        if (!ALLOC_SIZE_SAFE.test(sink.code_snapshot) && !BOUNDS_SAFE_789.test(combinedScope)) {
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(sink),
             missing: 'CONTROL (allocation size validation / maximum limit)',
             severity: 'high',
             description: `User input from ${src.label} controls memory allocation size at ${sink.label} without limits. ` +
-              `An attacker can request excessive allocation to exhaust memory.`,
+              `An attacker can request excessive allocation to exhaust memory (OutOfMemoryError/DoS).`,
             fix: 'Validate allocation sizes against a maximum limit before allocating. ' +
-              'Use clamp(size, 0, MAX_ALLOWED_SIZE). Reject unreasonable sizes early.',
+              'Use: if (size > MAX_ALLOWED) throw new IllegalArgumentException(); ' +
+              'Or use Math.min(size, MAX_ALLOWED_SIZE). Reject unreasonable sizes early.',
           });
+        }
+      }
+    }
+  }
+
+  // ---- Strategy 2: Source-line scanning fallback for Juliet patterns ----
+  // Catches: Integer.parseInt(taintedInput) -> new ArrayList(data) without bounds check
+  const src789 = map.source_code || '';
+  if (src789 && findings.length === 0) {
+    const lines789 = src789.split('\n');
+
+    // Taint sources: socket reads, servlet params, user input parsed to int
+    const TAINT_INT_RE = /\b(Integer\.parseInt|Integer\.valueOf|Long\.parseLong|Short\.parseShort)\s*\(\s*(\w+)/;
+    const SOCKET_READ_RE = /\breadLine\b|\bgetInputStream\b|\bgetParameter\b|\bgetQueryString\b|\bgetCookies\b|\bSystem\.getenv\b/;
+    // Alloc sinks with tainted size
+    const ALLOC_SINK_RE = /\bnew\s+(ArrayList|HashMap|HashSet|LinkedList|Vector|StringBuilder|StringBuffer|byte|char|int|long)\s*[\[(]\s*(\w+)/;
+    // Bounds check between source and sink
+    const BOUNDS_CHECK_RE = /\bif\s*\(.*\b(data|size|len|cap|count|num)\b\s*[<>]|\bMath\.(min|max)\s*\(.*\b(data|size|len|cap|count|num)\b|\b(data|size|len|cap|count|num)\b\s*[<>]=?\s*\d/;
+
+    // Find tainted integer assignments
+    const taintedIntLines: Array<{ line: number; varName: string }> = [];
+    for (let i = 0; i < lines789.length; i++) {
+      const ln = lines789[i];
+      if (/^\s*\/\//.test(ln) || /^\s*\*/.test(ln)) continue;
+      const parseMatch = TAINT_INT_RE.exec(ln);
+      if (parseMatch) {
+        // Check if the parsed string came from a taint source
+        const parsedVar = parseMatch[2];
+        // Look backward for the source of this variable
+        for (let j = Math.max(0, i - 20); j < i; j++) {
+          if (SOCKET_READ_RE.test(lines789[j]) && new RegExp(`\\b${parsedVar}\\b`).test(lines789[j])) {
+            // The assignment target
+            const assignMatch = ln.match(/^\s*(\w+)\s*=\s*/);
+            if (assignMatch) {
+              taintedIntLines.push({ line: i + 1, varName: assignMatch[1] });
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    // Find allocation sinks using tainted variables
+    for (const { line: taintLine, varName } of taintedIntLines) {
+      for (let i = taintLine; i < lines789.length; i++) {
+        const ln = lines789[i];
+        if (/^\s*\/\//.test(ln) || /^\s*\*/.test(ln)) continue;
+        const allocMatch = ALLOC_SINK_RE.exec(ln);
+        if (allocMatch && allocMatch[2] === varName) {
+          // Check for bounds check between taint source and alloc sink
+          const betweenCode = lines789.slice(taintLine - 1, i).join('\n');
+          if (!BOUNDS_CHECK_RE.test(betweenCode) && !ALLOC_SIZE_SAFE.test(betweenCode)) {
+            const srcNode = findNearestNode(map, taintLine) || map.nodes[0];
+            const sinkNode = findNearestNode(map, i + 1) || map.nodes[0];
+            if (srcNode && sinkNode) {
+              const already = findings.some(f =>
+                Math.abs(f.source.line - taintLine) <= 3 && Math.abs(f.sink.line - (i + 1)) <= 3);
+              if (!already) {
+                findings.push({
+                  source: nodeRef(srcNode),
+                  sink: nodeRef(sinkNode),
+                  missing: 'CONTROL (bounds check on tainted integer before allocation)',
+                  severity: 'high',
+                  description: `Tainted integer '${varName}' from user input (L${taintLine}) used as ` +
+                    `allocation size in new ${allocMatch[1]}(${varName}) (L${i + 1}) without bounds check. ` +
+                    `An attacker can supply a huge value to cause OutOfMemoryError (DoS).`,
+                  fix: `Add bounds validation before allocation: if (${varName} < 0 || ${varName} > MAX_SIZE) ` +
+                    `throw new IllegalArgumentException("Size out of bounds"); ` +
+                    `Or use Math.min(${varName}, MAX_ALLOWED_SIZE).`,
+                });
+              }
+            }
+          }
+          break; // Found the allocation for this variable
         }
       }
     }

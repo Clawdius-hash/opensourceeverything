@@ -3286,8 +3286,16 @@ function verifyCWE316(map: NeuralMap): VerificationResult {
 
 /**
  * CWE-319: Cleartext Transmission of Sensitive Information
- * Pattern: Sensitive data sent over HTTP (not HTTPS), or via unencrypted network channels
+ *
+ * Patterns detected:
+ *   A. Sensitive data sent over HTTP (not HTTPS) or via unencrypted network channels
+ *   B. Credentials/passwords received from plain TCP sockets, then used in DB
+ *      connections or other sensitive sinks without encryption/decryption transform
+ *   C. Source-line scanning fallback for Juliet-style patterns: Socket -> readLine ->
+ *      password -> DriverManager.getConnection without Cipher transform
+ *
  * Property: Sensitive data must be transmitted over encrypted channels (TLS/HTTPS)
+ *           OR encrypted/decrypted before use after cleartext receipt.
  */
 function verifyCWE319(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
@@ -3387,6 +3395,142 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
           fix: 'Serve all sensitive endpoints over HTTPS. Redirect HTTP to HTTPS. ' +
             'Use HSTS (Strict-Transport-Security header) to prevent downgrade attacks.',
         });
+      }
+    }
+  }
+
+  // ---- Strategy 3: Graph taint — socket INGRESS -> sensitive STORAGE without crypto TRANSFORM ----
+  // Detects: password read from plain TCP socket -> DriverManager.getConnection(url, user, password)
+  // without any Cipher/encrypt/decrypt transform in between.
+  const PLAIN_SOCKET_RE_319 = /\b(new\s+Socket\s*\(|socket\.getInputStream|ServerSocket|DatagramSocket|SocketChannel\.open)\b/i;
+  const SSL_SOCKET_RE_319 = /\b(SSLSocket|SSLSocketFactory|SSLServerSocket|javax\.net\.ssl|SSLContext|SSLEngine)\b/i;
+  const DB_CONNECTION_RE_319 = /\b(DriverManager\.getConnection|DataSource\.getConnection|createConnection|mysql\.connect|pg\.connect|MongoClient)\b/i;
+  const CRYPTO_TRANSFORM_RE_319 = /\b(Cipher\.\w+|aesCipher|encrypt|decrypt|createCipher|createDecipher|AES|RSA|DES|Blowfish|doFinal|SecretKeySpec|crypto\.subtle)\b/i;
+
+  const socketIngress319 = map.nodes.filter(n =>
+    n.node_type === 'INGRESS' && (
+      PLAIN_SOCKET_RE_319.test(n.code_snapshot) ||
+      PLAIN_SOCKET_RE_319.test(n.analysis_snapshot || '') ||
+      n.node_subtype.includes('socket') ||
+      n.node_subtype.includes('tcp') ||
+      n.node_subtype.includes('network_read') ||
+      n.attack_surface.includes('network') ||
+      /\breadLine\b|\bgetInputStream\b|\bread\s*\(/.test(n.code_snapshot)
+    )
+  );
+
+  const credSinks319 = map.nodes.filter(n =>
+    (n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL') && (
+      DB_CONNECTION_RE_319.test(n.code_snapshot) ||
+      DB_CONNECTION_RE_319.test(n.analysis_snapshot || '') ||
+      n.node_subtype.includes('db_connect') ||
+      n.node_subtype.includes('db_read') ||
+      n.node_subtype.includes('sql_query')
+    )
+  );
+
+  for (const src of socketIngress319) {
+    const srcCode = stripComments(src.analysis_snapshot || src.code_snapshot);
+    if (SSL_SOCKET_RE_319.test(srcCode) || TLS_SAFE_RE.test(srcCode)) continue;
+
+    for (const sink of credSinks319) {
+      const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
+      const sinkSensitive = SENSITIVE_RE.test(sinkCode) || SENSITIVE_RE.test(sink.label) ||
+        sink.data_in.some(d => d.sensitivity !== 'NONE' || SENSITIVE_RE.test(d.name) || d.tainted);
+      if (!sinkSensitive) continue;
+
+      const hasUnsafePath = hasTaintedPathWithoutControl(map, src.id, sink.id) ||
+        scopeBasedTaintReaches(map, src.id, sink.id);
+
+      if (hasUnsafePath) {
+        const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
+        const combinedScope = stripComments(scopeSnaps.join('\n'));
+        if (!CRYPTO_TRANSFORM_RE_319.test(combinedScope)) {
+          const already = findings.some(f => f.source.id === src.id && f.sink.id === sink.id);
+          if (!already) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(sink),
+              missing: 'TRANSFORM (encryption/decryption of credentials received over cleartext channel)',
+              severity: 'high',
+              description: `Sensitive data from cleartext socket at ${src.label} flows to ${sink.label} ` +
+                `without encryption. Credentials read over an unencrypted TCP connection are used directly ` +
+                `in a database/auth call — an attacker on the network can intercept them (MITM).`,
+              fix: 'Use SSLSocket/TLS for the network connection, or decrypt credentials with Cipher ' +
+                'before using them. Never transmit passwords over plain TCP sockets.',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // ---- Strategy 4: Source-line scanning fallback for Juliet patterns ----
+  // Catches: new Socket() -> readLine() -> password -> DriverManager.getConnection(url, user, password)
+  // when graph edges are incomplete but source code clearly shows the pattern.
+  const src319 = map.source_code || '';
+  if (src319 && findings.length === 0) {
+    const lines319 = src319.split('\n');
+    const allCode319 = stripComments(src319);
+
+    const hasPlainSocket319 = PLAIN_SOCKET_RE_319.test(allCode319) && !SSL_SOCKET_RE_319.test(allCode319);
+
+    if (hasPlainSocket319) {
+      // Find lines where sensitive data is read from socket
+      const socketReadLines319: number[] = [];
+      for (let i = 0; i < lines319.length; i++) {
+        const ln = lines319[i];
+        if (/^\s*\/\//.test(ln) || /^\s*\*/.test(ln)) continue;
+        if (/\breadLine\b|\bread\s*\(/.test(ln)) {
+          const assignMatch = ln.match(/^\s*(\w+)\s*=\s*.*(readLine|read\s*\()/);
+          if (assignMatch && SENSITIVE_RE.test(assignMatch[1])) {
+            socketReadLines319.push(i + 1);
+          }
+        }
+        if (/\breadLine\b|\bread\s*\(|\bgetInputStream\b/.test(ln) && SENSITIVE_RE.test(ln)) {
+          if (!socketReadLines319.includes(i + 1)) socketReadLines319.push(i + 1);
+        }
+      }
+
+      // Find lines where credentials are used in DB connections
+      const dbUseLines319: number[] = [];
+      for (let i = 0; i < lines319.length; i++) {
+        const ln = lines319[i];
+        if (/^\s*\/\//.test(ln) || /^\s*\*/.test(ln)) continue;
+        if (DB_CONNECTION_RE_319.test(ln) && SENSITIVE_RE.test(ln)) {
+          dbUseLines319.push(i + 1);
+        }
+      }
+
+      if (socketReadLines319.length > 0 && dbUseLines319.length > 0) {
+        for (const readLine of socketReadLines319) {
+          for (const useLine of dbUseLines319) {
+            if (useLine <= readLine) continue;
+            const betweenCode = lines319.slice(readLine - 1, useLine).join('\n');
+            if (!CRYPTO_TRANSFORM_RE_319.test(betweenCode)) {
+              const srcNode = map.nodes.find(n => Math.abs(n.line_start - readLine) <= 2) || map.nodes[0];
+              const sinkNode = map.nodes.find(n => Math.abs(n.line_start - useLine) <= 2) || map.nodes[0];
+              if (srcNode && sinkNode) {
+                const already = findings.some(f =>
+                  Math.abs(f.source.line - readLine) <= 3 && Math.abs(f.sink.line - useLine) <= 3);
+                if (!already) {
+                  findings.push({
+                    source: nodeRef(srcNode),
+                    sink: nodeRef(sinkNode),
+                    missing: 'TRANSFORM (encryption of password received over cleartext TCP socket)',
+                    severity: 'high',
+                    description: `Password read from cleartext TCP socket (L${readLine}) used directly ` +
+                      `in database connection (L${useLine}) without encryption. An attacker who intercepts ` +
+                      `the TCP stream obtains the database password in plaintext.`,
+                    fix: 'Use SSLSocket instead of plain Socket for receiving credentials. ' +
+                      'Alternatively, decrypt the password with Cipher before passing to getConnection(). ' +
+                      'Never transmit credentials over unencrypted channels.',
+                  });
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -4956,45 +5100,138 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
       }
     }
   }
-  // --- Source-based detection: variable assigned null then dereferenced ---
-  // Catches the Juliet pattern: data = null; ... data.toString() without null check.
-  // The graph-based approach above misses this because the source (null literal) is not
-  // a nullable API call (find/get/query) — it's a direct null assignment.
+  // --- Source-based detection: multiple null-dereference patterns ---
+  // The graph-based approach above misses patterns where the source is a null literal
+  // (not a nullable API call), or where the dereference happens in a structurally
+  // broken null-guard (single & instead of &&, dereference inside if-null-true block).
   if (findings.length === 0) {
     const src476 = map.source_code || '';
     if (src476) {
       const lines = src476.split('\n');
+      // Track which lines we've already flagged to avoid duplicate findings
+      const flaggedLines = new Set<number>();
+
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
 
-        // Pattern: variable explicitly assigned null, then dereferenced without reassignment or null check
+        // ── Pattern A: Non-short-circuit & in null check ──
+        // if ((x != null) & (x.method())) — single & evaluates both sides,
+        // so x.method() executes even when x is null. Must use && instead.
+        if (/\bif\s*\(/.test(line)) {
+          // Extract the full condition. Handle multi-paren conditions with greedy match.
+          const condMatch = line.match(/\bif\s*\((.*)\)\s*$/);
+          // Also try without trailing ) for lines like: if ((x != null) & (x.len() > 0)) {
+          const condMatch2 = condMatch || line.match(/\bif\s*\((.*)\)/);
+          if (condMatch2) {
+            const cond = condMatch2[1];
+            // Has null check AND has single & (not && or &=)
+            if (/\w+\s*!=\s*null/.test(cond) && /[^&]&[^&=]/.test(cond)) {
+              // And has dereference on the other side of &
+              if (/\.\w+\s*\(/.test(cond) || /\.length\b/.test(cond) || /\.size\b/.test(cond)) {
+                if (!flaggedLines.has(i)) {
+                  flaggedLines.add(i);
+                  const nearNode = map.nodes.find(n => Math.abs(n.line_start - (i + 1)) <= 2) || map.nodes[0];
+                  if (nearNode) {
+                    findings.push({
+                      source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                      missing: 'CONTROL (use && not & for null guard — short-circuit evaluation)',
+                      severity: 'medium',
+                      description: `L${i + 1}: Non-short-circuit operator & used in null check. Both sides of & are always ` +
+                        `evaluated, so the dereference executes even when the variable is null. Use && instead.`,
+                      fix: 'Use && (short-circuit AND) instead of & (bitwise AND) in null checks. With &&, the right side ' +
+                        'is only evaluated if the left side is true, preventing null dereference.',
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // ── Pattern B: Dereference inside if (x == null) block ──
+        // if (myString == null) { IO.writeLine(myString.length()); }
+        // The variable is KNOWN null inside the true branch, so any dereference is a bug.
+        if (/\bif\s*\(/.test(line)) {
+          const eqNullMatch = line.match(/\bif\s*\(\s*(\w+)\s*==\s*null\s*\)/);
+          if (eqNullMatch) {
+            const varName = eqNullMatch[1];
+            // Find the block after this if: track brace depth.
+            // Scan up to 20 lines ahead to handle multi-line blocks where the
+            // opening brace is on a separate line (common in Java/C# style).
+            let blockDepth = 0;
+            let blockStart = -1;
+            for (let k = i; k < Math.min(i + 20, lines.length); k++) {
+              for (let c = 0; c < lines[k].length; c++) {
+                if (lines[k][c] === '{') {
+                  if (blockStart === -1) blockStart = k;
+                  blockDepth++;
+                }
+                if (lines[k][c] === '}') blockDepth--;
+              }
+              if (blockStart !== -1 && blockDepth === 0) {
+                // Check all lines within this block for dereference of varName
+                const derefInBlock = new RegExp(`\\b${varName}\\.\\w+\\s*[\\(\\[]|\\b${varName}\\.length\\b|\\b${varName}\\.toString\\b`);
+                for (let m = blockStart; m <= k; m++) {
+                  if (/^\s*\/\//.test(lines[m]) || /^\s*\*/.test(lines[m])) continue;
+                  if (derefInBlock.test(lines[m]) && !flaggedLines.has(m)) {
+                    flaggedLines.add(m);
+                    const nearNode = map.nodes.find(n => Math.abs(n.line_start - (m + 1)) <= 2) || map.nodes[0];
+                    if (nearNode) {
+                      findings.push({
+                        source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                        missing: 'CONTROL (do not dereference inside null-true branch)',
+                        severity: 'medium',
+                        description: `L${m + 1}: Variable '${varName}' is dereferenced inside a block where it is known to be null ` +
+                          `(the if at L${i + 1} checks ${varName} == null). This always causes a NullPointerException.`,
+                        fix: `Do not dereference '${varName}' inside the null branch. Either handle the null case without ` +
+                          `dereferencing, or move the dereference to the else branch (where it is known non-null).`,
+                      });
+                    }
+                  }
+                }
+                break;
+              }
+            }
+          }
+        }
+
+        // ── Pattern C: Variable assigned null, then dereferenced without reassignment or null check ──
+        // data = null; ... data.toString() — the original pattern
         const nullAssign = line.match(/(\w+)\s*=\s*null\s*;/);
         if (nullAssign) {
           const varName = nullAssign[1];
-          let reassigned = false;
-          for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+          for (let j = i + 1; j < Math.min(i + 30, lines.length); j++) {
             const ahead = lines[j];
             if (/^\s*\/\//.test(ahead) || /^\s*\*/.test(ahead)) continue;
             // Check if variable is reassigned to non-null
             const reassignPat = new RegExp(`\\b${varName}\\s*=\\s*(?!null\\s*;|=)`);
-            if (reassignPat.test(ahead)) { reassigned = true; break; }
-            // Check if there's a null check
+            if (reassignPat.test(ahead)) break; // reassigned — safe
+            // Check if there's a null check (both == and != count as awareness of nullability)
             const nullCheckPat = new RegExp(`\\b${varName}\\s*!=\\s*null\\b|\\b${varName}\\s*==\\s*null\\b`);
-            if (nullCheckPat.test(ahead)) { reassigned = true; break; }
-            // Check if variable is dereferenced
-            const derefPat = new RegExp(`\\b${varName}\\.(\\w+)\\s*\\(`);
+            if (nullCheckPat.test(ahead)) {
+              // If it's a short-circuit guard on the same line as a deref, that's safe
+              if (/&&/.test(ahead)) break;
+              // If it uses single &, that's Pattern A (handled above) — but also break to avoid double-report
+              if (/[^&]&[^&=]/.test(ahead)) break;
+              // Otherwise it's a null check — break (handled by Pattern B or actually safe)
+              break;
+            }
+            // Check if variable is dereferenced (method call or property access)
+            const derefPat = new RegExp(`\\b${varName}\\.(\\w+)\\s*[\\(\\[]|\\b${varName}\\.length\\b|\\b${varName}\\.toString\\b`);
             if (derefPat.test(ahead)) {
-              if (/&&/.test(ahead) && nullCheckPat.test(ahead)) { reassigned = true; break; }
-              const nearNode = map.nodes.find(n => Math.abs(n.line_start - (j + 1)) <= 2) || map.nodes[0];
-              if (nearNode) {
-                findings.push({
-                  source: nodeRef(nearNode), sink: nodeRef(nearNode),
-                  missing: 'CONTROL (null check before dereference)',
-                  severity: 'medium',
-                  description: `L${j + 1}: Variable '${varName}' was assigned null at L${i + 1} and is dereferenced without a null check.`,
-                  fix: 'Add a null check before dereferencing. Ensure the variable is assigned a non-null value before use.',
-                });
+              if (!flaggedLines.has(j)) {
+                flaggedLines.add(j);
+                const nearNode = map.nodes.find(n => Math.abs(n.line_start - (j + 1)) <= 2) || map.nodes[0];
+                if (nearNode) {
+                  findings.push({
+                    source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                    missing: 'CONTROL (null check before dereference)',
+                    severity: 'medium',
+                    description: `L${j + 1}: Variable '${varName}' was assigned null at L${i + 1} and is dereferenced without a null check.`,
+                    fix: 'Add a null check before dereferencing. Ensure the variable is assigned a non-null value before use.',
+                  });
+                }
               }
               break;
             }
@@ -5004,6 +5241,7 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
     }
   }
 
+  // --- Rust .unwrap() detection ---
   if (findings.length === 0) {
     const unwrapNodes = map.nodes.filter(n =>
       UNSAFE_UNWRAP_RE.test(n.analysis_snapshot || n.code_snapshot) && !NULL_SAFE_RE.test(stripComments(n.analysis_snapshot || n.code_snapshot))
@@ -26622,6 +26860,7 @@ function verifyCWE226(map: NeuralMap): VerificationResult {
   const SCRUB_PATTERN = /\b(\.fill\s*\(\s*0|memset|memset_s|explicit_bzero|SecureZeroMemory|RtlSecureZeroMemory|bzero|zeroize|wipe|scrub|sanitize.*before.*reuse|clear.*sensitive|overwrite|secureClear|OPENSSL_cleanse|sodium_memzero|crypto_wipe)\b/i;
   const STRUCT_CLEAR = /\b(Object\.keys\([^)]*\)\.forEach\s*\(\s*\w+\s*=>\s*delete|for\s*\(\s*(?:let|const|var)\s+\w+\s+in\s+\w+\)\s*delete|\.fill\(|\.zero|=\s*\{\s*\}|=\s*new\s+\w+\(\s*\))\b/i;
 
+  // --- Phase 1: Graph-based detection (pool/reuse patterns) ---
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
     if (SENSITIVE_DATA.test(code) && REUSE_PATTERN.test(code)) {
@@ -26663,6 +26902,199 @@ function verifyCWE226(map: NeuralMap): VerificationResult {
                 'Use language-appropriate secure zeroing (explicit_bzero, SecureZeroMemory, buffer.fill(0)).',
             });
           }
+        }
+      }
+    }
+  }
+
+  // --- Phase 2: Source-line scan for mutable buffers holding sensitive data ---
+  // Catches the Juliet pattern: StringBuffer password = new StringBuffer(); password.append(readLine());
+  // ... method exits without calling password.delete(0, password.length()) or equivalent clearing.
+  // The vulnerability is the ABSENCE of a clearing operation before scope exit.
+  if (findings.length === 0 && map.source_code) {
+    const src = stripComments(map.source_code);
+    const lines = src.split('\n');
+
+    // Sensitive name pattern for variable declarations
+    const SENSITIVE_NAME = /\b(password|passwd|secret|token|apiKey|api_key|privateKey|private_key|credential|credentials|creditCard|credit_card|ssn|pin|cvv|sessionId|session_id|accessToken|access_token|refreshToken|refresh_token|authToken|auth_token|passphrase|masterKey|master_key|encryptionKey|encryption_key|secretKey|secret_key)\b/i;
+
+    // Mutable buffer types that can hold and leak sensitive data
+    const MUTABLE_BUFFER_DECL = /\b(StringBuffer|StringBuilder|CharBuffer|ByteBuffer)\s+(\w+)\s*=\s*new\s+(StringBuffer|StringBuilder|CharBuffer|ByteBuffer)\b/;
+    const CHAR_ARRAY_DECL = /\b(char|byte)\s*\[\s*\]\s+(\w+)\s*=/;
+
+    // Clearing operations that properly scrub mutable buffers
+    // Java: buffer.delete(0, buffer.length()), buffer.setLength(0), Arrays.fill(arr, '\0'), Arrays.fill(arr, (byte)0)
+    // C/C++: memset, memset_s, explicit_bzero, SecureZeroMemory
+    // Generic: .fill(0), .clear(), zeroize, wipe
+    const makeClearPattern = (varName: string): RegExp => new RegExp(
+      `\\b${varName}\\.delete\\s*\\(\\s*0` +           // buffer.delete(0, ...)
+      `|\\b${varName}\\.setLength\\s*\\(\\s*0\\s*\\)` + // buffer.setLength(0)
+      `|\\b${varName}\\.replace\\s*\\(\\s*0` +          // buffer.replace(0, ...)
+      `|\\bArrays\\.fill\\s*\\(\\s*${varName}` +        // Arrays.fill(arr, ...)
+      `|\\b${varName}\\s*=\\s*new\\s+StringBuffer\\s*\\(\\s*\\)` + // password = new StringBuffer()
+      `|\\b${varName}\\s*=\\s*new\\s+StringBuilder\\s*\\(\\s*\\)` + // password = new StringBuilder()
+      `|\\b${varName}\\s*=\\s*""` +                     // password = "" (for String reassign)
+      `|\\b${varName}\\s*=\\s*null` +                   // password = null (explicit nullification)
+      `|\\bmemset\\s*\\(\\s*${varName}` +               // memset(buf, ...)
+      `|\\bmemset_s\\s*\\(\\s*${varName}` +             // memset_s(buf, ...)
+      `|\\bexplicit_bzero\\s*\\(\\s*${varName}` +       // explicit_bzero(buf, ...)
+      `|\\bSecureZeroMemory\\s*\\(\\s*${varName}` +     // SecureZeroMemory(buf, ...)
+      `|\\b${varName}\\.fill\\s*\\(` +                  // buf.fill(0) (JS/Node)
+      `|\\bOPENSSL_cleanse\\s*\\(\\s*${varName}`,       // OPENSSL_cleanse(buf, ...)
+      'i'
+    );
+
+    // Track sensitive mutable buffers: { varName, declLine, type }
+    interface SensitiveBuf { varName: string; declLine: number; type: string }
+    const sensitiveBufs: SensitiveBuf[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Match: StringBuffer password = new StringBuffer();
+      const bufMatch = line.match(MUTABLE_BUFFER_DECL);
+      if (bufMatch) {
+        const varName = bufMatch[2];
+        if (SENSITIVE_NAME.test(varName)) {
+          sensitiveBufs.push({ varName, declLine: i, type: bufMatch[1] });
+        }
+        continue;
+      }
+
+      // Match: char[] password = ... or byte[] key = ...
+      const arrMatch = line.match(CHAR_ARRAY_DECL);
+      if (arrMatch) {
+        const varName = arrMatch[2];
+        if (SENSITIVE_NAME.test(varName)) {
+          sensitiveBufs.push({ varName, declLine: i, type: arrMatch[1] + '[]' });
+        }
+      }
+    }
+
+    // For each sensitive buffer, check if it's populated and cleared within its method scope
+    for (const buf of sensitiveBufs) {
+      // Find the method that contains this declaration
+      let methodStart = buf.declLine;
+      let braceDepth = 0;
+      // Walk backwards to find method start (look for method signature)
+      for (let k = buf.declLine; k >= 0; k--) {
+        const l = lines[k];
+        // Count braces going backwards to find the enclosing method
+        for (let c = l.length - 1; c >= 0; c--) {
+          if (l[c] === '}') braceDepth++;
+          if (l[c] === '{') braceDepth--;
+        }
+        if (braceDepth < 0 || /\b(public|private|protected|static|void|throws)\b/.test(l) && /\{/.test(l)) {
+          methodStart = k;
+          break;
+        }
+      }
+
+      // Find method end by tracking brace depth forward from methodStart
+      braceDepth = 0;
+      let methodEnd = lines.length - 1;
+      let passedFirstBrace = false;
+      for (let k = methodStart; k < lines.length; k++) {
+        const l = lines[k];
+        for (const c of l) {
+          if (c === '{') { braceDepth++; passedFirstBrace = true; }
+          if (c === '}') braceDepth--;
+        }
+        if (passedFirstBrace && braceDepth === 0) {
+          methodEnd = k;
+          break;
+        }
+      }
+
+      // Check if the buffer is populated (append, put, read into, etc.)
+      let isPopulated = false;
+      const populatePattern = new RegExp(
+        `\\b${buf.varName}\\.(append|put|write|read|insert)\\s*\\(` +
+        `|\\b${buf.varName}\\s*\\[\\s*\\d+\\s*\\]\\s*=` +          // arr[0] = 'x'
+        `|\\bSystem\\.arraycopy\\s*\\([^,]+,\\s*[^,]+,\\s*${buf.varName}`,
+        'i'
+      );
+      for (let k = buf.declLine + 1; k <= methodEnd; k++) {
+        if (populatePattern.test(lines[k])) {
+          isPopulated = true;
+          break;
+        }
+      }
+
+      if (!isPopulated) continue;  // Buffer declared but never populated — not a real risk
+
+      // Check if the buffer is cleared anywhere before method exit
+      const clearPat = makeClearPattern(buf.varName);
+      let isCleared = false;
+      for (let k = buf.declLine + 1; k <= methodEnd; k++) {
+        if (clearPat.test(lines[k])) {
+          isCleared = true;
+          break;
+        }
+      }
+
+      if (!isCleared) {
+        const nearNode = map.nodes.find(n =>
+          Math.abs(n.line_start - (buf.declLine + 1)) <= 3
+        ) || map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'TRANSFORM (clear sensitive buffer before method exit)',
+            severity: 'high',
+            description: `L${buf.declLine + 1}: ${buf.type} '${buf.varName}' holds sensitive data but is never ` +
+              `cleared before the method exits (scope ends at L${methodEnd + 1}). The sensitive data remains in memory ` +
+              `and may be exposed via heap inspection, memory dumps, or reuse of the underlying storage.`,
+            fix: `Clear the buffer before it goes out of scope. For StringBuffer/StringBuilder: ` +
+              `${buf.varName}.delete(0, ${buf.varName}.length()). For char[]: Arrays.fill(${buf.varName}, '\\0'). ` +
+              `For byte[]: Arrays.fill(${buf.varName}, (byte) 0). Do this in a finally block to ensure cleanup on exceptions.`,
+          });
+        }
+      }
+    }
+
+    // Phase 2b: Detect char[]/byte[] from getPassword()/readPassword() not cleared
+    // Pattern: char[] pwd = console.readPassword(); ... no Arrays.fill(pwd, ...)
+    const SENSITIVE_READ = /\b(char|byte)\s*\[\s*\]\s+(\w+)\s*=\s*\w+\.(readPassword|getPassword|toCharArray)\s*\(/;
+    for (let i = 0; i < lines.length; i++) {
+      const readMatch = lines[i].match(SENSITIVE_READ);
+      if (!readMatch) continue;
+      const varName = readMatch[2];
+      // Already caught above?
+      if (sensitiveBufs.some(b => b.varName === varName)) continue;
+
+      // Find enclosing method end
+      let braceD = 0;
+      let mEnd = lines.length - 1;
+      let found = false;
+      for (let k = i; k < lines.length; k++) {
+        for (const c of lines[k]) {
+          if (c === '{') { braceD++; found = true; }
+          if (c === '}') braceD--;
+        }
+        if (found && braceD <= 0) { mEnd = k; break; }
+      }
+
+      const clearPat2 = makeClearPattern(varName);
+      let cleared = false;
+      for (let k = i + 1; k <= mEnd; k++) {
+        if (clearPat2.test(lines[k])) { cleared = true; break; }
+      }
+
+      if (!cleared) {
+        const nearNode = map.nodes.find(n =>
+          Math.abs(n.line_start - (i + 1)) <= 3
+        ) || map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'TRANSFORM (clear sensitive char[]/byte[] before method exit)',
+            severity: 'high',
+            description: `L${i + 1}: '${varName}' from ${readMatch[3]}() holds sensitive data but is never ` +
+              `cleared. The char[]/byte[] remains in memory with sensitive content until garbage collection.`,
+            fix: `Call Arrays.fill(${varName}, '\\0') in a finally block before the method returns. ` +
+              `Using char[] for passwords is only secure if you actually zero it when done.`,
+          });
         }
       }
     }
@@ -33651,6 +34083,490 @@ function verifyCWE549(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-549', name: 'Missing Password Field Masking', holds: findings.length === 0, findings };
 }
 
+// ---------------------------------------------------------------------------
+// CWE-111: Direct Use of Unsafe JNI
+// ---------------------------------------------------------------------------
+/**
+ * CWE-111: Direct Use of Unsafe JNI
+ * UPGRADED — hand-written with specific detection for unsafe JNI usage.
+ *
+ * Pattern: Java code declares `native` methods (JNI interface) and passes
+ * user-controlled input to them without validation. The native C/C++ code
+ * cannot perform Java-style bounds checking, so buffer overflows, format
+ * string attacks, and memory corruption are possible.
+ *
+ * Two detection paths:
+ *   1. `native` method declared + user input flows to a call of that method
+ *      without validation (bounds check, length limit, allowlist)
+ *   2. User input flows to System.loadLibrary() — attacker controls which
+ *      native library gets loaded
+ *
+ * Safe patterns:
+ *   - Input validation/bounds checking before native call
+ *   - Allowlist of permitted values
+ *   - Hardcoded library name in System.loadLibrary (not tainted)
+ */
+function verifyCWE111(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // --- Detection path 1: native method + tainted call to it ---
+  // Find nodes whose code_snapshot contains a `native` method declaration
+  const NATIVE_DECL_RE = /\bnative\s+\w[\w<>\[\], ]*\s+(\w+)\s*\(/;
+
+  // Collect all native method names declared in the codebase
+  const nativeMethodNames = new Set<string>();
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    const match = NATIVE_DECL_RE.exec(code);
+    if (match) {
+      nativeMethodNames.add(match[1]);
+    }
+  }
+
+  if (nativeMethodNames.size > 0 && ingress.length > 0) {
+    // Find call sites of native methods — any node whose code calls a native method
+    for (const node of map.nodes) {
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      for (const methodName of nativeMethodNames) {
+        // Match calls like: test(stringLine, intNumber) or this.test(x)
+        const callPattern = new RegExp(`\\b${methodName}\\s*\\(`);
+        // But skip the native declaration itself
+        const declPattern = new RegExp(`\\bnative\\s+.*\\b${methodName}\\s*\\(`);
+        if (callPattern.test(code) && !declPattern.test(code)) {
+          // This node calls a native method — check if any INGRESS reaches it
+          for (const src of ingress) {
+            if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+              // Check scope for validation
+              const scopeSnapshots = getContainingScopeSnapshots(map, node.id);
+              const combinedScope = stripComments(scopeSnapshots.join('\n') || code);
+              const isSafe = /\bvalidate\s*\(|\bboundsCheck\s*\(|\bif\s*\(\s*\w+\s*(?:<=?|>=?|<|>)\s*\d|\blength\s*(?:<=?|>=?)\s*\d|\bMath\.min\s*\(|\bMath\.max\s*\(|\ballowlist\b|\bwhitelist\b/i.test(combinedScope);
+
+              if (!isSafe) {
+                findings.push({
+                  source: nodeRef(src),
+                  sink: nodeRef(node),
+                  missing: 'CONTROL (input validation before JNI native call)',
+                  severity: 'high',
+                  description: `User input from ${src.label} flows to JNI native method ${methodName}() at ${node.label} without validation. ` +
+                    `Native code cannot perform Java bounds checking — buffer overflows, format string attacks, ` +
+                    `and memory corruption are possible.`,
+                  fix: 'Validate all data before passing to JNI native methods. Check string lengths, ' +
+                    'integer ranges, and array bounds. Use an allowlist of permitted values where possible. ' +
+                    'Consider wrapping JNI calls in a safe Java API that validates inputs.',
+                });
+                break; // One finding per sink per native method
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // --- Detection path 2: tainted System.loadLibrary() ---
+  const LOAD_LIBRARY_RE = /\bSystem\s*\.\s*loadLibrary\s*\(/;
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (LOAD_LIBRARY_RE.test(code)) {
+      for (const src of ingress) {
+        if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(node),
+            missing: 'CONTROL (library name validation — use hardcoded name or allowlist)',
+            severity: 'critical',
+            description: `User input from ${src.label} controls the library name in System.loadLibrary() at ${node.label}. ` +
+              `An attacker can load arbitrary native libraries, gaining code execution.`,
+            fix: 'Never pass user input to System.loadLibrary(). Use a hardcoded library name or ' +
+              'validate against a strict allowlist of permitted library names.',
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  // --- Detection path 3: structural — native decl + any INGRESS in same scope ---
+  // If we found native methods but no taint path (mapper may not create DATA_FLOW edges),
+  // check if native method calls share function scope with user input reads
+  if (findings.length === 0 && nativeMethodNames.size > 0 && ingress.length > 0) {
+    for (const node of map.nodes) {
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+      for (const methodName of nativeMethodNames) {
+        const callPattern = new RegExp(`\\b${methodName}\\s*\\(`);
+        const declPattern = new RegExp(`\\bnative\\s+.*\\b${methodName}\\s*\\(`);
+        if (callPattern.test(code) && !declPattern.test(code)) {
+          for (const src of ingress) {
+            if (sharesFunctionScope(map, src.id, node.id)) {
+              const scopeSnapshots = getContainingScopeSnapshots(map, node.id);
+              const combinedScope = stripComments(scopeSnapshots.join('\n') || code);
+              const isSafe = /\bvalidate\s*\(|\bboundsCheck\s*\(|\bif\s*\(\s*\w+\s*(?:<=?|>=?|<|>)\s*\d|\blength\s*(?:<=?|>=?)\s*\d|\bMath\.min\s*\(|\bMath\.max\s*\(|\ballowlist\b|\bwhitelist\b/i.test(combinedScope);
+
+              if (!isSafe) {
+                findings.push({
+                  source: nodeRef(src),
+                  sink: nodeRef(node),
+                  missing: 'CONTROL (input validation before JNI native call)',
+                  severity: 'high',
+                  description: `User input from ${src.label} is in scope with JNI native method ${methodName}() call at ${node.label}. ` +
+                    `Native code cannot perform Java bounds checking — buffer overflows, format string attacks, ` +
+                    `and memory corruption are possible when user input reaches native methods.`,
+                  fix: 'Validate all data before passing to JNI native methods. Check string lengths, ' +
+                    'integer ranges, and array bounds. Use an allowlist of permitted values where possible.',
+                });
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-111', name: 'Direct Use of Unsafe JNI', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
+// CWE-114: Process Control
+// ---------------------------------------------------------------------------
+/**
+ * CWE-114: Process Control
+ * UPGRADED — hand-written with specific detection for unsafe process/library loading.
+ *
+ * Pattern: Code loads native libraries or executes processes in ways that an
+ * attacker can control:
+ *   1. System.loadLibrary(name) — loads by name from java.library.path; attacker
+ *      can plant a malicious DLL/so in a directory on the search path
+ *   2. System.load(taintedPath) — attacker controls the full path to a library
+ *   3. Runtime.exec(taintedCmd) — attacker controls process execution
+ *
+ * The Juliet pattern: System.loadLibrary("test.dll") is BAD because it uses
+ * relative name resolution. System.load("/absolute/path/test.dll") is GOOD
+ * because it uses an absolute path that the attacker cannot manipulate.
+ *
+ * Safe patterns:
+ *   - System.load() with hardcoded absolute path
+ *   - Allowlist validation of library name or command
+ *   - SecurityManager restricting library loading
+ */
+function verifyCWE114(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  const LOAD_LIBRARY_RE = /\bSystem\s*\.\s*loadLibrary\s*\(/;
+  const SYSTEM_LOAD_RE = /\bSystem\s*\.\s*load\s*\(/;
+  const RUNTIME_EXEC_RE = /\bRuntime\s*\..*\bexec\s*\(/;
+  const PROCESS_BUILDER_RE = /\bnew\s+ProcessBuilder\s*\(/;
+
+  // Safe patterns for CWE-114
+  const ABSOLUTE_PATH_RE = /System\s*\.\s*load\s*\(\s*(?:root\s*\+|"\/|"[A-Z]:\\|['"]\/home|['"]\/usr|['"]\/opt|['"]C:\\)/;
+  const SECURITY_MANAGER_RE = /\bSecurityManager\b|\bcheckLink\b|\bcheckExec\b/;
+  const ALLOWLIST_RE = /\ballowlist\b|\bwhitelist\b|\bvalidat(?:e|ed|ion)\s*\(|\bpermitted\b|\bapproved\b/i;
+
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    const scopeSnapshots = getContainingScopeSnapshots(map, node.id);
+    const combinedScope = stripComments(scopeSnapshots.join('\n') || code);
+
+    // --- Detection 1: System.loadLibrary() — relative name, search-path based ---
+    if (LOAD_LIBRARY_RE.test(code)) {
+      // Check if there's a SecurityManager or allowlist in scope
+      if (!SECURITY_MANAGER_RE.test(combinedScope) && !ALLOWLIST_RE.test(combinedScope)) {
+        // System.loadLibrary is inherently risky — relative resolution
+        findings.push({
+          source: nodeRef(node),
+          sink: nodeRef(node),
+          missing: 'CONTROL (use System.load() with absolute path instead of System.loadLibrary())',
+          severity: 'medium',
+          description: `System.loadLibrary() at ${node.label} loads a native library by name using java.library.path search. ` +
+            `An attacker who can influence the search path or plant a DLL in a searched directory ` +
+            `can hijack the library loading (DLL search-order hijacking).`,
+          fix: 'Use System.load() with an absolute path to the library instead of System.loadLibrary(). ' +
+            'Example: System.load("/opt/myapp/libs/mylib.so") instead of System.loadLibrary("mylib"). ' +
+            'If System.loadLibrary() is unavoidable, restrict java.library.path and use a SecurityManager.',
+        });
+      }
+    }
+
+    // --- Detection 2: System.load() with tainted path ---
+    if (SYSTEM_LOAD_RE.test(code) && !LOAD_LIBRARY_RE.test(code)) {
+      // System.load() is safe IF the path is hardcoded/absolute
+      if (ABSOLUTE_PATH_RE.test(code)) {
+        continue; // Safe — hardcoded absolute path
+      }
+      // Check if tainted input flows to this node
+      for (const src of ingress) {
+        if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+          if (!ALLOWLIST_RE.test(combinedScope)) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(node),
+              missing: 'CONTROL (path validation for System.load())',
+              severity: 'critical',
+              description: `User input from ${src.label} controls the library path in System.load() at ${node.label}. ` +
+                `An attacker can load any native library on disk, gaining arbitrary code execution.`,
+              fix: 'Never pass user input to System.load(). Use a hardcoded absolute path or ' +
+                'validate the path against a strict allowlist of permitted library paths.',
+            });
+            break;
+          }
+        }
+      }
+    }
+
+    // --- Detection 3: Runtime.exec() or ProcessBuilder with tainted input ---
+    if (RUNTIME_EXEC_RE.test(code) || PROCESS_BUILDER_RE.test(code)) {
+      for (const src of ingress) {
+        if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+          if (!ALLOWLIST_RE.test(combinedScope)) {
+            findings.push({
+              source: nodeRef(src),
+              sink: nodeRef(node),
+              missing: 'CONTROL (process execution validation)',
+              severity: 'critical',
+              description: `User input from ${src.label} controls process execution at ${node.label}. ` +
+                `An attacker can execute arbitrary processes on the system.`,
+              fix: 'Never pass user input to Runtime.exec() or ProcessBuilder. Use a strict allowlist ' +
+                'of permitted commands. Consider using a ProcessBuilder with a fixed command array ' +
+                'instead of string concatenation.',
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return { cwe: 'CWE-114', name: 'Process Control', holds: findings.length === 0, findings };
+}
+
+/**
+ * CWE-15: External Control of System or Configuration Setting
+ * Pattern: INGRESS → system/config modification API without CONTROL(validation)
+ * Property: External input never directly modifies system or configuration settings.
+ *
+ * Detects tainted data flowing from external sources (sockets, HTTP requests,
+ * user input) into APIs that modify system-level configuration:
+ *   Java:   System.setProperty(), Connection.setCatalog(), Connection.setSchema(),
+ *           Properties.setProperty(), System.setOut(), System.setErr()
+ *   C/C++:  putenv(), setenv()
+ *   Python: os.environ[], os.putenv()
+ *   JS/TS:  process.env assignment
+ *
+ * The Juliet pattern: socket.read() → dbConnection.setCatalog(data)
+ * — attacker controls which database catalog is active.
+ */
+function verifyCWE15(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Config/system modification sink patterns across languages
+  const configSinkRe = /\b(System\s*\.\s*setProperty|setProperty\s*\(|setCatalog\s*\(|setSchema\s*\(|putenv\s*\(|setenv\s*\(|os\s*\.\s*environ\s*\[|os\s*\.\s*putenv\s*\(|process\s*\.\s*env\s*\[|Properties\s*\.\s*setProperty|System\s*\.\s*setOut|System\s*\.\s*setErr|Runtime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*exec)\b/i;
+
+  const configSinks = map.nodes.filter(n => {
+    const code = n.analysis_snapshot || n.code_snapshot;
+    return configSinkRe.test(code);
+  });
+
+  const safeConfigRe = /\bvalidate\s*\(|\ballowlist\b|\bwhitelist\b|\ballowed\w*\s*\.\s*(?:contains|includes|has|indexOf)\b|\bPattern\s*\.\s*matches?\b|\bswitch\s*\(|\bcase\s+['"]/i;
+
+  for (const src of ingress) {
+    for (const sink of configSinks) {
+      if (src.id === sink.id) continue;
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+        const scopeSnaps15 = getContainingScopeSnapshots(map, sink.id);
+        const scope15 = stripComments(scopeSnaps15.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+        if (!safeConfigRe.test(scope15)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (input validation before system/configuration modification)',
+            severity: 'high',
+            description: `External input from ${src.label} flows to system/configuration setting at ${sink.label} without validation. ` +
+              `An attacker can modify system properties, database catalogs, environment variables, or runtime configuration.`,
+            fix: 'Never pass unsanitized external input to system configuration APIs. ' +
+              'Use an allowlist of permitted configuration values. ' +
+              'Validate against a strict pattern (e.g., switch/case or Set.has()) before calling setCatalog(), setProperty(), putenv(), etc.',
+          });
+        }
+      }
+    }
+  }
+
+  // Phase 2: Source-line scan fallback
+  if (findings.length === 0 && map.source_code && ingress.length > 0) {
+    const srcLines = map.source_code.split('\n');
+    const cfgCallRe = /\b(?:setCatalog|setSchema|setProperty|putenv|setenv|os\.environ)\s*\(/i;
+    const hardcodedRe = /\b(?:setCatalog|setSchema|setProperty|putenv|setenv)\s*\(\s*["'][^"']*["']\s*[,)]/i;
+
+    for (let li = 0; li < srcLines.length; li++) {
+      const ln = srcLines[li]!;
+      const tr = ln.trim();
+      if (!tr || tr.startsWith('//') || tr.startsWith('*') || tr.startsWith('/*')) continue;
+
+      if (cfgCallRe.test(ln) && !hardcodedRe.test(ln)) {
+        // Extract the variable name used as argument to the config API
+        const argM15 = /\b(?:setCatalog|setSchema|setProperty|putenv|setenv)\s*\(\s*(\w+)\s*[,)]/i.exec(ln);
+        const argV15 = argM15 ? argM15[1] : null;
+
+        // Check if the variable was assigned a hardcoded literal in the lookback scope
+        let isHardcoded15 = false;
+        if (argV15) {
+          const escV = argV15.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const hardAssign = new RegExp(`\\b${escV}\\s*=\\s*(?:["']|\\d+\\s*;)`);
+          const taintAssign = new RegExp(`\\b${escV}\\s*=.*(?:readLine|getParameter|getInput|parseInt|read\\()`);
+          for (let j = li - 1; j >= Math.max(0, li - 30); j--) {
+            const prev = srcLines[j]!.trim();
+            if (hardAssign.test(prev)) { isHardcoded15 = true; break; }
+            if (taintAssign.test(prev)) break;
+          }
+        }
+
+        if (!isHardcoded15) {
+          const cs = Math.max(0, li - 20);
+          const ce = Math.min(srcLines.length, li + 5);
+          const ctx = srcLines.slice(cs, ce).join('\n');
+          if (!safeConfigRe.test(ctx)) {
+            findings.push({
+              source: nodeRef(ingress[0]!),
+              sink: { id: `line-${li + 1}`, label: `config modification (line ${li + 1})`, line: li + 1, code: tr.slice(0, 200) },
+              missing: 'CONTROL (input validation before system/configuration modification)',
+              severity: 'high',
+              description: `System/configuration setting modified with a variable at line ${li + 1}: "${tr.slice(0, 100)}". ` +
+                `If this value originates from external input, an attacker can control system configuration.`,
+              fix: 'Validate the value against an allowlist before passing it to configuration APIs.',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-15',
+    name: 'External Control of System or Configuration Setting',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
+/**
+ * CWE-129: Improper Validation of Array Index
+ * Pattern: External input used as array index with incomplete bounds validation
+ * Property: All externally-sourced array indices are validated with BOTH
+ *           lower bound (>= 0) AND upper bound (< array.length) checks.
+ *
+ * The Juliet vulnerable pattern:
+ *   data = Integer.parseInt(socketInput);
+ *   if (data < array.length) { array[data] }  // missing >= 0 check
+ *
+ * The safe pattern:
+ *   if (data >= 0 && data < array.length) { array[data] }
+ */
+function verifyCWE129(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const ingress = nodesOfType(map, 'INGRESS');
+
+  // Phase 1: Graph-based detection
+  const arrAccessRe = /\[\s*\w+\s*\]|\barray\s*\[|\blist\s*\[|\barr\s*\[|\bdata\s*\[|\bbuffer\s*\[|\belements?\s*\[/i;
+  const arrNodes = map.nodes.filter(n => {
+    const code = n.analysis_snapshot || n.code_snapshot;
+    return arrAccessRe.test(code) && !/\[\s*['"`]/.test(code);
+  });
+
+  const fullBoundsRe = />=\s*0\s*&&[^;]*<\s*\w+\.length|>=\s*0\s*&&[^;]*<\s*\w+\s*\)|0\s*<=\s*\w+\s*&&|\bMath\.max\s*\(\s*0\s*,|\bMath\.min\s*\(|\bclamp\s*\(|\bbetween\s*\(|\binRange\s*\(/i;
+
+  for (const src of ingress) {
+    for (const sink of arrNodes) {
+      if (src.id === sink.id) continue;
+      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+        const ss129 = getContainingScopeSnapshots(map, sink.id);
+        const sc129 = stripComments(ss129.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
+        if (!fullBoundsRe.test(sc129)) {
+          findings.push({
+            source: nodeRef(src),
+            sink: nodeRef(sink),
+            missing: 'CONTROL (complete bounds validation: both >= 0 AND < array.length)',
+            severity: 'high',
+            description: `External input from ${src.label} is used as array index at ${sink.label} without complete bounds validation. ` +
+              `A negative value bypasses an upper-bound-only check and causes ArrayIndexOutOfBoundsException.`,
+            fix: 'Always validate array indices with BOTH bounds: if (index >= 0 && index < array.length). ' +
+              'An upper-bound check alone does NOT prevent negative indices.',
+          });
+        }
+      }
+    }
+  }
+
+  // Phase 2: Source-line scanning for the classic Juliet pattern
+  if (map.source_code) {
+    const sl129 = map.source_code.split('\n');
+    const pvars = new Set<string>();
+    const parseRe = /\b(\w+)\s*=\s*(?:Integer\s*\.\s*parseInt|parseInt|Number\s*\(|int\s*\(|float\s*\(|Double\s*\.\s*parseDouble|Long\s*\.\s*parseLong|Short\s*\.\s*parseShort)\b/;
+    for (const l of sl129) {
+      const pm = parseRe.exec(l);
+      if (pm) pvars.add(pm[1]!);
+    }
+
+    if (pvars.size > 0) {
+      for (let li = 0; li < sl129.length; li++) {
+        const ln = sl129[li]!;
+        const tr = ln.trim();
+        if (!tr || tr.startsWith('//') || tr.startsWith('*') || tr.startsWith('/*')) continue;
+
+        for (const vn of pvars) {
+          const ev = vn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const upRe = new RegExp(`if\\s*\\(\\s*${ev}\\s*<\\s*\\w+\\.length\\b`);
+          if (!upRe.test(ln)) continue;
+
+          const cs = Math.max(0, li - 5);
+          const ce = Math.min(sl129.length, li + 1);
+          const ctx = sl129.slice(cs, ce).join('\n');
+          const loRe = new RegExp(`${ev}\\s*>=\\s*0|0\\s*<=\\s*${ev}|Math\\.max\\s*\\(\\s*0|Math\\.min\\s*\\(`);
+          if (loRe.test(ctx)) continue;
+
+          // Check if the variable was reassigned a hardcoded literal in the lookback
+          // (e.g., data = 2 in goodG2B means it's NOT tainted in this scope)
+          let isHardcoded129 = false;
+          const hardLitRe = new RegExp(`\\b${ev}\\s*=\\s*\\d+\\s*;`);
+          const hardStrRe = new RegExp(`\\b${ev}\\s*=\\s*["']`);
+          for (let j = li - 1; j >= Math.max(0, li - 20); j--) {
+            const prev129 = sl129[j]!.trim();
+            if (hardLitRe.test(prev129) || hardStrRe.test(prev129)) { isHardcoded129 = true; break; }
+            // If we see a parseInt/readLine assignment, it's tainted — stop looking
+            if (new RegExp(`\\b${ev}\\s*=.*(?:parseInt|readLine|getParameter|getInput)`).test(prev129)) break;
+          }
+          if (isHardcoded129) continue;
+
+          const dup = findings.some(f => f.sink.line !== undefined && Math.abs(f.sink.line - (li + 1)) <= 3);
+          if (dup) continue;
+
+          const sn = ingress.length > 0 ? ingress[0]! : findNearestNode(map, li + 1);
+          if (sn) {
+            findings.push({
+              source: nodeRef(sn),
+              sink: { id: `line-${li + 1}`, label: `array bounds check (line ${li + 1})`, line: li + 1, code: tr.slice(0, 200) },
+              missing: 'CONTROL (lower bound check: index >= 0 missing before array access)',
+              severity: 'high',
+              description: `Array index "${vn}" has only an upper-bound check at line ${li + 1}: "${tr.slice(0, 80)}". ` +
+                `The lower-bound check (>= 0) is missing. Negative values pass and cause ArrayIndexOutOfBoundsException.`,
+              fix: `Add a lower-bound check: if (${vn} >= 0 && ${vn} < array.length). Both bounds must be checked.`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-129',
+    name: 'Improper Validation of Array Index',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
 // Registry — CWE → verification function
 // ---------------------------------------------------------------------------
 
@@ -34211,6 +35127,12 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   // Obsolete functions, password masking — source scan CWEs
   'CWE-477': verifyCWE477,
   'CWE-549': verifyCWE549,
+  // JNI and process control — native code loading CWEs
+  'CWE-111': verifyCWE111,
+  'CWE-114': verifyCWE114,
+  // Taint-chain CWEs — external input to system/config and array index
+  'CWE-15': verifyCWE15,
+  'CWE-129': verifyCWE129,
 };
 
 // ---------------------------------------------------------------------------
