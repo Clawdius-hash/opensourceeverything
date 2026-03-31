@@ -669,10 +669,20 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   if (calleeChain.length === 0) return null;
 
   if (calleeChain.length === 1) {
-    const direct = DIRECT_CALLS[calleeChain[0]!];
+    const name = calleeChain[0]!;
+    const direct = DIRECT_CALLS[name];
     if (direct) return { ...direct };
-    const single = lookupInAllDicts(calleeChain[0]!);
+    const single = lookupInAllDicts(name);
     if (single) return { ...single };
+    // FQN stripping for single-element chains: java.io.FileInputStream -> FileInputStream
+    const lastDot = name.lastIndexOf('.');
+    if (lastDot >= 0) {
+      const shortName = name.slice(lastDot + 1);
+      const shortDirect = DIRECT_CALLS[shortName];
+      if (shortDirect) return { ...shortDirect };
+      const shortSingle = lookupInAllDicts(shortName);
+      if (shortSingle) return { ...shortSingle };
+    }
     return null;
   }
 
@@ -683,6 +693,21 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   // Try exact match in both dictionaries
   const member = lookupInAllDicts(exactKey);
   if (member) return { ...member };
+
+  // FQN stripping: java.io.FileInputStream.new -> FileInputStream.new
+  // BenchmarkJava uses fully-qualified class names (new java.io.FileInputStream(...))
+  // while our phoneme tables use short names (FileInputStream.new).
+  // Strip the package prefix and retry.
+  const dotIdx = objectName.lastIndexOf('.');
+  if (dotIdx >= 0) {
+    const shortName = objectName.slice(dotIdx + 1);
+    const shortKey = `${shortName}.${methodName}`;
+    const shortMatch = lookupInAllDicts(shortKey);
+    if (shortMatch) return { ...shortMatch };
+    // Also try DIRECT_CALLS with short name for single-segment entries
+    const shortDirect = DIRECT_CALLS[shortName];
+    if (shortDirect) return { ...shortDirect };
+  }
 
   // Variable-to-class resolution: try PascalCase class name
   // e.g., connection.prepareCall -> Connection.prepareCall

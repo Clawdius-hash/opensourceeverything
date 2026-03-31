@@ -580,16 +580,18 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
       }
 
       // Check specific dangerous constructors (only those NOT in phoneme table)
-      if (typeName === 'ObjectInputStream') {
+      // Strip FQN prefix for comparison: java.io.ObjectInputStream -> ObjectInputStream
+      const simpleTypeName = typeName.includes('.') ? typeName.slice(typeName.lastIndexOf('.') + 1) : typeName;
+      if (simpleTypeName === 'ObjectInputStream') {
         return { nodeType: 'INGRESS', subtype: 'deserialize', tainted: true, chain: bareChain };
       }
-      if (typeName === 'ProcessBuilder') {
+      if (simpleTypeName === 'ProcessBuilder') {
         return { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false, chain: bareChain };
       }
-      if (typeName === 'URL' || typeName === 'URI') {
+      if (simpleTypeName === 'URL' || simpleTypeName === 'URI') {
         return { nodeType: 'TRANSFORM', subtype: 'parse', tainted: false, chain: bareChain };
       }
-      if (typeName === 'Scanner') {
+      if (simpleTypeName === 'Scanner') {
         return { nodeType: 'INGRESS', subtype: 'user_input', tainted: true, chain: bareChain };
       }
     }
