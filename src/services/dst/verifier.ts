@@ -3047,16 +3047,33 @@ function verifyCWE314(map: NeuralMap): VerificationResult {
  * CWE-315: Cleartext Storage of Sensitive Information in a Cookie
  * Pattern: Sensitive data written to cookies without encryption
  * Property: Sensitive data in cookies must be encrypted and use secure flags
+ *
+ * Detection strategy (three phases):
+ *   Phase 1 — Node-level: check cookie-setting nodes for sensitive data directly in their snapshot.
+ *   Phase 2 — Scope-trace: for each cookie node, extract the value variable, find its assignments
+ *             in sibling nodes within the same function scope, check if those assignments carry
+ *             sensitive data without intervening encryption.
+ *   Phase 3 — Source-line scan: scan raw source lines for cookie-setting calls whose value
+ *             variables trace back to sensitive data (password, credential, token, etc.)
+ *             without encryption/hashing between source and sink.
  */
 function verifyCWE315(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
+  const reported = new Set<string>(); // dedup by node id or line
 
-  const SENSITIVE_RE = /\b(password|secret|token|api.?key|ssn|credit.?card|session.?id|auth.?token|user.?id|email|private.?key)\b/i;
-  const COOKIE_RE = /\b(setCookie|set-cookie|res\.cookie|response\.cookie|document\.cookie|Set-Cookie|cookies?\.\s*set|setcookie|http\.SetCookie|add_cookie|Cookie\()\b/i;
+  // --- Regexes ---
+  const SENSITIVE_RE = /\b(password|secret|token|api.?key|ssn|credit.?card|session.?id|auth.?token|user.?id|email|private.?key|credentials?|getPassword|getSecret)\b/i;
+  // Cookie-setting sinks across languages
+  const COOKIE_RE = /\b(setCookie|set[_-]?cookie|res\.cookie|response\.cookie|document\.cookie|Set-Cookie|cookies?\.\s*set|setcookie|http\.SetCookie|add_cookie|addCookie|Cookie\s*\(|new\s+Cookie)\b/i;
   const COOKIE_SUBTYPE_RE = /cookie/i;
-  const ENCRYPT_SAFE_RE = /\bencrypt\s*\(|\bAES\b|\bcipher\s*\(|\bcreateCipher\w*\b|\bjwt\.sign\b|\bJWS\b|\bJWE\b|\bsign\s*\(.*\bsecret\b|\bsigned\s*[:=]\s*true\b|\bsecure\s*[:=]\s*true\b|\bhttpOnly\s*[:=]\s*true\b/i;
+  // Encryption / hashing safe patterns
+  const ENCRYPT_SAFE_RE = /\b(encrypt|decrypt|AES|DES|Blowfish|cipher|createCipher\w*|jwt\.sign|JWS|JWE|MessageDigest|\.digest\b|\.hash\b|hashlib|bcrypt|scrypt|argon2|pbkdf2|SHA-?\d+|MD5|hmac|toHex|Base64\.encode|encode(?:Base64|Hex)|URLEncoder\.encode)\b/i;
+  // Extract the value argument from cookie constructors / set calls
+  // Java: new Cookie("name", value)  or  cookie.setValue(value)
+  // JS:   res.cookie("name", value)  or  document.cookie = "name=" + value
+  const COOKIE_VALUE_VAR_RE = /(?:new\s+Cookie\s*\(\s*(?:"[^"]*"|'[^']*'|\w+)\s*,\s*(\w+)|\.setValue\s*\(\s*(\w+)|res\.cookie\s*\(\s*(?:"[^"]*"|'[^']*')\s*,\s*(\w+)|document\.cookie\s*=.*?[+=]\s*(\w+))/i;
 
-  // Find cookie-setting nodes
+  // --- Phase 1: Node-level detection (direct sensitive data in cookie node) ---
   const cookieNodes = map.nodes.filter(n =>
     COOKIE_RE.test(n.analysis_snapshot || n.code_snapshot) ||
     COOKIE_SUBTYPE_RE.test(n.node_subtype) ||
@@ -3064,31 +3081,137 @@ function verifyCWE315(map: NeuralMap): VerificationResult {
   );
 
   for (const cookie of cookieNodes) {
-    const code = stripComments(cookie.analysis_snapshot || cookie.analysis_snapshot || cookie.code_snapshot);
-    const hasSensitive = SENSITIVE_RE.test(code) || SENSITIVE_RE.test(cookie.label) ||
+    if (cookie.node_type === 'STRUCTURAL' && cookie.node_subtype !== 'function') continue;
+    const code = stripComments(cookie.analysis_snapshot || cookie.code_snapshot);
+    const hasSensitiveDirect = SENSITIVE_RE.test(code) || SENSITIVE_RE.test(cookie.label) ||
       cookie.data_in.some(d => d.sensitivity !== 'NONE' || SENSITIVE_RE.test(d.name));
 
-    if (!hasSensitive) continue;
-    if (ENCRYPT_SAFE_RE.test(code)) continue;
-
-    // Check containing function for encryption
-    const parentFn = findContainingFunction(map, cookie.id);
-    if (parentFn) {
-      const parentNode = map.nodes.find(n => n.id === parentFn);
-      if (parentNode && ENCRYPT_SAFE_RE.test(stripComments(parentNode.analysis_snapshot || parentNode.analysis_snapshot || parentNode.code_snapshot))) continue;
+    if (hasSensitiveDirect) {
+      if (ENCRYPT_SAFE_RE.test(code)) continue;
+      // Check containing function for encryption
+      const parentFn = findContainingFunction(map, cookie.id);
+      if (parentFn) {
+        const parentNode = map.nodes.find(n => n.id === parentFn);
+        if (parentNode && ENCRYPT_SAFE_RE.test(stripComments(parentNode.analysis_snapshot || parentNode.code_snapshot))) continue;
+      }
+      if (!reported.has(cookie.id)) {
+        reported.add(cookie.id);
+        findings.push({
+          source: nodeRef(cookie),
+          sink: nodeRef(cookie),
+          missing: 'TRANSFORM (encryption and secure cookie flags)',
+          severity: 'high',
+          description: `Sensitive data stored in cleartext in a cookie at ${cookie.label}. ` +
+            `Cookies are sent with every request and can be intercepted, read by JavaScript, or stolen via XSS.`,
+          fix: 'Encrypt sensitive cookie values. Use signed/encrypted cookies (e.g., jwt.sign or cookie-parser with secret). ' +
+            'Set flags: httpOnly: true (prevents JS access), secure: true (HTTPS only), sameSite: "strict". ' +
+            'Prefer server-side sessions over storing sensitive data in cookies.',
+        });
+      }
+      continue;
     }
 
-    findings.push({
-      source: nodeRef(cookie),
-      sink: nodeRef(cookie),
-      missing: 'TRANSFORM (encryption and secure cookie flags)',
-      severity: 'high',
-      description: `Sensitive data stored in cleartext in a cookie at ${cookie.label}. ` +
-        `Cookies are sent with every request and can be intercepted, read by JavaScript, or stolen via XSS.`,
-      fix: 'Encrypt sensitive cookie values. Use signed/encrypted cookies (e.g., jwt.sign or cookie-parser with secret). ' +
-        'Set flags: httpOnly: true (prevents JS access), secure: true (HTTPS only), sameSite: "strict". ' +
-        'Prefer server-side sessions over storing sensitive data in cookies.',
+    // --- Phase 2: Scope-trace — extract value variable, find its assignment in siblings ---
+    const valueVarMatch = COOKIE_VALUE_VAR_RE.exec(code);
+    const valueVar = valueVarMatch && (valueVarMatch[1] || valueVarMatch[2] || valueVarMatch[3] || valueVarMatch[4]);
+    if (!valueVar) continue;
+
+    // Find the containing function scope
+    const parentFnId = findContainingFunction(map, cookie.id);
+    if (!parentFnId) continue;
+
+    // Collect sibling nodes in the same function scope
+    const siblings = map.nodes.filter(n =>
+      n.id !== cookie.id && sharesFunctionScope(map, cookie.id, n.id)
+    );
+
+    // Check if valueVar is assigned from sensitive data in any sibling
+    const varAssignRE = new RegExp(`\\b${valueVar}\\s*=`, 'i');
+    let sensitiveSource: typeof map.nodes[0] | null = null;
+    for (const sib of siblings) {
+      const sibCode = stripComments(sib.analysis_snapshot || sib.code_snapshot);
+      if (varAssignRE.test(sibCode) && SENSITIVE_RE.test(sibCode)) {
+        sensitiveSource = sib;
+        break;
+      }
+    }
+
+    if (!sensitiveSource) continue;
+
+    // Check if encryption/hashing happens between source and cookie in this scope
+    // Look for encrypt/hash calls that reassign the variable or transform it
+    const encryptBeforeCookie = siblings.some(sib => {
+      const sibCode = stripComments(sib.analysis_snapshot || sib.code_snapshot);
+      // The sibling must both reference the variable AND use encryption
+      return (varAssignRE.test(sibCode) || sibCode.includes(valueVar)) && ENCRYPT_SAFE_RE.test(sibCode);
     });
+
+    // Also check for encryption TRANSFORM nodes between source and sink
+    const hasEncryptTransform = siblings.some(sib =>
+      sib.node_type === 'TRANSFORM' && sib.node_subtype === 'encrypt'
+    );
+
+    // If encryption is applied AND the variable is reassigned after encryption, it's safe
+    if (encryptBeforeCookie || hasEncryptTransform) continue;
+
+    if (!reported.has(cookie.id)) {
+      reported.add(cookie.id);
+      findings.push({
+        source: nodeRef(sensitiveSource),
+        sink: nodeRef(cookie),
+        missing: 'TRANSFORM (encryption before cookie storage)',
+        severity: 'high',
+        description: `Sensitive data from ${sensitiveSource.label} stored in cleartext in a cookie at ${cookie.label}. ` +
+          `Variable '${valueVar}' carries credential/sensitive data to the cookie without encryption.`,
+        fix: 'Encrypt or hash sensitive cookie values before storage. Use MessageDigest/SHA-256+, AES encryption, ' +
+          'or signed cookies (jwt.sign). Set flags: httpOnly, secure, sameSite.',
+      });
+    }
+  }
+
+  // --- Phase 3: Source-line scan — catch patterns the node graph may miss ---
+  if (findings.length === 0 && map.source_code) {
+    const lines = stripComments(map.source_code).split('\n');
+    // Find lines that set cookies
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!COOKIE_RE.test(line)) continue;
+      // Extract the value variable from this cookie-setting line
+      const valMatch = COOKIE_VALUE_VAR_RE.exec(line);
+      const valVar = valMatch && (valMatch[1] || valMatch[2] || valMatch[3] || valMatch[4]);
+      if (!valVar) continue;
+
+      // Scan backward from this line to find where valVar is assigned
+      let hasSensitiveAssignment = false;
+      let hasEncryption = false;
+      for (let j = i - 1; j >= 0 && j >= i - 50; j--) {
+        const prevLine = lines[j];
+        const assignsVar = new RegExp(`\\b${valVar}\\s*=`).test(prevLine);
+        if (assignsVar && SENSITIVE_RE.test(prevLine)) {
+          hasSensitiveAssignment = true;
+        }
+        if (ENCRYPT_SAFE_RE.test(prevLine)) {
+          hasEncryption = true;
+        }
+      }
+
+      if (hasSensitiveAssignment && !hasEncryption) {
+        const lineKey = `line:${i + 1}`;
+        if (!reported.has(lineKey)) {
+          reported.add(lineKey);
+          findings.push({
+            source: { id: 'source-line', label: `line ${i + 1}`, code: line.trim() },
+            sink: { id: 'source-line', label: `line ${i + 1}`, code: line.trim() },
+            missing: 'TRANSFORM (encryption before cookie storage)',
+            severity: 'high',
+            description: `Sensitive data stored in cleartext cookie at line ${i + 1}. ` +
+              `Variable '${valVar}' carries credential/sensitive data to the cookie without encryption or hashing.`,
+            fix: 'Encrypt or hash sensitive cookie values before storage. Use MessageDigest/SHA-256+, AES encryption, ' +
+              'or signed cookies (jwt.sign). Set flags: httpOnly, secure, sameSite.',
+          });
+        }
+      }
+    }
   }
 
   return {
@@ -10759,22 +10882,86 @@ function verifyCWE509(map: NeuralMap): VerificationResult {
 
 /**
  * CWE-510: Trapdoor
- * Pattern: Hidden authentication bypass, undocumented access points, or secret backdoor
- * credentials that grant access outside normal authentication flow.
- * Detection: Hardcoded "magic" credentials, hidden endpoints, authentication bypass
- * conditions with hardcoded values, and debug/backdoor routes.
+ * Pattern: Hidden logic triggered by specific identity conditions — hostname, IP address,
+ * username, or environment identity checks that branch to privileged or different behavior.
+ * This is the DECEPTIVE pattern: code looks normal but has a hidden branch for a specific
+ * identity that grants access or alters behavior outside normal control flow.
+ *
+ * Detection:
+ *   1. Hostname/IP identity gates: getHostName().equals("..."), getHostAddress().equals("...")
+ *   2. User identity gates: getProperty("user.name").equals("..."), System.getenv("USER")
+ *   3. Hardcoded backdoor credentials: master_pass, skeleton_key, god_mode, etc.
+ *   4. Hidden endpoints: /_debug, /_backdoor, /__internal routes
+ *   5. Environment variable auth bypass: SKIP_AUTH, NO_AUTH, DISABLE_AUTH
+ *
+ * Safe patterns:
+ *   - Logging/auditing the identity without branching on it
+ *   - Deny-list checks (blocking known-bad hosts) rather than allow-list grants
+ *   - Display-only use (e.g., "Welcome, " + hostname) without conditional branching
  */
 function verifyCWE510(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
+  // --- Pattern 1: Hostname / IP identity-based trapdoor ---
+  // Java: socket.getInetAddress().getHostName().equals("admin.google.com")
+  // Python: socket.gethostname() ==, socket.gethostbyname("...")
+  const HOSTNAME_EQUALS_RE = /(?:getHostName|getHostAddress|getCanonicalHostName|getRemoteAddr|getRemoteHost|gethostname)\s*\([\s)]*\.\s*equals\s*\(\s*["'][^"']+["']\s*\)/i;
+  const IP_LITERAL_CMP_RE = /(?:\.equals|===?|==)\s*\(?\s*["']\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["']\s*\)?/i;
+  const HOSTNAME_CONDITIONAL_RE = /\b(?:if|when|unless|case)\b[^;{]*(?:getHostName|getHostAddress|getCanonicalHostName|getRemoteAddr|getRemoteHost|gethostname|remoteAddr|remoteAddress|REMOTE_ADDR)\s*\(/i;
+
+  // --- Pattern 2: User identity-based trapdoor ---
+  const USER_IDENTITY_RE = /(?:getProperty\s*\(\s*["']user\.name["']\)|getenv\s*\(\s*["'](?:USER|USERNAME|LOGNAME)["']\)|os\.getlogin\s*\(\)|Environment\.UserName|System\.getenv\s*\(\s*["'](?:USER|USERNAME)["']\))\s*\.\s*equals\s*\(\s*["'][^"']+["']\s*\)/i;
+  const USER_IDENTITY_CMP_RE = /(?:getProperty\s*\(\s*["']user\.name["']\)|getenv\s*\(\s*["'](?:USER|USERNAME|LOGNAME)["']\)|os\.getlogin\s*\(\)|Environment\.UserName)\s*(?:===?|==|\.equals)\s*\(?["'][^"']+["']/i;
+
+  // --- Pattern 3: Backdoor credentials ---
   const BACKDOOR_CRED_RE = /\b(master.?pass|backdoor|skeleton.?key|god.?mode|super.?user|magic.?word|debug.?pass|admin.?override|secret.?access|bypass.?auth|override.?auth)\b/i;
+  // --- Pattern 4: Auth bypass via hardcoded value in conditional ---
   const AUTH_BYPASS_RE = /(?:if|when|unless)\s*\(.*(?:===?\s*['"][^'"]{3,}['"]|===?\s*['"](?:admin|root|debug|test|master)['"]).*\)\s*(?:\{|return\s+true|next\(\))/i;
+  // --- Pattern 5: Hidden endpoints ---
   const HIDDEN_ENDPOINT_RE = /\b(app|router|server)\.(get|post|put|delete|all|use)\s*\(\s*['"]\/(?:_debug|_backdoor|_admin_secret|_hidden|__internal|\.well-known\/debug|_bypass|_master|_god)/i;
+  // --- Pattern 6: Environment variable auth bypass ---
   const ENV_BYPASS_RE = /\b(process\.env|os\.environ|getenv)\b.*(?:BYPASS|SKIP_AUTH|NO_AUTH|DEBUG_AUTH|DISABLE_AUTH|BACKDOOR)/i;
+  // --- Safe pattern: deny-list ---
+  const DENY_LIST_RE = /\b(block|deny|reject|blacklist|blocklist|ban|forbidden|refuse|disallow|revoke|kick|disconnect)\b/i;
 
   for (const node of map.nodes) {
     const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
 
+    // --- Check hostname/IP identity trapdoor ---
+    if (HOSTNAME_EQUALS_RE.test(code) || (HOSTNAME_CONDITIONAL_RE.test(code) && IP_LITERAL_CMP_RE.test(code))) {
+      const isDenyList = DENY_LIST_RE.test(code) &&
+        !(/\b(admin|welcome|grant|allow|accept|privilege|elevated|secret|special)\b/i.test(code));
+      if (!isDenyList) {
+        findings.push({
+          source: nodeRef(node), sink: nodeRef(node),
+          missing: 'CODE REVIEW (hostname/IP identity-based trapdoor)',
+          severity: 'critical',
+          description: `${node.label} branches on a hardcoded hostname or IP address. ` +
+            `Code that checks for a specific host identity and grants different behavior is a trapdoor — ` +
+            `a hidden branch that only activates for a known identity, bypassing normal access controls.`,
+          fix: 'Remove hostname/IP-based conditional logic. All clients should receive the same behavior through the same access control path. ' +
+            'If host-based access control is needed, use a configurable allowlist loaded from a secure config store, not hardcoded in source.',
+        });
+        continue;
+      }
+    }
+
+    // --- Check user identity trapdoor ---
+    if (USER_IDENTITY_RE.test(code) || USER_IDENTITY_CMP_RE.test(code)) {
+      findings.push({
+        source: nodeRef(node), sink: nodeRef(node),
+        missing: 'CODE REVIEW (user identity-based trapdoor)',
+        severity: 'critical',
+        description: `${node.label} branches on a hardcoded username or user environment variable. ` +
+          `Checking for a specific user identity to grant different behavior is a trapdoor — ` +
+          `a developer backdoor that activates only for the author's identity.`,
+        fix: 'Remove hardcoded user identity checks. Use role-based access control (RBAC) with proper authentication, ' +
+          'not checks against specific usernames embedded in source code.',
+      });
+      continue;
+    }
+
+    // --- Check backdoor credentials ---
     if (BACKDOOR_CRED_RE.test(code) && /\b(password|passwd|pwd|key|token|secret|credential|auth)\b/i.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
@@ -16840,7 +17027,174 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Source-line scanner fallback: detect infinite loops in raw source code.
+  // The node walk above can miss loops when the loop construct spans multiple
+  // nodes or the code_snapshot is truncated. This scans the full source to find:
+  //   1. while(true) / for(;;) / do...while(true) without break/return/throw
+  //   2. do...while with always-true condition (e.g., modulo ensures non-negative)
+  //   3. while/for loops where the counter is never modified in the body
+  // ---------------------------------------------------------------------------
+  if (findings.length === 0 && map.source_code) {
+    const src835 = stripComments(map.source_code);
+    const lines835 = src835.split('\n');
+    const SRC_EXIT_RE = /\b(?:break|return|throw|exit|System\.exit|process\.exit|sys\.exit|os\.Exit|panic|raise|abort)\b/;
+
+    for (let i = 0; i < lines835.length; i++) {
+      const line = lines835[i];
+      if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+      // Pattern 1: while(true) / while(1) / while(!0) without break in surrounding body
+      if (/\bwhile\s*\(\s*(?:true|1|!0|!!1)\s*\)/.test(line) && !/^\s*\}\s*while/.test(line)) {
+        const loopBody = extractBraceBlock835(lines835, i);
+        if (loopBody !== null && !SRC_EXIT_RE.test(loopBody)) {
+          const nearNode = findNearestNode(map, i + 1) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'CONTROL (loop exit condition — break, return, timeout, or bounded iteration)',
+              severity: 'high',
+              description: `L${i + 1}: while(true) loop without break, return, or throw in the loop body. ` +
+                `This is an unconditional infinite loop that will hang the thread/process.`,
+              fix: 'Add a break condition, timeout, or bounded iteration count inside the loop.',
+            });
+          }
+        }
+      }
+
+      // Pattern 2: for(;;) without break in body
+      if (/\bfor\s*\(\s*;?\s*;?\s*\)/.test(line)) {
+        const loopBody = extractBraceBlock835(lines835, i);
+        if (loopBody !== null && !SRC_EXIT_RE.test(loopBody)) {
+          const nearNode = findNearestNode(map, i + 1) || map.nodes[0];
+          if (nearNode) {
+            findings.push({
+              source: nodeRef(nearNode), sink: nodeRef(nearNode),
+              missing: 'CONTROL (loop exit condition — break, return, timeout, or bounded iteration)',
+              severity: 'high',
+              description: `L${i + 1}: for(;;) loop without break, return, or throw in the loop body. ` +
+                `This is an unconditional infinite loop.`,
+              fix: 'Add a break condition, timeout, or bounded iteration count inside the loop.',
+            });
+          }
+        }
+      }
+
+      // Pattern 3: do { ... } while(<always-true condition>) without break/return/throw
+      if (/^\s*do\s*\{?\s*$/.test(line)) {
+        const doBlock = extractDoWhileBlock835(lines835, i);
+        if (doBlock) {
+          const { body, conditionLine, condition } = doBlock;
+          let isAlwaysTrue = false;
+
+          // while(true) / while(1)
+          if (/^\s*(?:true|1|!0|!!1)\s*$/.test(condition)) {
+            isAlwaysTrue = true;
+          }
+
+          // while(VAR >= 0) where VAR = (... % N) — modulo always >= 0
+          const geZeroMatch = condition.match(/^\s*(\w+)\s*>=\s*0\s*$/);
+          if (geZeroMatch) {
+            const vn = geZeroMatch[1];
+            const modRE = new RegExp(`\\b${vn}\\s*=\\s*.*%\\s*\\d+`);
+            if (modRE.test(body)) {
+              isAlwaysTrue = true;
+            }
+          }
+
+          if (isAlwaysTrue && !SRC_EXIT_RE.test(body)) {
+            const nearNode = findNearestNode(map, i + 1) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'CONTROL (loop exit condition — break, return, or reachable termination)',
+                severity: 'high',
+                description: `L${i + 1}: do...while loop at L${conditionLine} has an always-true condition ` +
+                  `(${condition.trim()}) and no break/return/throw in the body. This is an infinite loop.`,
+                fix: 'Add a break condition inside the loop body, or ensure the while condition can become false. ' +
+                  'For bounded iteration, add a counter: if (++count > MAX) break;',
+              });
+            }
+          }
+        }
+      }
+
+      // Pattern 4: while(VAR >= 0) with modulo (non-do-while)
+      const whileGeMatch = line.match(/\bwhile\s*\(\s*(\w+)\s*>=?\s*0\s*\)/);
+      if (whileGeMatch && !/^\s*\}\s*while/.test(line)) {
+        const vn = whileGeMatch[1];
+        const loopBody = extractBraceBlock835(lines835, i);
+        if (loopBody !== null) {
+          const modRE = new RegExp(`\\b${vn}\\s*=\\s*.*%\\s*\\d+`);
+          if (modRE.test(loopBody) && !SRC_EXIT_RE.test(loopBody)) {
+            const nearNode = findNearestNode(map, i + 1) || map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'CONTROL (loop exit condition — modulo result is always non-negative)',
+                severity: 'high',
+                description: `L${i + 1}: while(${vn} >= 0) loop where ${vn} is assigned via modulo. ` +
+                  `Modulo of non-negative values always yields >= 0, making the condition always true.`,
+                fix: 'Add a break condition, or change the loop bound to a finite counter.',
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-835', name: 'Loop with Unreachable Exit Condition (Infinite Loop)', holds: findings.length === 0, findings };
+}
+
+/**
+ * Helper: Extract the brace-delimited block starting from a line containing '{'.
+ * Returns the text inside the braces, or null if no balanced block found.
+ */
+function extractBraceBlock835(lines: string[], startIdx: number): string | null {
+  let depth = 0;
+  let started = false;
+  const bodyLines: string[] = [];
+  for (let j = startIdx; j < Math.min(startIdx + 200, lines.length); j++) {
+    const ln = lines[j];
+    for (const ch of ln) {
+      if (ch === '{') { depth++; started = true; }
+      if (ch === '}') { depth--; }
+    }
+    if (started) bodyLines.push(ln);
+    if (started && depth <= 0) return bodyLines.join('\n');
+  }
+  return null;
+}
+
+/**
+ * Helper: Extract a do { ... } while(COND) block.
+ * Returns { body, conditionLine, condition } or null.
+ */
+function extractDoWhileBlock835(lines: string[], startIdx: number): { body: string; conditionLine: number; condition: string } | null {
+  let depth = 0;
+  let started = false;
+  const bodyLines: string[] = [];
+  let closeLine = -1;
+  for (let j = startIdx; j < Math.min(startIdx + 200, lines.length); j++) {
+    const ln = lines[j];
+    for (const ch of ln) {
+      if (ch === '{') { depth++; started = true; }
+      if (ch === '}') { depth--; }
+    }
+    if (started) bodyLines.push(ln);
+    if (started && depth <= 0) { closeLine = j; break; }
+  }
+  if (closeLine < 0) return null;
+
+  // The while(...) is on the same line as '}' or the next line(s)
+  for (let j = closeLine; j < Math.min(closeLine + 3, lines.length); j++) {
+    const whileMatch = lines[j].match(/while\s*\(\s*(.*?)\s*\)\s*;/);
+    if (whileMatch) {
+      return { body: bodyLines.join('\n'), conditionLine: j + 1, condition: whileMatch[1] };
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -23585,6 +23939,70 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
 }
 
 // ---------------------------------------------------------------------------
+// CWE-681: Incorrect Conversion between Numeric Types
+//
+// Tainted data (from user input / INGRESS) undergoes a narrowing numeric cast
+// without prior range validation. This is the conversion-focused sibling of
+// CWE-197 (truncation). CWE-681 specifically requires the converted value to
+// originate from an untrusted source.
+// Patterns: (float)double, (int)long, (byte)int, (short)int on tainted data
+// ---------------------------------------------------------------------------
+
+function verifyCWE681(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  // Narrowing cast patterns
+  const DOUBLE_TO_FLOAT = /\(\s*float\s*\)\s*\w+/i;
+  const INT64_TO_32 = /\(\s*(int|int32_t|i32|uint32_t|u32|DWORD)\s*\)\s*\w+/i;
+  const NARROWING_CAST = /\(\s*(byte|short|char|int8_t|int16_t|uint8_t|uint16_t)\s*\)\s*\w+/;
+  const ANY_NARROWING = /\(\s*(float|int|int32_t|i32|uint32_t|u32|DWORD|byte|short|char|int8_t|int16_t|uint8_t|uint16_t)\s*\)\s*\w+/i;
+
+  // Safe: range check before cast
+  const SAFE_PATTERN = /\bif\s*\(.*(?:>|<|>=|<=)\s*(?:Float\.MAX_VALUE|Float\.MIN_VALUE|Integer\.MAX_VALUE|Integer\.MIN_VALUE|Byte\.MIN_VALUE|Byte\.MAX_VALUE|Short\.MIN_VALUE|Short\.MAX_VALUE|Character\.MIN_VALUE|Character\.MAX_VALUE|Long\.MAX_VALUE|Long\.MIN_VALUE|FLT_MAX|INT32_MAX|INT_MAX|SHRT_MAX|SCHAR_MAX)\b|\bMath\.toIntExact\b|\btry_from\b|\btry_into\b|\bsafe_cast\b|\bnarrow_cast\b|\bNumber\.isSafeInteger\b/i;
+
+  const ingress = nodesOfType(map, 'INGRESS');
+  if (ingress.length === 0) {
+    return { cwe: 'CWE-681', name: 'Incorrect Conversion between Numeric Types', holds: true, findings };
+  }
+
+  // Walk every node. If it contains a narrowing cast AND an INGRESS node shares
+  // the same function scope (meaning tainted data is available), flag it unless
+  // a safe range-check pattern is present in the node's code.
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+    if (!ANY_NARROWING.test(code)) continue;
+    if (SAFE_PATTERN.test(code)) continue;
+
+    // Require tainted source in the same scope
+    const scopedIngress = ingress.find(src => sharesFunctionScope(map, src.id, node.id));
+    if (!scopedIngress) continue;
+
+    let castDesc = 'narrowing numeric cast';
+    if (DOUBLE_TO_FLOAT.test(code)) castDesc = 'double-to-float cast';
+    else if (INT64_TO_32.test(code)) castDesc = '64-bit-to-32-bit cast';
+    else if (NARROWING_CAST.test(code)) {
+      const m = code.match(NARROWING_CAST);
+      castDesc = `narrowing cast to ${m ? m[1] : 'smaller type'}`;
+    }
+
+    findings.push({
+      source: nodeRef(scopedIngress),
+      sink: nodeRef(node),
+      missing: 'CONTROL (validate numeric range before type conversion)',
+      severity: 'medium',
+      description: `Tainted input from ${scopedIngress.label} undergoes ${castDesc} at ${node.label} without ` +
+        `range validation. Incorrect conversion between numeric types can silently lose data — ` +
+        `e.g. a double value of 1e-50 becomes 0.0 as float, or an int value of 256 becomes 0 as byte.`,
+      fix: 'Validate the value fits in the target type range before casting. ' +
+        'For double-to-float: check val <= Float.MAX_VALUE && val >= Float.MIN_VALUE. ' +
+        'For int narrowing: check against Byte/Short/Character MIN_VALUE and MAX_VALUE.',
+    });
+  }
+
+  return { cwe: 'CWE-681', name: 'Incorrect Conversion between Numeric Types', holds: findings.length === 0, findings };
+}
+
+// ---------------------------------------------------------------------------
 // CWE-198: Use of Incorrect Byte Ordering
 //
 // Multi-byte values (integers, floats) are read/written without proper
@@ -27870,6 +28288,100 @@ function verifyCWE325(map: NeuralMap): VerificationResult {
       }
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Source-line scanner fallback: KeyGenerator.getInstance() without .init()
+  // The node walk above can miss this when getInstance(), init(), and generateKey()
+  // land in separate nodes or the code_snapshot is truncated. This scans the raw
+  // source to track variable assignments and method-call ordering.
+  //
+  // Scope-aware: we split the source into method-level scopes (delimited by
+  // brace depth returning to the method entry level) so that the same variable
+  // name in different methods (bad() vs good1()) is tracked independently.
+  // ---------------------------------------------------------------------------
+  if (findings.length === 0 && map.source_code) {
+    const src325 = stripComments(map.source_code);
+    const lines325 = src325.split('\n');
+
+    // Split into scope regions by tracking brace depth.
+    // Each "scope" is a contiguous range of lines within a method body.
+    type KGInstance = { varName: string; getInstanceLine: number; hasInit: boolean; generateKeyLine: number | null };
+    const kgInstances: KGInstance[] = [];
+    let currentScope: KGInstance[] = [];
+    let braceDepth = 0;
+    let inMethodBody = false;
+
+    for (let i = 0; i < lines325.length; i++) {
+      const line = lines325[i];
+      if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
+
+      // Track brace depth to detect method boundaries
+      for (const ch of line) {
+        if (ch === '{') braceDepth++;
+        if (ch === '}') braceDepth--;
+      }
+
+      // Detect method entry (brace depth increases past 1 = class body)
+      if (!inMethodBody && braceDepth >= 2) {
+        inMethodBody = true;
+        currentScope = [];
+      }
+
+      // Match: KeyGenerator <var> = KeyGenerator.getInstance(...)
+      const getInstMatch = line.match(/(\w+)\s*=\s*KeyGenerator\.getInstance\s*\(/);
+      if (getInstMatch && inMethodBody) {
+        // Start tracking a new KG instance in this scope
+        currentScope.push({ varName: getInstMatch[1], getInstanceLine: i + 1, hasInit: false, generateKeyLine: null });
+      }
+
+      // Match: <var>.init(<number>)
+      const initMatch = line.match(/(\w+)\.init\s*\(\s*\d/);
+      if (initMatch && inMethodBody) {
+        // Mark all instances in current scope with this var name
+        for (const inst of currentScope) {
+          if (inst.varName === initMatch[1]) inst.hasInit = true;
+        }
+      }
+
+      // Match: <var>.generateKey()
+      const genMatch = line.match(/(\w+)\.generateKey\s*\(/);
+      if (genMatch && inMethodBody) {
+        for (const inst of currentScope) {
+          if (inst.varName === genMatch[1] && inst.generateKeyLine === null) {
+            inst.generateKeyLine = i + 1;
+          }
+        }
+      }
+
+      // Method exit: brace depth drops back to class level (1)
+      if (inMethodBody && braceDepth <= 1) {
+        inMethodBody = false;
+        kgInstances.push(...currentScope);
+        currentScope = [];
+      }
+    }
+    // Flush any remaining scope
+    kgInstances.push(...currentScope);
+
+    for (const inst of kgInstances) {
+      if (inst.generateKeyLine && !inst.hasInit) {
+        const nearNode = findNearestNode(map, inst.getInstanceLine) || map.nodes[0];
+        if (nearNode) {
+          findings.push({
+            source: nodeRef(nearNode), sink: nodeRef(nearNode),
+            missing: 'TRANSFORM (KeyGenerator.init() — explicit key size initialization)',
+            severity: 'high',
+            description: `L${inst.getInstanceLine}: KeyGenerator '${inst.varName}' created via getInstance() and used ` +
+              `at L${inst.generateKeyLine} (generateKey()) without calling .init(keySize). ` +
+              `The crypto provider will choose a default key size which may be insufficient and non-portable.`,
+            fix: 'Call ' + inst.varName + '.init(256) (for AES) between getInstance() and generateKey(). ' +
+              'Always explicitly specify key size rather than relying on provider defaults.',
+          });
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-325', name: 'Missing Cryptographic Step', holds: findings.length === 0, findings };
 }
 
@@ -31162,6 +31674,120 @@ function verifyCWE537(map: NeuralMap): VerificationResult {
 }
 
 /**
+ * CWE-600: Uncaught Exception in Servlet
+ * UPGRADED — hand-written with specific servlet method detection and try/catch analysis.
+ *
+ * Pattern: Java servlet handler methods (doGet, doPost, doPut, doDelete, service)
+ * contain operations that can throw exceptions (Integer.parseInt, Float.parseFloat,
+ * InetAddress.getByName, Class.forName, getConnection, etc.) WITHOUT being wrapped
+ * in a try/catch block. The uncaught exception propagates to the servlet container,
+ * which typically returns a default error page with stack traces, class names, file
+ * paths, and internal structure — useful for attacker reconnaissance.
+ *
+ * The generic version looked for TRANSFORM->EGRESS without CONTROL. The upgraded version:
+ *   - Identifies servlet handler methods and classes extending HttpServlet
+ *   - Finds dangerous operations that can throw checked/unchecked exceptions
+ *   - Checks whether those operations are inside a try block
+ *   - Checks whether the method signature declares 'throws' (letting exceptions propagate)
+ *   - Safe: dangerous call is inside a try block with appropriate catch
+ *   - Safe: @ExceptionHandler / @ControllerAdvice / web.xml error-page configured
+ */
+function verifyCWE600(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+  const lang = inferMapLanguage(map);
+
+  // Only relevant for Java servlets — skip other languages entirely
+  if (lang && lang !== 'java') {
+    return { cwe: 'CWE-600', name: 'Uncaught Exception in Servlet', holds: true, findings: [] };
+  }
+
+  // Servlet class / method indicators
+  const SERVLET_CLASS_RE = /\b(HttpServlet|GenericServlet|extends\s+HttpServlet|extends\s+AbstractTestCaseServlet|implements\s+Servlet|javax\.servlet|jakarta\.servlet|@WebServlet)\b/;
+  const SERVLET_METHOD_RE = /\b(doGet|doPost|doPut|doDelete|doHead|doOptions|doTrace|service)\s*\(/;
+
+  // Operations that can throw exceptions in servlet context
+  const THROWABLE_OP_RE = /\b(Integer\.parseInt|Integer\.valueOf|Long\.parseLong|Long\.valueOf|Float\.parseFloat|Double\.parseDouble|Short\.parseShort|Byte\.parseByte|NumberFormat|InetAddress\.getByName|InetAddress\.getLocalHost|Class\.forName|getConnection|DriverManager\.|PreparedStatement|createStatement|executeQuery|executeUpdate|FileInputStream|FileOutputStream|FileReader|FileWriter|ObjectInputStream|ObjectOutputStream|Socket\s*\(|ServerSocket|URL\s*\(|URLConnection|HttpURLConnection|newInstance|loadClass|getResourceAsStream|getRemoteAddr|getRemoteHost|getByName)\b/;
+
+  // Method-level throws clause — indicates exceptions propagate to container
+  const THROWS_RE = /\bthrows\s+\w+/;
+
+  // Global exception handlers that make servlet exception leakage safe
+  const GLOBAL_HANDLER_RE = /\b(@ExceptionHandler|@ControllerAdvice|ErrorController|handleException|error-page|web\.xml.*error-page|<error-page>|server\.error\.include-stacktrace\s*[:=]\s*never)\b/i;
+
+  // Check for global exception handling configuration
+  const allCode = map.nodes.map(n => n.analysis_snapshot || n.code_snapshot).join('\n');
+  if (GLOBAL_HANDLER_RE.test(allCode)) {
+    return { cwe: 'CWE-600', name: 'Uncaught Exception in Servlet', holds: true, findings: [] };
+  }
+
+  for (const node of map.nodes) {
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
+
+    // Must be servlet code
+    const isServletCode = SERVLET_CLASS_RE.test(code) || SERVLET_METHOD_RE.test(code);
+    if (!isServletCode) continue;
+
+    // Must contain a throwable operation
+    if (!THROWABLE_OP_RE.test(code)) continue;
+
+    // Check: is the dangerous operation inside a try block?
+    // Strategy: split the code into lines, track try/catch nesting depth,
+    // and check if throwable operations occur at depth 0.
+    const lines = code.split('\n');
+    let tryDepth = 0;
+    let hasUncaughtOp = false;
+    let uncaughtOpDesc = '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Track try block nesting
+      if (/\btry\s*\{/.test(trimmed) || /\btry\s*$/.test(trimmed)) {
+        tryDepth++;
+      }
+      // A closing brace followed by catch reduces try depth
+      if (/\}\s*catch\s*\(/.test(trimmed)) {
+        if (tryDepth > 0) tryDepth--;
+      }
+
+      // Check if this line has a throwable operation
+      const opMatch = trimmed.match(THROWABLE_OP_RE);
+      if (opMatch && tryDepth === 0) {
+        hasUncaughtOp = true;
+        uncaughtOpDesc = opMatch[0];
+        break;
+      }
+    }
+
+    // Also flag if the method signature throws exceptions (letting them propagate)
+    const hasThrowsClause = THROWS_RE.test(code) && THROWABLE_OP_RE.test(code);
+
+    if (hasUncaughtOp || (hasThrowsClause && !_hasTryBlockCWE600(code))) {
+      const opDesc = uncaughtOpDesc || code.match(THROWABLE_OP_RE)?.[0] || 'exception-throwing operation';
+      findings.push({
+        source: nodeRef(node),
+        sink: nodeRef(node),
+        missing: 'CONTROL (try/catch wrapping exception-throwing operations in servlet handler)',
+        severity: 'medium',
+        description: `Servlet handler at ${node.label} contains ${opDesc} without try/catch. ` +
+          'Uncaught exceptions propagate to the servlet container, which returns default error pages ' +
+          'exposing stack traces, class names, database types, and internal file paths.',
+        fix: 'Wrap all exception-throwing operations in try/catch within servlet handlers. ' +
+          'Log the full exception server-side (logger.error). Return a generic error response to the client. ' +
+          'Configure custom error pages in web.xml or use @ControllerAdvice (Spring).',
+      });
+    }
+  }
+
+  return { cwe: 'CWE-600', name: 'Uncaught Exception in Servlet', holds: findings.length === 0, findings };
+}
+
+/** Helper: check if the code block has at least one try statement (CWE-600) */
+function _hasTryBlockCWE600(code: string): boolean {
+  return /\btry\s*\{/.test(code) || /\btry\s*\n\s*\{/.test(code);
+}
+
+/**
  * CWE-539: Use of Persistent Cookies Containing Sensitive Information
  * Pattern: Cookies with Expires/Max-Age containing sensitive data (session tokens, user data).
  * Persistent cookies survive browser restarts and are accessible from shared machines.
@@ -33198,6 +33824,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-548': verifyCWE548,
   'CWE-550': verifyCWE550,
   'CWE-598': verifyCWE598,
+  'CWE-600': verifyCWE600,
   'CWE-615': verifyCWE615,
   // Input validation & injection variant CWEs
   'CWE-20': verifyCWE20,
@@ -33481,6 +34108,7 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   'CWE-195': verifyCWE195,
   'CWE-196': verifyCWE196,
   'CWE-197': verifyCWE197,
+  'CWE-681': verifyCWE681,
   'CWE-198': verifyCWE198,
   // Insecure storage, message integrity, URL schemes, channel verification, cross-domain, query injection, cookies, homoglyphs, clickjacking
   'CWE-922': verifyCWE922,
