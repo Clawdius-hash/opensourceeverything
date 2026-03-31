@@ -1,15 +1,15 @@
 /**
  * CWE Source-Sink Deduplication (Layer 2)
  *
- * Problem: Multiple CWE verifiers fire on the same (source, sink) pair because
- * the CWE taxonomy has deep parent-child hierarchies where children are
- * SPECIALIZATIONS of parents. Our verifiers can't distinguish sub-variants
- * (CWE-80 "Basic XSS" vs CWE-82 "IMG tag XSS") because that requires runtime
- * context. So 1 real XSS bug produces 9 findings.
+ * Problem: A single CWE verifier can fire on the same (source, sink) pair
+ * multiple times via different traversal paths, producing duplicate findings.
  *
- * Solution: Group findings by (source.id, sink.id, missingCategory). Within
- * each group, keep the finding with highest severity and lowest CWE number.
- * Record all other CWEs in `collapsed_cwes` on the surviving finding.
+ * Solution: Group findings by (CWE, source.id, sink.id, missingCategory).
+ * Within each group, keep the finding with highest severity. The CWE is part
+ * of the key so that different CWEs are never collapsed into each other --
+ * CWE-336 (Same Seed) and CWE-338 (Weak PRNG) are distinct vulnerabilities
+ * even when they fire on the same source/sink pair. Cross-CWE collapsing
+ * was causing false-negative regressions on NIST Juliet benchmarks.
  *
  * Exclusions:
  *   - EFFECTIVE_CONTROL findings (second-pass) are never collapsed
@@ -58,10 +58,16 @@ export function extractMissingCategory(missing: string): string {
 /**
  * Build a deterministic grouping key for a finding within a CWE result.
  * Findings with the same key are candidates for collapse.
+ *
+ * The CWE is included in the key so that different CWEs are NEVER collapsed
+ * into each other. Only duplicate findings of the SAME CWE on the SAME
+ * source/sink/category are collapsed. This prevents cross-CWE absorption
+ * that caused 7 false-negative regressions on NIST Juliet (CWE-338 absorbed
+ * by CWE-336, CWE-397 by CWE-248, CWE-470 by CWE-88, etc.).
  */
-function dedupKey(finding: Finding): string {
+function dedupKey(finding: Finding, cwe: string): string {
   const category = extractMissingCategory(finding.missing);
-  return `${finding.source.id}::${finding.sink.id}::${category}`;
+  return `${cwe}::${finding.source.id}::${finding.sink.id}::${category}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,15 +93,17 @@ export interface DedupStats {
 }
 
 /**
- * Deduplicate verification results by (source, sink, missingCategory).
+ * Deduplicate verification results by (CWE, source, sink, missingCategory).
  *
  * Algorithm:
  * 1. Collect all findings from all VerificationResults where holds === false
  * 2. Exclude EFFECTIVE_CONTROL findings from dedup (different finding class)
- * 3. Group by dedupKey: source.id :: sink.id :: missingCategory
- * 4. Within each group, keep highest severity, lowest CWE number as tiebreaker
- * 5. Attach collapsed_cwes to the surviving finding
- * 6. Mark collapsed CWEs' VerificationResults: set holds=true (represented by parent)
+ * 3. Group by dedupKey: CWE :: source.id :: sink.id :: missingCategory
+ * 4. Within each group (same CWE only), keep highest severity
+ * 5. Remove duplicate findings within the same CWE
+ *
+ * Different CWEs are NEVER collapsed — each CWE represents a distinct
+ * vulnerability type that must be independently reportable.
  *
  * Returns a new array of VerificationResults. Does not mutate the input.
  */
@@ -137,10 +145,10 @@ export function deduplicateResults(results: VerificationResult[]): { results: Ve
 
   const beforeCount = tagged.length;
 
-  // Step 2: Group by dedup key
+  // Step 2: Group by dedup key (includes CWE — no cross-CWE collapse)
   const groups = new Map<string, TaggedFinding[]>();
   for (const t of tagged) {
-    const key = dedupKey(t.finding);
+    const key = dedupKey(t.finding, t.cwe);
     let group = groups.get(key);
     if (!group) {
       group = [];

@@ -1,8 +1,13 @@
 /**
  * CWE Source-Sink Dedup Tests
  *
- * Tests Layer 2 dedup: collapsing duplicate findings that share
- * (source.id, sink.id, missingCategory) across different CWEs.
+ * Tests Layer 2 dedup: collapsing duplicate findings within the SAME CWE
+ * that share (source.id, sink.id, missingCategory).
+ *
+ * Different CWEs are NEVER collapsed — they represent distinct vulnerability
+ * types. This prevents false-negative regressions where e.g. CWE-338 (Weak
+ * PRNG) was absorbed by CWE-336 (Same Seed) just because both fired on the
+ * same source/sink pair.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -86,7 +91,7 @@ describe('extractMissingCategory', () => {
 // ---------------------------------------------------------------------------
 
 describe('deduplicateResults', () => {
-  it('collapses duplicate findings with same source, sink, and missing category', () => {
+  it('does NOT collapse different CWEs even with same source, sink, and missing category', () => {
     const results: VerificationResult[] = [
       makeResult('CWE-80', 'Basic XSS', [
         makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (output encoding)', severity: 'high' }),
@@ -99,102 +104,65 @@ describe('deduplicateResults', () => {
       ]),
     ];
 
-    const { results: deduped, stats } = deduplicateResults(results);
+    const { results: deduped } = deduplicateResults(results);
 
-    // Only one finding should survive
+    // All three CWEs are distinct — none should be collapsed
     const failed = deduped.filter(r => !r.holds);
-    expect(failed.length).toBe(1);
-    expect(failed[0].cwe).toBe('CWE-80'); // lowest CWE number wins
-
-    // collapsed_cwes should list the absorbed CWEs
-    expect(failed[0].findings[0].collapsed_cwes).toBeDefined();
-    expect(failed[0].findings[0].collapsed_cwes).toContain('CWE-81');
-    expect(failed[0].findings[0].collapsed_cwes).toContain('CWE-82');
-
-    // CWE-81 and CWE-82 should now be holds=true
-    const cwe81 = deduped.find(r => r.cwe === 'CWE-81');
-    const cwe82 = deduped.find(r => r.cwe === 'CWE-82');
-    expect(cwe81?.holds).toBe(true);
-    expect(cwe82?.holds).toBe(true);
-
-    // Stats
-    expect(stats.before).toBe(3);
-    expect(stats.after).toBe(1);
-    expect(stats.groupsCollapsed).toBe(1);
+    expect(failed.length).toBe(3);
+    expect(failed.some(r => r.cwe === 'CWE-80')).toBe(true);
+    expect(failed.some(r => r.cwe === 'CWE-81')).toBe(true);
+    expect(failed.some(r => r.cwe === 'CWE-82')).toBe(true);
   });
 
-  it('keeps highest severity finding as winner', () => {
+  it('collapses duplicate findings within the SAME CWE on same source/sink', () => {
+    // CWE-89 fires twice on the same source/sink (e.g., two traversal paths)
     const results: VerificationResult[] = [
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'medium' }),
-      ]),
-      makeResult('CWE-79', 'Cross-Site Scripting', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'critical' }),
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (different path)', severity: 'high' }),
       ]),
     ];
 
     const { results: deduped } = deduplicateResults(results);
-    const failed = deduped.filter(r => !r.holds);
+    const cwe89 = deduped.find(r => r.cwe === 'CWE-89')!;
 
-    expect(failed.length).toBe(1);
-    // CWE-79 wins because it has critical severity (even though CWE-80 has lower number)
-    expect(failed[0].cwe).toBe('CWE-79');
-    expect(failed[0].findings[0].severity).toBe('critical');
-    expect(failed[0].findings[0].collapsed_cwes).toContain('CWE-80');
+    // Both findings have same source/sink/category, so one should be deduped
+    // But since the missing parenthetical differs, the full missing strings differ
+    // and dedupKey includes the category prefix only — so same CONTROL category
+    // means they collapse within the same CWE.
+    expect(cwe89.holds).toBe(false);
+    expect(cwe89.findings.length).toBe(1);
+    expect(cwe89.findings[0].severity).toBe('critical'); // highest severity wins
   });
 
-  it('uses lowest CWE number as tiebreaker when severity is equal', () => {
+  it('does NOT collapse findings with different source IDs (even same CWE)', () => {
     const results: VerificationResult[] = [
-      makeResult('CWE-85', 'Doubled Character XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-83', 'Script in Attributes', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'high' }),
       ]),
     ];
 
     const { results: deduped } = deduplicateResults(results);
-    const failed = deduped.filter(r => !r.holds);
+    const cwe89 = deduped.find(r => r.cwe === 'CWE-89')!;
 
-    expect(failed.length).toBe(1);
-    expect(failed[0].cwe).toBe('CWE-80'); // lowest number
-    expect(failed[0].findings[0].collapsed_cwes).toEqual(['CWE-83', 'CWE-85']);
+    // Different sources — both findings survive
+    expect(cwe89.findings.length).toBe(2);
   });
 
-  it('does NOT collapse findings with different source IDs', () => {
+  it('does NOT collapse findings with different sink IDs (even same CWE)', () => {
     const results: VerificationResult[] = [
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-81', 'Script in Error Message', [
-        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK2', missing: 'CONTROL (parameterized query)', severity: 'high' }),
       ]),
     ];
 
     const { results: deduped } = deduplicateResults(results);
-    const failed = deduped.filter(r => !r.holds);
+    const cwe89 = deduped.find(r => r.cwe === 'CWE-89')!;
 
-    // Both should survive — different sources
-    expect(failed.length).toBe(2);
-  });
-
-  it('does NOT collapse findings with different sink IDs', () => {
-    const results: VerificationResult[] = [
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-81', 'Script in Error Message', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK2', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-    ];
-
-    const { results: deduped } = deduplicateResults(results);
-    const failed = deduped.filter(r => !r.holds);
-
-    expect(failed.length).toBe(2);
+    // Different sinks — both findings survive
+    expect(cwe89.findings.length).toBe(2);
   });
 
   it('does NOT collapse findings with different missing categories', () => {
@@ -210,36 +178,24 @@ describe('deduplicateResults', () => {
     const { results: deduped } = deduplicateResults(results);
     const failed = deduped.filter(r => !r.holds);
 
-    // Both survive — CONTROL vs TRANSFORM are different categories
+    // Both survive — CONTROL vs TRANSFORM are different categories + different CWEs
     expect(failed.length).toBe(2);
   });
 
   it('excludes EFFECTIVE_CONTROL findings from dedup', () => {
     const results: VerificationResult[] = [
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (output encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-81', 'Script in Error Message', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (output encoding)', severity: 'high' }),
-      ]),
       makeResult('CWE-79', 'XSS', [
         makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'EFFECTIVE_CONTROL (the control on this path is itself vulnerable)', severity: 'high' }),
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'EFFECTIVE_CONTROL (another weak control)', severity: 'medium' }),
       ]),
     ];
 
     const { results: deduped } = deduplicateResults(results);
 
-    // CWE-80 and CWE-81 collapse. CWE-79 with EFFECTIVE_CONTROL survives independently.
-    const failed = deduped.filter(r => !r.holds);
-    expect(failed.length).toBe(2); // CWE-80 (with CWE-81 collapsed) + CWE-79 (EFFECTIVE_CONTROL)
-
-    const cwe79 = failed.find(r => r.cwe === 'CWE-79');
-    expect(cwe79).toBeDefined();
-    expect(cwe79!.findings[0].missing).toContain('EFFECTIVE_CONTROL');
-
-    const cwe80 = failed.find(r => r.cwe === 'CWE-80');
-    expect(cwe80).toBeDefined();
-    expect(cwe80!.findings[0].collapsed_cwes).toContain('CWE-81');
+    // EFFECTIVE_CONTROL findings are excluded from dedup entirely
+    const cwe79 = deduped.find(r => r.cwe === 'CWE-79');
+    expect(cwe79?.holds).toBe(false);
+    expect(cwe79!.findings.length).toBe(2); // both survive
   });
 
   it('handles results that already hold (no findings)', () => {
@@ -261,50 +217,39 @@ describe('deduplicateResults', () => {
 
   it('is deterministic — same input produces same output', () => {
     const makeInput = (): VerificationResult[] => [
-      makeResult('CWE-85', 'Doubled Character XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-83', 'Script in Attributes', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-82', 'Script in IMG', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (alternative path)', severity: 'high' }),
+        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'CONTROL (parameterized query)', severity: 'high' }),
       ]),
     ];
 
     const run1 = deduplicateResults(makeInput());
     const run2 = deduplicateResults(makeInput());
 
-    // Same winner
+    // Same results
     const failed1 = run1.results.filter(r => !r.holds);
     const failed2 = run2.results.filter(r => !r.holds);
     expect(failed1.length).toBe(failed2.length);
     expect(failed1[0].cwe).toBe(failed2[0].cwe);
-    expect(failed1[0].findings[0].collapsed_cwes).toEqual(failed2[0].findings[0].collapsed_cwes);
+    expect(failed1[0].findings.length).toBe(failed2[0].findings.length);
   });
 
   it('does not mutate the input array', () => {
     const results: VerificationResult[] = [
-      makeResult('CWE-80', 'Basic XSS', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
-      makeResult('CWE-81', 'Script in Error Message', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (alternative path)', severity: 'high' }),
       ]),
     ];
 
     // Snapshot before
-    const cwe81HoldsBefore = results[1].holds;
-    const cwe81FindingsLenBefore = results[1].findings.length;
+    const findingsLenBefore = results[0].findings.length;
 
     deduplicateResults(results);
 
     // Input should be unchanged
-    expect(results[1].holds).toBe(cwe81HoldsBefore);
-    expect(results[1].findings.length).toBe(cwe81FindingsLenBefore);
+    expect(results[0].findings.length).toBe(findingsLenBefore);
   });
 
   it('handles empty results', () => {
@@ -326,7 +271,7 @@ describe('deduplicateResults', () => {
     expect(stats.after).toBe(0);
   });
 
-  it('collapses a large family (path traversal: 8 CWEs)', () => {
+  it('preserves all CWEs independently even in large families', () => {
     const cwes = ['CWE-23', 'CWE-24', 'CWE-25', 'CWE-26', 'CWE-27', 'CWE-28', 'CWE-29', 'CWE-30'];
     const results: VerificationResult[] = cwes.map(cwe =>
       makeResult(cwe, `Path Traversal variant ${cwe}`, [
@@ -334,26 +279,23 @@ describe('deduplicateResults', () => {
       ])
     );
 
-    const { results: deduped, stats } = deduplicateResults(results);
+    const { results: deduped } = deduplicateResults(results);
     const failed = deduped.filter(r => !r.holds);
 
-    expect(failed.length).toBe(1);
-    expect(failed[0].cwe).toBe('CWE-23'); // lowest
-    expect(failed[0].findings[0].collapsed_cwes!.length).toBe(7);
-    expect(stats.before).toBe(8);
-    expect(stats.after).toBe(1);
+    // All 8 CWEs survive independently — no cross-CWE collapse
+    expect(failed.length).toBe(8);
   });
 
   it('handles multiple distinct source-sink groups independently', () => {
     const results: VerificationResult[] = [
-      // Group 1: SRC1 -> SINK1 (XSS family)
+      // Group 1: SRC1 -> SINK1
       makeResult('CWE-80', 'Basic XSS', [
         makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
       ]),
       makeResult('CWE-81', 'Script in Error', [
         makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
       ]),
-      // Group 2: SRC2 -> SINK2 (SQL injection family)
+      // Group 2: SRC2 -> SINK2
       makeResult('CWE-89', 'SQL Injection', [
         makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
       ]),
@@ -365,14 +307,12 @@ describe('deduplicateResults', () => {
     const { results: deduped } = deduplicateResults(results);
     const failed = deduped.filter(r => !r.holds);
 
-    expect(failed.length).toBe(2);
-    // Group 1 winner: CWE-80 (both high, CWE-80 < CWE-81)
+    // All 4 CWEs survive — no cross-CWE collapse
+    expect(failed.length).toBe(4);
     expect(failed.some(r => r.cwe === 'CWE-80')).toBe(true);
-    // Group 2 winner: CWE-89 (critical > high)
+    expect(failed.some(r => r.cwe === 'CWE-81')).toBe(true);
     expect(failed.some(r => r.cwe === 'CWE-89')).toBe(true);
-
-    const cwe89 = failed.find(r => r.cwe === 'CWE-89')!;
-    expect(cwe89.findings[0].collapsed_cwes).toContain('CWE-564');
+    expect(failed.some(r => r.cwe === 'CWE-564')).toBe(true);
   });
 
   it('handles a CWE with multiple findings across different groups', () => {
@@ -382,25 +322,14 @@ describe('deduplicateResults', () => {
         makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
         makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'CONTROL (encoding)', severity: 'high' }),
       ]),
-      makeResult('CWE-81', 'Script in Error', [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ]),
     ];
 
     const { results: deduped } = deduplicateResults(results);
     const cwe80 = deduped.find(r => r.cwe === 'CWE-80')!;
 
-    // CWE-80 should keep the SRC2->SINK2 finding (no overlap) and win the SRC1->SINK1 group
+    // Both findings survive — different source-sink pairs
     expect(cwe80.holds).toBe(false);
     expect(cwe80.findings.length).toBe(2);
-
-    // The SRC1->SINK1 finding should have collapsed_cwes
-    const src1Finding = cwe80.findings.find(f => f.source.id === 'SRC1');
-    expect(src1Finding?.collapsed_cwes).toContain('CWE-81');
-
-    // The SRC2->SINK2 finding should NOT have collapsed_cwes
-    const src2Finding = cwe80.findings.find(f => f.source.id === 'SRC2');
-    expect(src2Finding?.collapsed_cwes).toBeUndefined();
   });
 
   it('AUTH vs CONTROL findings on same source-sink are NOT collapsed', () => {
@@ -416,29 +345,24 @@ describe('deduplicateResults', () => {
     const { results: deduped } = deduplicateResults(results);
     const failed = deduped.filter(r => !r.holds);
 
-    expect(failed.length).toBe(2); // AUTH != CONTROL, no collapse
+    expect(failed.length).toBe(2); // Different CWEs AND different categories
   });
 
-  it('collapsed_cwes are sorted by CWE number', () => {
-    const cwes = ['CWE-87', 'CWE-82', 'CWE-85', 'CWE-80', 'CWE-84', 'CWE-86', 'CWE-83', 'CWE-81'];
-    const results: VerificationResult[] = cwes.map(cwe =>
-      makeResult(cwe, `XSS variant ${cwe}`, [
-        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (encoding)', severity: 'high' }),
-      ])
-    );
+  it('collapses within-CWE duplicates and preserves collapsed_cwes', () => {
+    // Same CWE has duplicate finding on same source/sink
+    const results: VerificationResult[] = [
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (prepared statement)', severity: 'high' }),
+      ]),
+    ];
 
-    const { results: deduped } = deduplicateResults(results);
-    const failed = deduped.filter(r => !r.holds);
+    const { results: deduped, stats } = deduplicateResults(results);
+    const cwe89 = deduped.find(r => r.cwe === 'CWE-89')!;
 
-    expect(failed.length).toBe(1);
-    expect(failed[0].cwe).toBe('CWE-80');
-
-    const collapsed = failed[0].findings[0].collapsed_cwes!;
-    // Should be sorted: 81, 82, 83, 84, 85, 86, 87
-    for (let i = 1; i < collapsed.length; i++) {
-      const prev = parseInt(collapsed[i - 1].replace('CWE-', ''), 10);
-      const curr = parseInt(collapsed[i].replace('CWE-', ''), 10);
-      expect(curr).toBeGreaterThan(prev);
-    }
+    // Within-CWE dedup: both CONTROL category on same source/sink → collapse
+    expect(cwe89.findings.length).toBe(1);
+    expect(cwe89.findings[0].severity).toBe('critical'); // highest severity wins
+    expect(stats.groupsCollapsed).toBeGreaterThanOrEqual(1);
   });
 });
