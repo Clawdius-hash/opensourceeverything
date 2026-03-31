@@ -10,6 +10,7 @@
  *   npx tsx src/services/dst/dst-cli.ts --demo --json         # output as JSON
  *   npx tsx src/services/dst/dst-cli.ts <file.js> --json      # scan file, output JSON
  *   npx tsx src/services/dst/dst-cli.ts <file.js> --no-dedup  # raw output, no CWE dedup
+ *   npx tsx src/services/dst/dst-cli.ts <file.js> --pedantic  # include code-quality CWEs
  */
 
 import { Parser, Language } from 'web-tree-sitter';
@@ -462,9 +463,12 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const jsonOutput = args.includes('--json');
   const noDedup = args.includes('--no-dedup');
+  const pedantic = args.includes('--pedantic');
   const target = args.find(a => !a.startsWith('--'));
   const isDemo = args.includes('--demo') || !target;
-  const verifyOptions = noDedup ? { noDedup: true } : undefined;
+  const verifyOptions = (noDedup || pedantic)
+    ? { ...(noDedup ? { noDedup: true } : {}), ...(pedantic ? { pedanticMode: true } : {}) }
+    : undefined;
 
   const startTime = Date.now();
 

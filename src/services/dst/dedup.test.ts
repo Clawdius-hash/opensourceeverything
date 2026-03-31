@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { deduplicateResults, extractMissingCategory } from './dedup';
+import { deduplicateResults, extractMissingCategory, familyDedup, getFamilyForCWE, CWE_FAMILIES } from './dedup';
 import type { VerificationResult, Finding, NodeRef } from './verifier';
 
 // ---------------------------------------------------------------------------
@@ -364,5 +364,354 @@ describe('deduplicateResults', () => {
     expect(cwe89.findings.length).toBe(1);
     expect(cwe89.findings[0].severity).toBe('critical'); // highest severity wins
     expect(stats.groupsCollapsed).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ===========================================================================
+// LAYER 3 — CWE Family Dedup Tests
+// ===========================================================================
+
+describe('CWE Family Definitions', () => {
+  it('defines path traversal family with CWE-22 as parent', () => {
+    const family = getFamilyForCWE('CWE-22');
+    expect(family).toBeDefined();
+    expect(family!.parent).toBe('CWE-22');
+    expect(family!.all.has('CWE-23')).toBe(true);
+    expect(family!.all.has('CWE-38')).toBe(true);
+  });
+
+  it('defines XSS family with CWE-79 as parent', () => {
+    const family = getFamilyForCWE('CWE-79');
+    expect(family).toBeDefined();
+    expect(family!.parent).toBe('CWE-79');
+    expect(family!.all.has('CWE-80')).toBe(true);
+    expect(family!.all.has('CWE-87')).toBe(true);
+  });
+
+  it('defines input handling family with CWE-20 as parent', () => {
+    const family = getFamilyForCWE('CWE-20');
+    expect(family).toBeDefined();
+    expect(family!.parent).toBe('CWE-20');
+    expect(family!.all.has('CWE-233')).toBe(true);
+  });
+
+  it('defines filtering family with CWE-790 as parent', () => {
+    const family = getFamilyForCWE('CWE-790');
+    expect(family).toBeDefined();
+    expect(family!.parent).toBe('CWE-790');
+    expect(family!.all.has('CWE-797')).toBe(true);
+  });
+
+  it('defines link following family with CWE-59 as parent', () => {
+    const family = getFamilyForCWE('CWE-59');
+    expect(family).toBeDefined();
+    expect(family!.parent).toBe('CWE-59');
+    expect(family!.all.has('CWE-61')).toBe(true);
+    expect(family!.all.has('CWE-62')).toBe(true);
+  });
+
+  it('CWEs in the same family share the same family object', () => {
+    const fam23 = getFamilyForCWE('CWE-23');
+    const fam24 = getFamilyForCWE('CWE-24');
+    const fam22 = getFamilyForCWE('CWE-22');
+    expect(fam23).toBe(fam24);
+    expect(fam23).toBe(fam22);
+  });
+
+  it('CWEs NOT in any family return undefined', () => {
+    expect(getFamilyForCWE('CWE-89')).toBeUndefined();
+    expect(getFamilyForCWE('CWE-502')).toBeUndefined();
+    expect(getFamilyForCWE('CWE-798')).toBeUndefined();
+  });
+});
+
+describe('familyDedup', () => {
+  it('collapses path traversal siblings under parent CWE-22', () => {
+    // Simulate: CWE-22, 23, 24, 25, 26, 27 all fire on same source/sink
+    const cwes = ['CWE-22', 'CWE-23', 'CWE-24', 'CWE-25', 'CWE-26', 'CWE-27'];
+    const results: VerificationResult[] = cwes.map(cwe =>
+      makeResult(cwe, `Path Traversal ${cwe}`, [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ])
+    );
+
+    const { results: deduped, stats } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // Only CWE-22 (parent) should survive
+    expect(failed.length).toBe(1);
+    expect(failed[0].cwe).toBe('CWE-22');
+
+    // The collapsed siblings should be recorded
+    const collapsed = (failed[0].findings[0] as Finding & { collapsed_cwes?: string[] }).collapsed_cwes;
+    expect(collapsed).toBeDefined();
+    expect(collapsed).toContain('CWE-23');
+    expect(collapsed).toContain('CWE-24');
+    expect(collapsed).toContain('CWE-25');
+    expect(collapsed).toContain('CWE-26');
+    expect(collapsed).toContain('CWE-27');
+
+    // Stats
+    expect(stats.familiesCollapsed).toBeGreaterThan(0);
+    expect(stats.before).toBe(6);
+    expect(stats.after).toBe(1);
+  });
+
+  it('collapses XSS siblings under parent CWE-79', () => {
+    const cwes = ['CWE-79', 'CWE-80', 'CWE-81', 'CWE-82', 'CWE-83'];
+    const results: VerificationResult[] = cwes.map(cwe =>
+      makeResult(cwe, `XSS ${cwe}`, [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'TRANSFORM (encoding)', severity: 'high' }),
+      ])
+    );
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    expect(failed.length).toBe(1);
+    expect(failed[0].cwe).toBe('CWE-79');
+  });
+
+  it('keeps lowest-numbered child when parent does NOT fire', () => {
+    // Only children fire, no parent CWE-22
+    const results: VerificationResult[] = [
+      makeResult('CWE-24', "Path Traversal: '../filedir'", [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-25', "Path Traversal: '/../filedir'", [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-26', "Path Traversal: '/dir/../filename'", [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // CWE-24 is the lowest-numbered child that fired — it wins
+    expect(failed.length).toBe(1);
+    expect(failed[0].cwe).toBe('CWE-24');
+  });
+
+  it('does NOT collapse when only ONE family member fires', () => {
+    const results: VerificationResult[] = [
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // Single family member — preserved as-is
+    expect(failed.length).toBe(1);
+    expect(failed[0].cwe).toBe('CWE-23');
+  });
+
+  it('does NOT collapse CWEs that are NOT in any family', () => {
+    const results: VerificationResult[] = [
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+      ]),
+      makeResult('CWE-502', 'Deserialization', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (safe deserialization)', severity: 'high' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // Both survive — neither is in a CWE family
+    expect(failed.length).toBe(2);
+    expect(failed.some(r => r.cwe === 'CWE-89')).toBe(true);
+    expect(failed.some(r => r.cwe === 'CWE-502')).toBe(true);
+  });
+
+  it('handles multiple families independently', () => {
+    const results: VerificationResult[] = [
+      // Path traversal family on SRC1/SINK1
+      makeResult('CWE-22', 'Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      // XSS family on SRC2/SINK2
+      makeResult('CWE-79', 'XSS', [
+        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'TRANSFORM (encoding)', severity: 'high' }),
+      ]),
+      makeResult('CWE-80', 'Basic XSS', [
+        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'TRANSFORM (encoding)', severity: 'high' }),
+      ]),
+      // Non-family CWE
+      makeResult('CWE-89', 'SQL Injection', [
+        makeFinding({ sourceId: 'SRC3', sinkId: 'SINK3', missing: 'CONTROL (parameterized query)', severity: 'critical' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // CWE-22 survives (path trav parent), CWE-79 survives (XSS parent), CWE-89 survives (no family)
+    expect(failed.length).toBe(3);
+    expect(failed.some(r => r.cwe === 'CWE-22')).toBe(true);
+    expect(failed.some(r => r.cwe === 'CWE-79')).toBe(true);
+    expect(failed.some(r => r.cwe === 'CWE-89')).toBe(true);
+  });
+
+  it('does NOT collapse family members on DIFFERENT source/sink pairs', () => {
+    const results: VerificationResult[] = [
+      makeResult('CWE-22', 'Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // Different evidence — both survive even though they're in the same family
+    expect(failed.length).toBe(2);
+  });
+
+  it('excludes EFFECTIVE_CONTROL findings from family dedup', () => {
+    const results: VerificationResult[] = [
+      makeResult('CWE-22', 'Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'EFFECTIVE_CONTROL (weak path check)', severity: 'high' }),
+      ]),
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'EFFECTIVE_CONTROL (weak path check)', severity: 'high' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // EFFECTIVE_CONTROL findings are excluded from family dedup — both survive
+    expect(failed.length).toBe(2);
+  });
+
+  it('is deterministic — same input always produces same output', () => {
+    const makeInput = (): VerificationResult[] => [
+      makeResult('CWE-22', 'Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-24', "Path Traversal: '../filedir'", [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+    ];
+
+    const run1 = familyDedup(makeInput());
+    const run2 = familyDedup(makeInput());
+
+    const failed1 = run1.results.filter(r => !r.holds);
+    const failed2 = run2.results.filter(r => !r.holds);
+    expect(failed1.length).toBe(failed2.length);
+    expect(failed1[0].cwe).toBe(failed2[0].cwe);
+    expect(failed1[0].findings.length).toBe(failed2[0].findings.length);
+  });
+
+  it('does not mutate the input array', () => {
+    const results: VerificationResult[] = [
+      makeResult('CWE-22', 'Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+    ];
+
+    const findingsLenBefore = results[1].findings.length;
+    const holdsBefore = results[1].holds;
+
+    familyDedup(results);
+
+    expect(results[1].findings.length).toBe(findingsLenBefore);
+    expect(results[1].holds).toBe(holdsBefore);
+  });
+
+  it('handles empty results', () => {
+    const { results: deduped, stats } = familyDedup([]);
+    expect(deduped).toEqual([]);
+    expect(stats.before).toBe(0);
+    expect(stats.after).toBe(0);
+  });
+
+  it('collapses large path traversal family (17 CWEs)', () => {
+    // Simulates the real-world scenario: CWE-22..38 all fire on same evidence
+    const cwes = [
+      'CWE-22', 'CWE-23', 'CWE-24', 'CWE-25', 'CWE-26', 'CWE-27',
+      'CWE-28', 'CWE-29', 'CWE-30', 'CWE-31', 'CWE-32', 'CWE-33',
+      'CWE-34', 'CWE-35', 'CWE-36', 'CWE-37', 'CWE-38',
+    ];
+    const results: VerificationResult[] = cwes.map(cwe =>
+      makeResult(cwe, `Path Traversal ${cwe}`, [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ])
+    );
+
+    const { results: deduped, stats } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    // Only CWE-22 survives
+    expect(failed.length).toBe(1);
+    expect(failed[0].cwe).toBe('CWE-22');
+
+    // All 16 siblings are recorded as collapsed
+    const collapsed = (failed[0].findings[0] as Finding & { collapsed_cwes?: string[] }).collapsed_cwes!;
+    expect(collapsed.length).toBe(16);
+    expect(collapsed).toContain('CWE-23');
+    expect(collapsed).toContain('CWE-38');
+
+    // Stats reflect the collapse
+    expect(stats.before).toBe(17);
+    expect(stats.after).toBe(1);
+  });
+
+  it('collapses filtering family (8 CWEs)', () => {
+    const cwes = ['CWE-790', 'CWE-791', 'CWE-792', 'CWE-793', 'CWE-794', 'CWE-795', 'CWE-796', 'CWE-797'];
+    const results: VerificationResult[] = cwes.map(cwe =>
+      makeResult(cwe, `Filtering ${cwe}`, [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (complete filtering)', severity: 'medium' }),
+      ])
+    );
+
+    const { results: deduped } = familyDedup(results);
+    const failed = deduped.filter(r => !r.holds);
+
+    expect(failed.length).toBe(1);
+    expect(failed[0].cwe).toBe('CWE-790');
+  });
+
+  it('handles family members with multiple findings on different evidence', () => {
+    // CWE-22 fires on SRC1/SINK1 and SRC2/SINK2
+    // CWE-23 fires on SRC1/SINK1 only
+    const results: VerificationResult[] = [
+      makeResult('CWE-22', 'Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+        makeFinding({ sourceId: 'SRC2', sinkId: 'SINK2', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+      makeResult('CWE-23', 'Relative Path Traversal', [
+        makeFinding({ sourceId: 'SRC1', sinkId: 'SINK1', missing: 'CONTROL (path validation)', severity: 'high' }),
+      ]),
+    ];
+
+    const { results: deduped } = familyDedup(results);
+    const cwe22 = deduped.find(r => r.cwe === 'CWE-22')!;
+    const cwe23 = deduped.find(r => r.cwe === 'CWE-23')!;
+
+    // CWE-22 keeps both findings (SRC1/SINK1 wins family group, SRC2/SINK2 is unchallenged)
+    expect(cwe22.holds).toBe(false);
+    expect(cwe22.findings.length).toBe(2);
+
+    // CWE-23's SRC1/SINK1 finding was collapsed under CWE-22
+    expect(cwe23.holds).toBe(true);
+    expect(cwe23.findings.length).toBe(0);
   });
 });
