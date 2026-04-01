@@ -28,6 +28,23 @@ import { filterCWEsForLanguage } from './cwe-filter.js';
  *   - Preserves string literals — won't strip // inside "strings" or 'strings'
  *   - Preserves template literals — won't strip // inside `backtick strings`
  */
+/**
+ * Strip content inside string literals and regex literals, leaving delimiters.
+ * "/\bDES\b/" → "//", "Math.random()" → "". Used by crypto/PRNG verifiers
+ * to avoid self-detection when scanning DST's own detection patterns.
+ */
+export function stripLiterals(code: string): string {
+  // Replace regex literals: /pattern/flags → //
+  let result = code.replace(/(?<![=!<>])\/(?![/*])(?:[^/\\]|\\.)+\/[gimsuy]*/g, '//');
+  // Replace double-quoted strings: "content" → ""
+  result = result.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  // Replace single-quoted strings: 'content' → ''
+  result = result.replace(/'(?:[^'\\]|\\.)*'/g, "''");
+  // Replace template literals: `content` → ``
+  result = result.replace(/`(?:[^`\\]|\\.)*`/g, '``');
+  return result;
+}
+
 export function stripComments(code: string): string {
   let result = '';
   let i = 0;
@@ -6944,7 +6961,8 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
   const ECB_MODE_RE = /\bECB\b|\/ECB\/|['"]aes[-_]?(?:128|256)[-_]?ecb['"]|\bMode\.ECB\b|\bCipher\.getInstance\s*\(\s*['"]AES\/ECB/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const raw = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripLiterals(raw); // avoid self-detection on regex/string patterns
     if (BROKEN_ALGO_RE.test(code) && !STRONG_ALGO_RE.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
@@ -7069,7 +7087,8 @@ function verifyCWE338(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (!actTypes338.includes(node.node_type)) continue;
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const raw338 = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripLiterals(raw338); // avoid self-detection on regex/string patterns
     if (WEAK_RE338.test(code) && !CSPR_RE338.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
@@ -7213,7 +7232,7 @@ function verifyCWE757(map: NeuralMap): VerificationResult {
   );
 
   for (const node of tlsNodes757) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripLiterals(stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot));
     if (WEAK_PROTO_RE757.test(code) && !STRONG_PROTO_RE757.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
