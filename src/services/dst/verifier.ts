@@ -45,6 +45,16 @@ export function stripLiterals(code: string): string {
   return result;
 }
 
+/**
+ * Strip only regex literals from code, leaving string literals intact.
+ * Used by CWE-798 and similar verifiers that need to detect credential VALUES
+ * (which are in string literals) but not match against detection regex patterns
+ * (which are regex literals inside DST's own verifier code).
+ */
+export function stripRegexLiterals(code: string): string {
+  return code.replace(/(?<![=!<>])\/(?![/*])(?:[^/\\]|\\.)+\/[gimsuy]*/g, '//');
+}
+
 export function stripComments(code: string): string {
   let result = '';
   let i = 0;
@@ -2039,6 +2049,13 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
     /\bvault\b/,
     /\bsecretManager\b/,
     /\byour_|\$\{|<[A-Z]|\bREPLACE\b|\bCHANGEME\b|\bTODO\b|\bEXAMPLE\b|\bTEST\b|\bPLACEHOLDER\b/i,
+    // Security tool internals: regex-literal definitions and verifier code patterns.
+    // A line assigning a regex literal (/pattern/) is a detection rule, not a credential.
+    /^\s*(?:const|let|var)\s+\w+\s*=\s*\//,
+    // Lines from security-tool fix/description strings (e.g. 'Never log passwords...password: "[REDACTED]"')
+    /\bfindings\.push\b|\bnodeRef\s*\(|\bstripComments\b|\bstripLiterals\b|\bverifyCWE/,
+    // Redacted/masked credential references in examples
+    /\bREDACTED\b|\bMASKED\b|\b\*{3,}\b/i,
   ];
 
   // Check if there's a META node that marks this value as env-sourced
@@ -2056,13 +2073,23 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
     if (node.node_type === 'META' && node.node_subtype !== 'config_value') continue;
     // Skip nodes that are known to source from env
     if (envRefs.has(node.id)) continue;
+    // Skip verifier-internal function nodes: their snapshots contain credential-detection
+    // regex patterns by design. These function bodies are not themselves credentials.
+    if (/^verifyCWE\d+$/.test(node.label)) continue;
 
-    // Strip literals so detection regexes inside DST's own verifier code don't self-trigger.
-    // e.g. /(?:password|passwd)\s*[:=]/ in a verifier function body would otherwise match itself.
-    const nodeSnap798 = stripLiterals(stripComments(node.analysis_snapshot || node.code_snapshot));
+    const nodeSnap798 = stripComments(node.analysis_snapshot || node.code_snapshot);
+    // Skip entire nodes that look like security-tool verifier function bodies
+    // (have findings.push / nodeRef calls indicating they're CWE detection code).
+    if (/\bfindings\.push\b|\bnodeRef\s*\(|\bstripComments\b|\bstripLiterals\b|\bverifyCWE/.test(nodeSnap798)) continue;
 
     for (const pattern of secretPatterns) {
-      if (pattern.test(nodeSnap798)) {
+      // Check safePatterns only against the matched credential text (not the whole snapshot).
+      // This prevents unrelated safe-looking words elsewhere in the code snapshot (e.g.
+      // "db.example.com" hostname) from suppressing a real credential finding.
+      const match = pattern.exec(nodeSnap798);
+      if (match) {
+        if (safePatterns.some(sp => sp.test(match[0]))) break;
+
         findings.push({
           source: nodeRef(node),
           sink: nodeRef(node),
@@ -2533,7 +2560,10 @@ function verifyCWE611(map: NeuralMap): VerificationResult {
   //   without setProperty(ACCESS_EXTERNAL_DTD, "") or setProperty(...FEATURE...external..., false)
   // Also catches: SAXParserFactory, DocumentBuilderFactory without security config.
   if (findings.length === 0 && map.source_code) {
-    const sl611 = stripComments(map.source_code);
+    // Strip both comments and string/regex literals so detection patterns inside DST's own
+    // verifier code (e.g. the XML_FACTORY_RE definition itself) don't self-trigger when
+    // verifier.ts is scanned.
+    const sl611 = stripLiterals(stripComments(map.source_code));
 
     // Detect Java XML parser factories without security configuration
     const XML_FACTORY_RE = /\b(XMLInputFactory|SAXParserFactory|DocumentBuilderFactory|TransformerFactory|SchemaFactory|XMLReaderFactory)\s*\.\s*(?:newInstance|newFactory)\s*\(/;
@@ -6969,20 +6999,25 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
   const CRYPTO_API_CALL_RE = /Cipher\.getInstance\s*\(\s*['"](?:DES|DESede|RC4|RC2|Blowfish)|createCipher(?:iv)?\s*\(\s*['"](?:des|des-ede3|des3|rc4|rc2|bf|blowfish)|CryptoJS\.(?:DES|TripleDES|RC4|Rabbit)\b|MessageDigest\.getInstance\s*\(\s*['"](?:MD[245]|SHA-?1)['"]|EVP_(?:des|rc4|bf)_/i;
 
   for (const node of map.nodes) {
-    const raw = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
-    const code = stripLiterals(raw); // avoid self-detection on regex/string patterns
-    // For self-scan safety: also check raw (unstripped) code for actual API call patterns.
-    // Algorithm names inside Cipher.getInstance("DES") survive stripLiterals because
-    // the function name Cipher.getInstance is OUTSIDE the string.
-    // But also check raw for the full pattern including string arg as fallback.
-    const rawAlgoInCall = /(?:Cipher\.getInstance|createCipher(?:iv)?|CryptoJS\.)\s*\(?\s*['"]?(?:DES|DESede|3DES|TripleDES|RC4|RC2|Blowfish|des|des-ede3|rc4|bf|blowfish)/i.test(raw);
-    if ((BROKEN_ALGO_RE.test(code) || rawAlgoInCall) && !STRONG_ALGO_RE.test(code)) {
-      if (process.env.DST_DEBUG_327) {
-        const m1 = BROKEN_ALGO_RE.exec(code);
-        const rawPattern = /(?:Cipher\.getInstance|createCipher(?:iv)?|CryptoJS\.)\s*\(?\s*['"]?(?:DES|DESede|3DES|TripleDES|RC4|RC2|Blowfish|des|des-ede3|rc4|bf|blowfish)/i;
-        const m2 = rawPattern.exec(raw);
-        console.error('CWE327 DEBUG node:', node.label, '\nBROKEN match:', m1 ? m1[0]+' idx='+m1.index+' ctx='+JSON.stringify(code.slice(Math.max(0,m1.index-40),m1.index+60)) : 'none', '\nRAW match:', m2 ? m2[0]+' idx='+m2.index+' ctx='+JSON.stringify(raw.slice(Math.max(0,m2.index-40),m2.index+60)) : 'none');
-      }
+    // Skip verifier-internal functions and their child nodes: their snapshots contain
+    // algorithm name strings/regexes by design (as detection patterns), not actual crypto usage.
+    // Snapshot truncation (2000 chars) can also leave unclosed literals that confuse stripLiterals.
+    if (/^verifyCWE\d+$/.test(node.label)) continue;
+    // Skip child nodes of verifier functions (for-loops, if-blocks, findings.push calls)
+    // identified by the presence of verifier-internal API calls in their snapshot.
+    const rawForCheck = node.analysis_snapshot || node.code_snapshot;
+    if (/\bfindings\.push\b|\bnodeRef\s*\(|\bstripComments\b|\bstripLiterals\b|\bverifyCWE/.test(rawForCheck)) continue;
+
+    const raw = stripComments(rawForCheck);
+    // Pad raw before stripping to close any truncated string literals at the 2000-char boundary.
+    // A truncated 'string without closing quote would otherwise survive stripLiterals unchanged.
+    const paddedRaw = raw + "'\"` ";
+    const code = stripLiterals(paddedRaw); // avoid self-detection on regex/string patterns
+    // For actual crypto API calls: strip regex literals first (they contain patterns that look like
+    // API calls), then check for real function calls with weak algo names in string arguments.
+    const rawNoRegex = stripRegexLiterals(raw);
+    const hasRealCryptoCall = CRYPTO_API_CALL_RE.test(rawNoRegex);
+    if ((BROKEN_ALGO_RE.test(code) || hasRealCryptoCall) && !STRONG_ALGO_RE.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'TRANSFORM (modern cryptographic algorithm — AES-256-GCM or ChaCha20-Poly1305)',
