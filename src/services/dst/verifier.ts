@@ -579,6 +579,95 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Source-line fallback for Java: detect SQL injection inside anonymous inner classes
+  // where taint crosses class boundaries (e.g., JWT header.get("kid") → executeQuery).
+  // The mapper doesn't trace taint across inner class boundaries, so BFS misses these.
+  if (findings.length === 0 && map.source_code) {
+    const sl89 = stripComments(map.source_code);
+    const lines89 = sl89.split('\n');
+
+    // Pattern: anonymous inner class or lambda that extracts a value from a
+    // request/header/claims object and concatenates it into a SQL query string.
+    // Examples:
+    //   final String kid = (String) header.get("kid");
+    //   ... .executeQuery("SELECT key FROM jwt_keys WHERE id = '" + kid + "'");
+    const INNER_SRC_RE = /(\w+)\s*=\s*(?:\(\w+\)\s*)?(?:\w+\.)*(?:get|getParameter|getHeader|getString|getValue|claim|getClaim)\s*\(/;
+    const SQL_EXEC_RE = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement)\s*\(\s*(?:"[^"]*"\s*\+|\w+\s*\+|[^)]*\+\s*\w+)/;
+    const PARAM_RE = /\bprepare(?:Statement|d)?\s*\(|\?\s*[,)]/;
+
+    const innerTainted = new Set<string>();
+    let innerSrcLine = 0;
+    let innerSrcCode = '';
+    let hasSqlConcat = false;
+    let sqlLine = 0;
+    let sqlCode = '';
+
+    for (let i = 0; i < lines89.length; i++) {
+      const ln = lines89[i]!.trim();
+      if (ln.startsWith('//') || ln.startsWith('*')) continue;
+
+      const srcMatch = ln.match(INNER_SRC_RE);
+      if (srcMatch) {
+        innerTainted.add(srcMatch[1]!);
+        if (!innerSrcLine) { innerSrcLine = i + 1; innerSrcCode = ln; }
+      }
+
+      // Propagate simple assignments
+      const assignMatch = ln.match(/^(?:\w+\s+)*(\w+)\s*=\s*(.+)/);
+      if (assignMatch) {
+        const lhs = assignMatch[1]!;
+        const rhs = assignMatch[2]!;
+        for (const tv of innerTainted) {
+          if (new RegExp('\\b' + escapeRegExp(tv) + '\\b').test(rhs)) {
+            innerTainted.add(lhs);
+            break;
+          }
+        }
+      }
+
+      // Check for SQL execution with string concatenation using tainted var
+      // Handle both single-line and multi-line SQL statements
+      const SQL_CALL_RE89 = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement)\s*\(/;
+      if ((SQL_EXEC_RE.test(ln) || SQL_CALL_RE89.test(ln)) && !PARAM_RE.test(ln)) {
+        // Build a window of nearby lines to check for tainted vars in SQL concat
+        const windowStart = Math.max(0, i - 5);
+        const windowEnd = Math.min(lines89.length - 1, i + 5);
+        const window89 = lines89.slice(windowStart, windowEnd + 1).join(' ');
+
+        // Skip if parameterized
+        if (!PARAM_RE.test(window89)) {
+          for (const tv of innerTainted) {
+            // Check if tainted var appears in string concatenation near the SQL call
+            if (new RegExp('["+\'\\s]\\s*\\+\\s*\\b' + escapeRegExp(tv) + '\\b|\\b' + escapeRegExp(tv) + '\\b\\s*\\+\\s*["+\'\\s]').test(window89)) {
+              hasSqlConcat = true;
+              // Find the exact line with the tainted var for reporting
+              for (let j = windowStart; j <= windowEnd; j++) {
+                if (new RegExp('\\b' + escapeRegExp(tv) + '\\b').test(lines89[j]!)) {
+                  sqlLine = j + 1;
+                  sqlCode = lines89[j]!.trim();
+                  break;
+                }
+              }
+              if (!sqlLine) { sqlLine = i + 1; sqlCode = ln; }
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (hasSqlConcat && innerSrcLine > 0) {
+      findings.push({
+        source: { id: `srcline-${innerSrcLine}`, label: `inner class input (line ${innerSrcLine})`, line: innerSrcLine, code: innerSrcCode.slice(0, 200) },
+        sink: { id: `srcline-${sqlLine}`, label: `SQL query (line ${sqlLine})`, line: sqlLine, code: sqlCode.slice(0, 200) },
+        missing: 'CONTROL (input validation or parameterized query)',
+        severity: 'critical',
+        description: `Data extracted inside inner class flows to SQL query at line ${sqlLine} via string concatenation without parameterization.`,
+        fix: 'Use parameterized queries (prepared statements) instead of string concatenation.',
+      });
+    }
+  }
+
   return {
     cwe: 'CWE-89',
     name: 'SQL Injection',
@@ -694,6 +783,111 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
                 'CSS encoding for style contexts. Never substitute one context\'s encoding for another.',
             });
           }
+        }
+      }
+    }
+  }
+
+  // Source-line fallback for Java: detect reflected XSS via @ResponseBody.
+  // When a Spring controller method is annotated with @ResponseBody (or the class
+  // with @RestController), the return value IS the HTTP response body. If a
+  // @RequestParam is concatenated into a StringBuilder or string that gets returned
+  // (directly or via .output()), it's reflected XSS without encoding.
+  if (findings.length === 0 && map.source_code) {
+    const sl79 = stripComments(map.source_code);
+    const lines79 = sl79.split('\n');
+
+    // Check for @ResponseBody or @RestController presence
+    const hasResponseBody = /@ResponseBody|@RestController/.test(sl79);
+    if (hasResponseBody) {
+      // Find @RequestParam String variables
+      const requestParams79 = new Set<string>();
+      const PARAM_RE79 = /@RequestParam(?:\s*\([^)]*\))?\s+(?:String|Integer|Long|int|long)\s+(\w+)/g;
+      let pm79;
+      while ((pm79 = PARAM_RE79.exec(sl79)) !== null) {
+        requestParams79.add(pm79[1]!);
+      }
+
+      if (requestParams79.size > 0) {
+        // Track taint through assignments and string concatenation
+        const tainted79 = new Set(requestParams79);
+        const ENCODE_RE79 = /\bescapeHtml\b|\bhtmlEncode\b|\bsanitize\b|\bencodeForHTML\b|\bESAPI\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b|\bDOMPurify\b/i;
+
+        // Check if any request param is concatenated into a string builder or string
+        // that reaches a response output without encoding
+        let xssFound = false;
+        let xssSrcLine = 0;
+        let xssSrcCode = '';
+        let xssSinkLine = 0;
+        let xssSinkCode = '';
+
+        for (let i = 0; i < lines79.length; i++) {
+          const ln = lines79[i]!.trim();
+          if (ln.startsWith('//') || ln.startsWith('*')) continue;
+
+          // Propagate taint through StringBuilder.append with concat
+          for (const tv of tainted79) {
+            if (new RegExp('\\b' + escapeRegExp(tv) + '\\b').test(ln)) {
+              // String concatenation: "..." + field1
+              if (/\+\s*\w+|\w+\s*\+/.test(ln)) {
+                // Mark StringBuilder variables as tainted
+                const sbMatch = ln.match(/(\w+)\.append\s*\(/);
+                if (sbMatch) tainted79.add(sbMatch[1]!);
+              }
+              // Assignment propagation
+              const assignMatch = ln.match(/^(?:\w+\s+)*(\w+)\s*=\s*/);
+              if (assignMatch && assignMatch[1] !== tv) tainted79.add(assignMatch[1]!);
+            }
+          }
+
+          // .toString() propagation from tainted StringBuilder
+          const tsMatch = ln.match(/(\w+)\.toString\s*\(\s*\)/);
+          if (tsMatch && tainted79.has(tsMatch[1]!)) {
+            const outerAssign = ln.match(/(?:^|\s)(\w+)\s*=\s*/);
+            if (outerAssign) tainted79.add(outerAssign[1]!);
+          }
+
+          // Detect output sinks: .output(...), .body(...), return ..., .send(...)
+          const outputMatch = ln.match(/\.output\s*\(([^)]*)\)|\.body\s*\(([^)]*)\)|return\s+(.+)/);
+          if (outputMatch) {
+            const outputArg = outputMatch[1] || outputMatch[2] || outputMatch[3] || '';
+            for (const tv of tainted79) {
+              if (new RegExp('\\b' + escapeRegExp(tv) + '\\b').test(outputArg)) {
+                // Check if encoding is present in scope
+                const scopeSlice = lines79.slice(Math.max(0, i - 30), i + 1).join('\n');
+                if (!ENCODE_RE79.test(scopeSlice)) {
+                  xssFound = true;
+                  // Find the source line
+                  for (let j = 0; j < lines79.length; j++) {
+                    for (const rp of requestParams79) {
+                      if (new RegExp('@RequestParam.*\\b' + escapeRegExp(rp) + '\\b').test(lines79[j]!)) {
+                        xssSrcLine = j + 1;
+                        xssSrcCode = lines79[j]!.trim();
+                        break;
+                      }
+                    }
+                    if (xssSrcLine) break;
+                  }
+                  xssSinkLine = i + 1;
+                  xssSinkCode = ln;
+                  break;
+                }
+              }
+            }
+          }
+          if (xssFound) break;
+        }
+
+        if (xssFound && xssSrcLine > 0) {
+          findings.push({
+            source: { id: `srcline-${xssSrcLine}`, label: `request parameter (line ${xssSrcLine})`, line: xssSrcLine, code: xssSrcCode.slice(0, 200) },
+            sink: { id: `srcline-${xssSinkLine}`, label: `@ResponseBody output (line ${xssSinkLine})`, line: xssSinkLine, code: xssSinkCode.slice(0, 200) },
+            missing: 'CONTROL (output encoding or sanitization)',
+            severity: 'high',
+            description: `User input from @RequestParam is reflected in @ResponseBody HTTP response at line ${xssSinkLine} without encoding. ` +
+              `An attacker can inject script tags via the request parameter.`,
+            fix: 'Encode output for the target context. Use HtmlUtils.htmlEscape() or a sanitizer before including user input in response bodies.',
+          });
         }
       }
     }
@@ -1166,6 +1360,108 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
             });
           }
         }
+      }
+    }
+  }
+
+  // Source-line fallback for Java method-param taint: detect path traversal where
+  // a filename/path comes from a method parameter (not directly from @RequestParam).
+  // Pattern: method receives a String parameter (fullName, filename, path, etc.),
+  // and uses it in new File(directory, paramName) without canonicalization checks.
+  // This catches cross-method taint where a controller passes user input to a helper.
+  if (findings.length === 0 && map.source_code) {
+    const sl22m = stripComments(map.source_code);
+    const lines22m = sl22m.split('\n');
+
+    // Find ALL String/Path/File/MultipartFile method parameters
+    const PARAM_EXTRACT_RE = /(?:String|Path|File|MultipartFile)\s+(\w+)/g;
+    const fileParamNames = new Set<string>();
+    let mp22;
+    while ((mp22 = PARAM_EXTRACT_RE.exec(sl22m)) !== null) {
+      const paramName = mp22[1]!;
+      // Only treat as potential taint if the parameter name suggests file/path input
+      if (/name|file|path|dir|folder|upload|location|dest|target|input|param/i.test(paramName)) {
+        fileParamNames.add(paramName);
+      }
+    }
+
+    if (fileParamNames.size > 0) {
+      // Propagate taint through assignments
+      const tainted22m = new Set(fileParamNames);
+      for (const line of lines22m) {
+        const asgn = line.match(/(?:var|final\s+\w+|\w+)\s+(\w+)\s*=\s*(.+)/);
+        if (asgn) {
+          const lhs = asgn[1]!;
+          const rhs = asgn[2]!;
+          for (const tv of tainted22m) {
+            if (new RegExp('\\b' + escapeRegExp(tv) + '\\b').test(rhs)) {
+              tainted22m.add(lhs);
+              break;
+            }
+          }
+        }
+      }
+
+      // Check for File constructor usage with tainted variable
+      let fileSinkFound = false;
+      let fileSinkLine = 0;
+      let fileSinkCode = '';
+      let fileParamLine = 0;
+      let fileParamCode = '';
+
+      for (let i = 0; i < lines22m.length; i++) {
+        const ln = lines22m[i]!.trim();
+        const fileConstructor = ln.match(/new\s+(?:java\.io\.)?File\s*\(([^)]+)\)/);
+        if (fileConstructor) {
+          const args = fileConstructor[1]!;
+          for (const tv of tainted22m) {
+            if (new RegExp('\\b' + escapeRegExp(tv) + '\\b').test(args)) {
+              // Check that path validation is NOT present
+              const fullSrc = sl22m;
+              // Only flag if there's no canonicalization + startsWith check
+              const hasCanonCheck = /getCanonicalPath\s*\(\s*\)[\s\S]{0,200}startsWith\s*\(|getCanonicalFile\s*\(\s*\)[\s\S]{0,200}startsWith\s*\(/
+                .test(fullSrc);
+              const hasNormCheck = /normalize\s*\(\s*\)[\s\S]{0,200}startsWith\s*\(/.test(fullSrc);
+              const hasResolveCheck = /path\.resolve[\s\S]{0,200}startsWith/.test(fullSrc);
+              // Check for getCanonicalPath used to PREVENT traversal (reject/throw)
+              // Note: using getCanonicalPath only to CHECK results after-the-fact is NOT prevention
+              // Be precise: "throw new" (actual throw), "return failed(" (actual rejection), NOT "throws" in method sig
+              const hasCanonReject = /getCanonicalPath[\s\S]{0,100}(?:throw\s+new\s|return\s+failed\s*\(|return\s+error|reject\s*\(|deny|block|403)/i.test(fullSrc);
+
+              if (!hasCanonCheck && !hasNormCheck && !hasResolveCheck && !hasCanonReject) {
+                fileSinkFound = true;
+                fileSinkLine = i + 1;
+                fileSinkCode = ln;
+                // Find the parameter declaration line
+                for (let j = 0; j < lines22m.length; j++) {
+                  for (const fp of fileParamNames) {
+                    if (new RegExp('String\\s+' + escapeRegExp(fp) + '\\b|MultipartFile\\s+' + escapeRegExp(fp) + '\\b').test(lines22m[j]!)) {
+                      fileParamLine = j + 1;
+                      fileParamCode = lines22m[j]!.trim();
+                      break;
+                    }
+                  }
+                  if (fileParamLine) break;
+                }
+                break;
+              }
+            }
+          }
+        }
+        if (fileSinkFound) break;
+      }
+
+      if (fileSinkFound && fileParamLine > 0) {
+        findings.push({
+          source: { id: `srcline-${fileParamLine}`, label: `method parameter (line ${fileParamLine})`, line: fileParamLine, code: fileParamCode.slice(0, 200) },
+          sink: { id: `srcline-${fileSinkLine}`, label: `file operation (line ${fileSinkLine})`, line: fileSinkLine, code: fileSinkCode.slice(0, 200) },
+          missing: 'CONTROL (path validation / directory restriction)',
+          severity: 'high',
+          description: `Method parameter used as filename flows to File constructor at line ${fileSinkLine} without path validation. ` +
+            `If the caller passes user-controlled input, an attacker can use ../../ to traverse directories.`,
+          fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
+            'Reject requests where the canonical path escapes the intended directory.',
+        });
       }
     }
   }
@@ -2047,6 +2343,66 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Source-line fallback for Java deserialization: detect command injection where
+  // fields populated by defaultReadObject()/readObject() flow to Runtime.exec().
+  // Pattern: class implements Serializable, readObject() calls defaultReadObject(),
+  // then a field (e.g., taskAction) is passed to Runtime.getRuntime().exec(field).
+  if (findings.length === 0 && map.source_code) {
+    const sl78d = stripComments(map.source_code);
+    const hasDefaultReadObject = /\bdefaultReadObject\s*\(\s*\)|\breadObject\s*\(\s*\w+\s*\)/.test(sl78d);
+    const hasSerializable = /\bSerializable\b/.test(sl78d);
+    const hasRuntimeExec = /\bRuntime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*exec\s*\(|new\s+ProcessBuilder\s*\(/.test(sl78d);
+
+    if (hasDefaultReadObject && hasSerializable && hasRuntimeExec) {
+      // Find fields that are used in exec() calls
+      const lines78d = sl78d.split('\n');
+      // Collect instance fields (private/protected/public String fieldName)
+      const fields78 = new Set<string>();
+      const FIELD_RE = /(?:private|protected|public)\s+(?:static\s+)?(?:final\s+)?(?:String|int|long|Object)\s+(\w+)\s*[;=]/;
+      for (const line of lines78d) {
+        const fm = line.match(FIELD_RE);
+        if (fm) fields78.add(fm[1]!);
+      }
+
+      // After defaultReadObject(), all instance fields are tainted
+      let deserLine = 0;
+      let deserCode = '';
+      let execLine = 0;
+      let execCode = '';
+      let taintedFieldUsed = false;
+
+      for (let i = 0; i < lines78d.length; i++) {
+        const ln = lines78d[i]!.trim();
+        if (/defaultReadObject\s*\(/.test(ln)) {
+          deserLine = i + 1;
+          deserCode = ln;
+        }
+        const execMatch = ln.match(/\.exec\s*\(\s*(\w+)\s*\)|new\s+ProcessBuilder\s*\(\s*(\w+)/);
+        if (execMatch) {
+          const execArg = execMatch[1] || execMatch[2] || '';
+          if (fields78.has(execArg)) {
+            taintedFieldUsed = true;
+            execLine = i + 1;
+            execCode = ln;
+          }
+        }
+      }
+
+      if (taintedFieldUsed && deserLine > 0) {
+        findings.push({
+          source: { id: `srcline-${deserLine}`, label: `deserialization (line ${deserLine})`, line: deserLine, code: deserCode.slice(0, 200) },
+          sink: { id: `srcline-${execLine}`, label: `command execution (line ${execLine})`, line: execLine, code: execCode.slice(0, 200) },
+          missing: 'CONTROL (input sanitization or safe command API)',
+          severity: 'critical',
+          description: `Deserialized field flows to OS command execution at line ${execLine}. ` +
+            `After defaultReadObject(), attacker-controlled field data reaches Runtime.exec() without sanitization.`,
+          fix: 'Never pass deserialized field values to shell commands. Validate deserialized data against a strict allowlist. ' +
+            'Consider using look-ahead deserialization (ObjectInputFilter) to restrict deserialized classes.',
+        });
+      }
+    }
+  }
+
   return {
     cwe: 'CWE-78',
     name: 'OS Command Injection',
@@ -2144,6 +2500,87 @@ function verifyCWE611(map: NeuralMap): VerificationResult {
           fix: 'Disable external entity processing in the XML parser configuration. ' +
             'NEVER use {noent:true} with libxmljs/libxmljs2. ' +
             'Use noent: false or remove the noent option entirely.',
+        });
+      }
+    }
+  }
+
+  // Source-line fallback for Java: detect XXE in XML parser methods that receive
+  // XML as a parameter. The mapper doesn't create INGRESS nodes for method params
+  // (only for @RequestParam etc.), so BFS misses these. Pattern:
+  //   XMLInputFactory.newInstance() → createXMLStreamReader(new StringReader(xml))
+  //   without setProperty(ACCESS_EXTERNAL_DTD, "") or setProperty(...FEATURE...external..., false)
+  // Also catches: SAXParserFactory, DocumentBuilderFactory without security config.
+  if (findings.length === 0 && map.source_code) {
+    const sl611 = stripComments(map.source_code);
+
+    // Detect Java XML parser factories without security configuration
+    const XML_FACTORY_RE = /\b(XMLInputFactory|SAXParserFactory|DocumentBuilderFactory|TransformerFactory|SchemaFactory|XMLReaderFactory)\s*\.\s*(?:newInstance|newFactory)\s*\(/;
+    const XML_SECURE_RE = /\bsetProperty\s*\(\s*(?:XMLConstants\s*\.\s*)?(?:ACCESS_EXTERNAL_DTD|ACCESS_EXTERNAL_SCHEMA|ACCESS_EXTERNAL_STYLESHEET|FEATURE.*(?:external|dtd|entity))\b|\bsetFeature\s*\(.*(?:external|dtd|disallow|FEATURE)\b|\bdefusedxml\b/i;
+
+    // Check if there's an XML factory without security properties
+    const factoryMatch = sl611.match(XML_FACTORY_RE);
+    if (factoryMatch) {
+      // Find the variable holding the factory
+      const factoryLine = sl611.indexOf(factoryMatch[0]);
+      const factoryVarMatch = sl611.slice(Math.max(0, factoryLine - 100), factoryLine + factoryMatch[0].length + 10)
+        .match(/(?:var|final\s+\w+|\w+)\s+(\w+)\s*=\s*/);
+      const factoryVar = factoryVarMatch ? factoryVarMatch[1] : null;
+
+      // Check if security properties are set on this factory
+      let isSecured = XML_SECURE_RE.test(sl611);
+
+      // Check for conditional security: if (securityEnabled) { setProperty... }
+      // If security is gated behind a boolean parameter or variable, the unsecured
+      // code path exists by definition. A method parameter `boolean securityEnabled`
+      // means callers CAN pass false. This is a vulnerability — security should be
+      // unconditional for XML parsing.
+      if (isSecured) {
+        const condSecMatch = sl611.match(/if\s*\(\s*(\w+)\s*\)\s*\{[^}]*(?:ACCESS_EXTERNAL_DTD|setProperty|setFeature)/s);
+        if (condSecMatch) {
+          const condVar = condSecMatch[1]!;
+          // If the condition variable is a method parameter, security is optional
+          const isMethodParam = new RegExp(
+            '\\b(?:boolean|Boolean)\\s+' + escapeRegExp(condVar) + '\\b'
+          ).test(sl611);
+          // If any caller passes false, or it's a method param (callers could pass false)
+          const calledWithFalse = new RegExp(
+            '\\b\\w+\\s*\\([^)]*,\\s*false\\s*\\)'
+          ).test(sl611);
+          if (isMethodParam || calledWithFalse) {
+            isSecured = false; // conditional security — unsecured path exists
+          }
+        }
+      }
+
+      // Check if the method receives XML as a parameter (method-param taint)
+      const xmlParamRe = /(?:String|InputStream|Reader|Source)\s+(\w+).*\{[\s\S]*?(?:createXMLStreamReader|parse|unmarshal|transform)\s*\(/;
+      const hasXmlParam = xmlParamRe.test(sl611);
+
+      // Check if XML is used with createXMLStreamReader or similar parse calls
+      const xmlParseCall = /\b(?:createXMLStreamReader|\.parse\s*\(|\.unmarshal\s*\()\s*\(/;
+      const hasXmlParse = xmlParseCall.test(sl611) || /createXMLStreamReader/.test(sl611);
+
+      if (!isSecured && hasXmlParse) {
+        // Find the line numbers
+        const lines611 = sl611.split('\n');
+        let factoryLineNum = 0;
+        let parseLineNum = 0;
+        for (let i = 0; i < lines611.length; i++) {
+          if (XML_FACTORY_RE.test(lines611[i]!)) factoryLineNum = i + 1;
+          if (/createXMLStreamReader|\.parse\s*\(|\.unmarshal\s*\(/.test(lines611[i]!)) parseLineNum = i + 1;
+        }
+
+        findings.push({
+          source: { id: `srcline-${factoryLineNum}`, label: `XML parser factory (line ${factoryLineNum})`, line: factoryLineNum, code: factoryMatch[0].slice(0, 200) },
+          sink: { id: `srcline-${parseLineNum}`, label: `XML parse operation (line ${parseLineNum})`, line: parseLineNum, code: 'XML parsing without external entity protection' },
+          missing: 'CONTROL (XML parser security configuration — disable external entities)',
+          severity: 'high',
+          description: `XML parser created at line ${factoryLineNum} does not disable external entity processing. ` +
+            `An attacker can supply malicious XML with external entity references to read local files or perform SSRF.`,
+          fix: 'Set XMLConstants.ACCESS_EXTERNAL_DTD and ACCESS_EXTERNAL_SCHEMA to empty string. ' +
+            'For XMLInputFactory: xif.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, ""). ' +
+            'For DocumentBuilderFactory: dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true).',
         });
       }
     }
@@ -3539,6 +3976,113 @@ function verifyCWE117(map: NeuralMap): VerificationResult {
                   'from user input before logging. Use structured logging (JSON) to prevent injection.',
               });
             }
+          }
+        }
+      }
+    }
+  }
+
+  // Source-line fallback for Java: detect incomplete sanitization for log/output injection.
+  // Pattern: @RequestParam flows to .output() or logging, with replace("\n",...) that does NOT
+  // also handle \r (carriage return). Replacing only \n with HTML is not proper sanitization
+  // because \r\n or just \r can still inject fake log/output entries.
+  if (findings.length === 0 && map.source_code) {
+    const sl117 = stripComments(map.source_code);
+    const lines117 = sl117.split('\n');
+
+    // Find @RequestParam String variables
+    const PARAM_RE117 = /@RequestParam(?:\s*\([^)]*\))?\s+(?:String)\s+(\w+)/g;
+    const requestParams117 = new Set<string>();
+    let pm117;
+    while ((pm117 = PARAM_RE117.exec(sl117)) !== null) {
+      requestParams117.add(pm117[1]!);
+    }
+
+    if (requestParams117.size > 0) {
+      for (const paramName of requestParams117) {
+        // Check if this parameter has incomplete newline sanitization
+        const replaceNewlineRe = new RegExp(
+          escapeRegExp(paramName) + '\\s*=\\s*' + escapeRegExp(paramName) +
+          '\\.replace\\s*\\(\\s*"\\\\n"\\s*,\\s*"[^"]*"\\s*\\)',
+        );
+        const replaceCRRe = new RegExp(
+          escapeRegExp(paramName) + '\\.replace\\s*\\(\\s*"\\\\r"',
+        );
+        const stripAllNewlinesRe = new RegExp(
+          escapeRegExp(paramName) + '\\.replaceAll\\s*\\(\\s*"\\[\\\\r\\\\n\\]|\\\\\\\\r\\|\\\\\\\\n"',
+        );
+
+        const hasNewlineReplace = replaceNewlineRe.test(sl117);
+        const hasCRReplace = replaceCRRe.test(sl117);
+        const hasFullStrip = stripAllNewlinesRe.test(sl117);
+
+        // Incomplete: replaces \n but not \r
+        if (hasNewlineReplace && !hasCRReplace && !hasFullStrip) {
+          // Check if the param flows to any output
+          let outputLine = 0;
+          let outputCode = '';
+          let paramLine = 0;
+          let paramCode = '';
+
+          for (let i = 0; i < lines117.length; i++) {
+            const ln = lines117[i]!.trim();
+            if (new RegExp('@RequestParam.*\\b' + escapeRegExp(paramName) + '\\b').test(ln)) {
+              paramLine = i + 1;
+              paramCode = ln;
+            }
+            // Any output/display/return that includes the param
+            if (new RegExp('\\.output\\s*\\(\\s*' + escapeRegExp(paramName) + '\\s*\\)|\\.body\\s*\\(.*' + escapeRegExp(paramName) + '|return.*' + escapeRegExp(paramName)).test(ln)) {
+              outputLine = i + 1;
+              outputCode = ln;
+            }
+          }
+
+          if (outputLine > 0 && paramLine > 0) {
+            findings.push({
+              source: { id: `srcline-${paramLine}`, label: `request parameter (line ${paramLine})`, line: paramLine, code: paramCode.slice(0, 200) },
+              sink: { id: `srcline-${outputLine}`, label: `output (line ${outputLine})`, line: outputLine, code: outputCode.slice(0, 200) },
+              missing: 'TRANSFORM (log encoding — strip newlines, control chars, delimiters)',
+              severity: 'medium',
+              description: `User input "${paramName}" has incomplete newline sanitization: replace("\\n",...) without also replacing "\\r". ` +
+                `Carriage return characters can still inject fake log entries or forge output lines.`,
+              fix: 'Replace both \\n and \\r (and ideally all control characters) from user input before logging or displaying. ' +
+                'Use replaceAll("[\\\\r\\\\n]", "") or a structured logging framework.',
+            });
+            break;
+          }
+        }
+
+        // No sanitization at all: param goes directly to output with no replace
+        if (!hasNewlineReplace && !hasCRReplace && !hasFullStrip) {
+          let outputLine = 0;
+          let outputCode = '';
+          let paramLine = 0;
+          let paramCode = '';
+
+          for (let i = 0; i < lines117.length; i++) {
+            const ln = lines117[i]!.trim();
+            if (new RegExp('@RequestParam.*\\b' + escapeRegExp(paramName) + '\\b').test(ln)) {
+              paramLine = i + 1;
+              paramCode = ln;
+            }
+            if (new RegExp('\\.output\\s*\\(\\s*' + escapeRegExp(paramName) + '\\s*\\)|logger\\..*' + escapeRegExp(paramName) + '|log\\..*' + escapeRegExp(paramName)).test(ln)) {
+              outputLine = i + 1;
+              outputCode = ln;
+            }
+          }
+
+          if (outputLine > 0 && paramLine > 0) {
+            findings.push({
+              source: { id: `srcline-${paramLine}`, label: `request parameter (line ${paramLine})`, line: paramLine, code: paramCode.slice(0, 200) },
+              sink: { id: `srcline-${outputLine}`, label: `output (line ${outputLine})`, line: outputLine, code: outputCode.slice(0, 200) },
+              missing: 'TRANSFORM (log encoding — strip newlines, control chars, delimiters)',
+              severity: 'medium',
+              description: `User input "${paramName}" flows to output without any newline neutralization. ` +
+                `An attacker can inject fake log entries via \\r\\n sequences.`,
+              fix: 'Strip newlines (\\n, \\r) and control characters from user input before output. ' +
+                'Use structured logging (JSON) to prevent log injection.',
+            });
+            break;
           }
         }
       }
