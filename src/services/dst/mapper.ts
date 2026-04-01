@@ -102,6 +102,15 @@ export class MapperContext {
    *  to propagate return taint to local_call nodes for forward-referenced functions. */
   readonly functionReturnTaint = new Map<string, boolean>();
 
+  /** Fast lookup: node ID -> NeuralMapNode. Populated via registerNode().
+   *  Eliminates O(n) .find() calls in addDataFlow, addContainsEdge,
+   *  buildWritesEdges, buildCallsEdges, and propagateInterproceduralTaint. */
+  readonly nodeById = new Map<string, NeuralMapNode>();
+
+  /** O(1) edge dedup: tracks "source:target:edgeType" strings to avoid
+   *  scanning node.edges[] on every addEdge call. */
+  readonly edgeSet = new Set<string>();
+
   /** The language profile driving this mapping session */
   readonly profile: LanguageProfile;
 
@@ -109,6 +118,22 @@ export class MapperContext {
     resetSequence();
     this.neuralMap = createNeuralMap(sourceFile, sourceCode);
     this.profile = profile;
+  }
+
+  /**
+   * Rebuild the nodeById index from the current neuralMap.nodes array.
+   * Call once after the walk completes and before post-processing.
+   */
+  buildNodeIndex(): void {
+    this.nodeById.clear();
+    this.edgeSet.clear();
+    for (const node of this.neuralMap.nodes) {
+      this.nodeById.set(node.id, node);
+      // Pre-populate edgeSet from edges created during the walk
+      for (const edge of node.edges) {
+        this.edgeSet.add(`${node.id}:${edge.target}:${edge.edge_type}`);
+      }
+    }
   }
 
   /** The current (innermost) scope, or null if stack is empty */
@@ -196,9 +221,12 @@ export class MapperContext {
     tainted: boolean = false,
     range?: RangeInfo,     // Step 5: optional range propagation
   ): void {
-    const fromNode = this.neuralMap.nodes.find(n => n.id === fromNodeId);
-    const toNode = this.neuralMap.nodes.find(n => n.id === toNodeId);
+    const fromNode = this.nodeById.get(fromNodeId) ?? this.neuralMap.nodes.find(n => n.id === fromNodeId);
+    const toNode = this.nodeById.get(toNodeId) ?? this.neuralMap.nodes.find(n => n.id === toNodeId);
     if (!fromNode || !toNode) return;
+    // Cache lookups for future calls
+    if (!this.nodeById.has(fromNodeId)) this.nodeById.set(fromNodeId, fromNode);
+    if (!this.nodeById.has(toNodeId)) this.nodeById.set(toNodeId, toNode);
 
     const flow: {
       name: string; source: string; target: string;
@@ -242,23 +270,51 @@ export class MapperContext {
   }
 
   /**
+   * Centralized edge creation.  Handles dedup, dual-write to both
+   * sourceNode.edges[] and map.edges[], and returns whether a new
+   * edge was actually added.
+   *
+   * @param sourceNodeId  ID of the node the edge originates from
+   * @param targetNodeId  ID of the node the edge points to
+   * @param edgeType      Relationship type (CONTAINS, DATA_FLOW, …)
+   * @param opts          Optional overrides for conditional / async
+   * @param sourceNode    If the caller already has the source node object,
+   *                      pass it to skip the lookup.
+   */
+  addEdge(
+    sourceNodeId: string,
+    targetNodeId: string,
+    edgeType: Edge['edge_type'],
+    opts?: { conditional?: boolean; async?: boolean },
+    sourceNode?: NeuralMapNode,
+  ): boolean {
+    const src = sourceNode ?? this.nodeById.get(sourceNodeId)
+              ?? this.neuralMap.nodes.find(n => n.id === sourceNodeId);
+    if (!src) return false;
+
+    // Dedup: O(1) Set lookup instead of O(edges) .some() scan
+    const edgeKey = `${sourceNodeId}:${targetNodeId}:${edgeType}`;
+    if (this.edgeSet.has(edgeKey)) return false;
+    this.edgeSet.add(edgeKey);
+
+    const edge: Edge = {
+      target: targetNodeId,
+      edge_type: edgeType,
+      conditional: opts?.conditional ?? false,
+      async: opts?.async ?? false,
+    };
+
+    src.edges.push(edge);
+    this.neuralMap.edges.push({ ...edge, source: sourceNodeId });
+    return true;
+  }
+
+  /**
    * Add a CONTAINS edge from container to child.
-   * Adds to both the container node's edges array AND the top-level map.edges.
+   * Convenience wrapper around addEdge.
    */
   addContainsEdge(containerNodeId: string, childNodeId: string): void {
-    const edge: Edge = {
-      target: childNodeId,
-      edge_type: 'CONTAINS',
-      conditional: false,
-      async: false,
-    };
-    // Add to container node's edges array
-    const container = this.neuralMap.nodes.find(n => n.id === containerNodeId);
-    if (container) {
-      container.edges.push(edge);
-    }
-    // Add to top-level edges (with source for graph traversal)
-    this.neuralMap.edges.push({ ...edge, source: containerNodeId });
+    this.addEdge(containerNodeId, childNodeId, 'CONTAINS');
   }
 
   /**
@@ -278,38 +334,12 @@ export class MapperContext {
    * creates a DATA_FLOW edge from the source node to the consuming node.
    */
   buildDataFlowEdges(): void {
-    // Build a fast lookup: node ID -> NeuralMapNode
-    const nodeById = new Map<string, NeuralMapNode>();
-    for (const node of this.neuralMap.nodes) {
-      nodeById.set(node.id, node);
-    }
-
     for (const node of this.neuralMap.nodes) {
       for (const flow of node.data_in) {
-        // Skip external sources -- they have no source node in the map
         if (!flow.source || flow.source === 'EXTERNAL') continue;
-
-        const sourceNode = nodeById.get(flow.source);
-        if (!sourceNode) continue; // source node doesn't exist (defensive)
-
-        // Check for duplicate: same source -> same target with DATA_FLOW
-        const alreadyExists = sourceNode.edges.some(
-          e => e.edge_type === 'DATA_FLOW' && e.target === node.id
-        );
-        if (alreadyExists) continue;
-
-        const edge: Edge = {
-          target: node.id,
-          edge_type: 'DATA_FLOW',
-          conditional: false,
-          async: false,
-        };
-
-        // Add to source node's edges array (edge points FROM source TO consumer)
-        sourceNode.edges.push(edge);
-
-        // Add to top-level edges (with source for graph traversal)
-        this.neuralMap.edges.push({ ...edge, source: sourceNode.id });
+        const sourceNode = this.nodeById.get(flow.source);
+        if (!sourceNode) continue;
+        this.addEdge(flow.source, node.id, 'DATA_FLOW', undefined, sourceNode);
       }
     }
   }
@@ -320,32 +350,29 @@ export class MapperContext {
   buildReadsEdges(): void {
     const readSubtypes = new Set(['db_read', 'cache_read', 'state_read']);
 
+    // Pre-build reverse index: sourceId -> consumer nodes that have data_in from that source
+    const consumersBySource = new Map<string, NeuralMapNode[]>();
+    for (const consumer of this.neuralMap.nodes) {
+      for (const flow of consumer.data_in) {
+        if (!flow.source || flow.source === 'EXTERNAL') continue;
+        let arr = consumersBySource.get(flow.source);
+        if (!arr) {
+          arr = [];
+          consumersBySource.set(flow.source, arr);
+        }
+        arr.push(consumer);
+      }
+    }
+
     for (const node of this.neuralMap.nodes) {
       if (node.node_type !== 'STORAGE') continue;
       if (!readSubtypes.has(node.node_subtype)) continue;
 
-      for (const consumer of this.neuralMap.nodes) {
+      const consumers = consumersBySource.get(node.id);
+      if (!consumers) continue;
+      for (const consumer of consumers) {
         if (consumer.id === node.id) continue;
-
-        const readsFromThis = consumer.data_in.some(
-          flow => flow.source === node.id
-        );
-        if (!readsFromThis) continue;
-
-        const alreadyExists = node.edges.some(
-          e => e.edge_type === 'READS' && e.target === consumer.id
-        );
-        if (alreadyExists) continue;
-
-        const edge: Edge = {
-          target: consumer.id,
-          edge_type: 'READS',
-          conditional: false,
-          async: false,
-        };
-
-        node.edges.push(edge);
-        this.neuralMap.edges.push({ ...edge, source: node.id });
+        this.addEdge(node.id, consumer.id, 'READS', undefined, node);
       }
     }
   }
@@ -362,24 +389,7 @@ export class MapperContext {
 
       for (const flow of node.data_in) {
         if (!flow.source || flow.source === 'EXTERNAL') continue;
-
-        const sourceNode = this.neuralMap.nodes.find(n => n.id === flow.source);
-        if (!sourceNode) continue;
-
-        const alreadyExists = sourceNode.edges.some(
-          e => e.edge_type === 'WRITES' && e.target === node.id
-        );
-        if (alreadyExists) continue;
-
-        const edge: Edge = {
-          target: node.id,
-          edge_type: 'WRITES',
-          conditional: false,
-          async: false,
-        };
-
-        sourceNode.edges.push(edge);
-        this.neuralMap.edges.push({ ...edge, source: sourceNode.id });
+        this.addEdge(flow.source, node.id, 'WRITES');
       }
     }
   }
@@ -412,23 +422,11 @@ export class MapperContext {
         analysis_snapshot: `// module: ${this.neuralMap.source_file}`,
       });
       this.neuralMap.nodes.push(moduleNode);
+      this.nodeById.set(moduleNode.id, moduleNode);
     }
 
     for (const dep of dependencyNodes) {
-      const alreadyExists = moduleNode.edges.some(
-        e => e.edge_type === 'DEPENDS' && e.target === dep.id
-      );
-      if (alreadyExists) continue;
-
-      const edge: Edge = {
-        target: dep.id,
-        edge_type: 'DEPENDS',
-        conditional: false,
-        async: false,
-      };
-
-      moduleNode.edges.push(edge);
-      this.neuralMap.edges.push({ ...edge, source: moduleNode.id });
+      this.addEdge(moduleNode.id, dep.id, 'DEPENDS', undefined, moduleNode);
     }
   }
 
@@ -446,17 +444,25 @@ export class MapperContext {
    *   app.get('/x', (req, res) => { helper(req.query.x); });
    */
   propagateInterproceduralTaint(): void {
-    const nodeById = new Map(this.neuralMap.nodes.map(n => [n.id, n]));
+    const containedMap = this.buildFunctionContainedNodes();
+    const summaries = this.buildFunctionTaintSummaries(containedMap);
+    this.connectCallSitesToSinks(summaries);
+    const allLocalCalls = this.neuralMap.nodes.filter(n => n.node_subtype === 'local_call');
+    this.markLocalCallsTainted(allLocalCalls, summaries);
+    this.markLocalCallsReturnTainted(allLocalCalls, containedMap);
+    this.connectTaintedLocalCallsToSinks(summaries);
+    this.propagateEventEmitterTaint();
+  }
 
-    // Step 1: For each function, find its contained sink nodes
-    // A "contained" node is one that has a CONTAINS edge path from the function STRUCTURAL node.
-    const functionContainedNodes = new Map<string, NeuralMapNode[]>();
+  // ── PASS 2 sub-steps ────────────────────────────────────────────────
 
-    for (const [funcName, funcNodeId] of this.functionRegistry) {
-      const funcNode = nodeById.get(funcNodeId);
-      if (!funcNode) continue;
+  /** Step 1: BFS from each registered function's STRUCTURAL node to find all contained nodes. */
+  private buildFunctionContainedNodes(): Map<string, NeuralMapNode[]> {
+    const result = new Map<string, NeuralMapNode[]>();
+    const nodeById = this.nodeById;
 
-      // BFS to find all nodes contained by this function
+    for (const [, funcNodeId] of this.functionRegistry) {
+      if (!nodeById.get(funcNodeId)) continue;
       const contained: NeuralMapNode[] = [];
       const visited = new Set<string>();
       const queue = [funcNodeId];
@@ -467,148 +473,108 @@ export class MapperContext {
         const current = nodeById.get(currentId);
         if (!current) continue;
         contained.push(current);
-        // Follow CONTAINS edges
         for (const edge of current.edges) {
           if (edge.edge_type === 'CONTAINS' && !visited.has(edge.target)) {
             queue.push(edge.target);
           }
         }
       }
-      functionContainedNodes.set(funcNodeId, contained);
+      result.set(funcNodeId, contained);
     }
+    return result;
+  }
 
-    // Step 2: For each function, find sinks (STORAGE, EXTERNAL) in its contained nodes
-    // and check if they have tainted data_in from parameter variables
+  /** Step 2: For each function, find sinks whose snapshots reference a parameter name. */
+  private buildFunctionTaintSummaries(
+    containedMap: Map<string, NeuralMapNode[]>,
+  ): Map<string, { funcName: string; funcNodeId: string; sinks: NeuralMapNode[]; paramNames: string[] }> {
     const sinkTypes = new Set(['STORAGE', 'EXTERNAL']);
-    const functionTaintSummaries = new Map<string, {
-      funcName: string;
-      funcNodeId: string;
-      sinks: NeuralMapNode[];
-      paramNames: string[];
-    }>();
+    const summaries = new Map<string, { funcName: string; funcNodeId: string; sinks: NeuralMapNode[]; paramNames: string[] }>();
+    const nodeById = this.nodeById;
 
     for (const [funcName, funcNodeId] of this.functionRegistry) {
-      const contained = functionContainedNodes.get(funcNodeId) || [];
+      const contained = containedMap.get(funcNodeId) || [];
       const sinks = contained.filter(n => sinkTypes.has(n.node_type));
-
       if (sinks.length === 0) continue;
 
-      // Extract param names from the function's code_snapshot
       const funcNode = nodeById.get(funcNodeId);
       if (!funcNode) continue;
-      // Try the profile's pattern first (language-specific), fall back to JS default
-      const jsPattern = /(?:function\s+\w+\s*|(?:async\s+)?)\(([^)]*)\)|(\w+)\s*=>|\w+\s*\(([^)]*)\)\s*\{/;
-      const funcAnalysis = funcNode.analysis_snapshot || funcNode.code_snapshot;
-      const paramMatch = (this.profile.functionParamPattern
-        ? funcAnalysis.match(this.profile.functionParamPattern)
-        : null
-      ) || funcAnalysis.match(jsPattern);
+
+      // Prefer AST-extracted param_names (populated during walk) over fragile regex
       let paramNames: string[] = [];
-      if (paramMatch) {
-        const paramStr = paramMatch[1] || paramMatch[2] || paramMatch[3] || '';
-        paramNames = paramStr.split(',').map(p => {
-          // Strip default values, TypeScript/Go-style type annotations, spread operators
-          let token = p.trim()
-            .replace(/\s*=.*$/, '')
-            .replace(/\s*:.*$/, '')
-            .replace(/\.{3}/, '')
-            .replace(/^\*{1,2}/, '');
-          // STEP 4 (Java): handle `TypeName varName` and `final TypeName varName` pairs —
-          // take only the last whitespace-delimited word as the parameter name.
-          // This is gated on whether the profile is Java (detected by language id).
-          if (this.profile.id === 'java' && /\s/.test(token)) {
-            const parts = token.trim().split(/\s+/);
-            token = parts[parts.length - 1];
-          }
-          return token;
-        }).filter(Boolean);
+      if (funcNode.param_names && funcNode.param_names.length > 0) {
+        paramNames = funcNode.param_names;
+      } else {
+        const jsPattern = /(?:function\s+\w+\s*|(?:async\s+)?)\(([^)]*)\)|(\w+)\s*=>|\w+\s*\(([^)]*)\)\s*\{/;
+        const funcAnalysis = funcNode.analysis_snapshot || funcNode.code_snapshot;
+        const paramMatch = (this.profile.functionParamPattern
+          ? funcAnalysis.match(this.profile.functionParamPattern)
+          : null
+        ) || funcAnalysis.match(jsPattern);
+        if (paramMatch) {
+          const paramStr = paramMatch[1] || paramMatch[2] || paramMatch[3] || '';
+          paramNames = paramStr.split(',').map(p => {
+            let token = p.trim()
+              .replace(/\s*=.*$/, '')
+              .replace(/\s*:.*$/, '')
+              .replace(/\.{3}/, '')
+              .replace(/^\*{1,2}/, '');
+            if (this.profile.id === 'java' && /\s/.test(token)) {
+              const parts = token.trim().split(/\s+/);
+              token = parts[parts.length - 1];
+            }
+            return token;
+          }).filter(Boolean);
+        }
       }
 
-      // Check if any sink's code_snapshot references a parameter
       const sinksReferencingParams = sinks.filter(sink =>
         paramNames.some(p => (sink.analysis_snapshot || sink.code_snapshot).includes(p))
       );
 
       if (sinksReferencingParams.length > 0) {
-        functionTaintSummaries.set(funcName, {
-          funcName,
-          funcNodeId,
-          sinks: sinksReferencingParams,
-          paramNames,
-        });
+        summaries.set(funcName, { funcName, funcNodeId, sinks: sinksReferencingParams, paramNames });
       }
     }
+    return summaries;
+  }
 
-    // Step 3: At call sites, if tainted data flows to a function with a vulnerable
-    // taint summary, create DATA_FLOW edges from the tainted source to the function's sinks
+  /** Step 3: At call sites with tainted input, connect to function sinks. */
+  private connectCallSitesToSinks(
+    summaries: Map<string, { funcName: string; sinks: NeuralMapNode[] }>,
+  ): void {
     for (const node of this.neuralMap.nodes) {
-      // Find call sites — nodes that have data_in with tainted=true
-      // AND whose code_snapshot calls a function in our summary
-      for (const [funcName, summary] of functionTaintSummaries) {
-        // Check if this node is a call to the summarized function
+      for (const [funcName, summary] of summaries) {
         if ((node.analysis_snapshot || node.code_snapshot).match(new RegExp('\\b' + funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(')) !== null) {
-          // Check if the call has any tainted data flowing in
-          const hasTaintedInput = node.data_in.some(d => d.tainted);
-
-          if (hasTaintedInput) {
-            // Create DATA_FLOW edges from this call node to each sink in the function
+          if (node.data_in.some(d => d.tainted)) {
             for (const sink of summary.sinks) {
-              const alreadyExists = node.edges.some(
-                e => e.edge_type === 'DATA_FLOW' && e.target === sink.id
-              );
-              if (!alreadyExists) {
-                const edge: Edge = {
-                  target: sink.id,
-                  edge_type: 'DATA_FLOW',
-                  conditional: false,
-                  async: false,
-                };
-                node.edges.push(edge);
-                this.neuralMap.edges.push({ ...edge, source: node.id });
-              }
+              this.addEdge(node.id, sink.id, 'DATA_FLOW', undefined, node);
             }
           }
-
-          // Also check: does the call_expression's snapshot itself contain tainted source patterns?
-          // This catches cases where the call is: helper(req.query.x) but the node isn't the call itself
           if (this.profile.ingressPattern.test(node.analysis_snapshot || node.code_snapshot)) {
-            // Find the INGRESS node for this tainted source
             const ingressNodes = this.neuralMap.nodes.filter(n =>
               n.node_type === 'INGRESS' && n.attack_surface.includes('user_input')
             );
             for (const ingress of ingressNodes) {
               for (const sink of summary.sinks) {
-                const alreadyExists = ingress.edges.some(
-                  e => e.edge_type === 'DATA_FLOW' && e.target === sink.id
-                );
-                if (!alreadyExists) {
-                  const edge: Edge = {
-                    target: sink.id,
-                    edge_type: 'DATA_FLOW',
-                    conditional: false,
-                    async: false,
-                  };
-                  ingress.edges.push(edge);
-                  this.neuralMap.edges.push({ ...edge, source: ingress.id });
-                }
+                this.addEdge(ingress.id, sink.id, 'DATA_FLOW', undefined, ingress);
               }
             }
           }
         }
       }
     }
+  }
 
-    // Step 4: Mark local_call nodes tainted if their function has a taint summary
-    // (meaning the function's body has sinks that reference params — or the function
-    // captures tainted outer variables visible in the code_snapshot).
-    const allLocalCalls = this.neuralMap.nodes.filter(n => n.node_subtype === 'local_call');
+  /** Step 4: Mark local_call nodes tainted if their function has a taint summary. */
+  private markLocalCallsTainted(
+    allLocalCalls: NeuralMapNode[],
+    summaries: Map<string, { funcName: string; sinks: NeuralMapNode[] }>,
+  ): void {
     for (const lc of allLocalCalls) {
-      if (lc.data_out.some(d => d.tainted)) continue; // already tainted from args
-
-      // Extract function name from the local_call's code
-      for (const [funcName, summary] of functionTaintSummaries) {
+      if (lc.data_out.some(d => d.tainted)) continue;
+      for (const [funcName] of summaries) {
         if ((lc.analysis_snapshot || lc.code_snapshot).match(new RegExp('\\b' + funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(')) !== null) {
-          // This local_call invokes a function with a taint summary → mark tainted
           lc.data_out.push({
             name: 'result', source: lc.id, data_type: 'unknown', tainted: true, sensitivity: 'NONE',
           });
@@ -616,57 +582,44 @@ export class MapperContext {
         }
       }
     }
+  }
 
-    // Step 4b: Mark local_call nodes tainted if the called function's
-    // STRUCTURAL node has tainted data_out (set by postVisitFunction).
-    // This handles forward-referenced functions that RETURN tainted data
-    // but have no taint summary (e.g., readConfig() with internal System.getenv()).
+  /** Step 4b: Mark local_call nodes tainted via postVisitFunction return taint flags. */
+  private markLocalCallsReturnTainted(
+    allLocalCalls: NeuralMapNode[],
+    containedMap: Map<string, NeuralMapNode[]>,
+  ): void {
+    const nodeById = this.nodeById;
     for (const lc of allLocalCalls) {
-      if (lc.data_out.some(d => d.tainted)) continue; // already tainted
+      if (lc.data_out.some(d => d.tainted)) continue;
       for (const [funcName, funcNodeId] of this.functionRegistry) {
         const escaped = funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         if ((lc.analysis_snapshot || lc.code_snapshot).match(
           new RegExp('\\b' + escaped + '\\s*\\(')
         ) !== null) {
           const funcNode = nodeById.get(funcNodeId);
-          // Check STRUCTURAL node's data_out (set by postVisitFunction)
-          // OR the functionReturnTaint map (set during the walk)
           if ((funcNode?.data_out.some(d => d.tainted)) ||
               this.functionReturnTaint.get(funcNodeId) === true) {
             lc.data_out.push({
-              name: 'return',
-              source: lc.id,
-              data_type: 'unknown',
-              tainted: true,
-              sensitivity: 'NONE' as const,
+              name: 'return', source: lc.id, data_type: 'unknown',
+              tainted: true, sensitivity: 'NONE' as const,
             });
-            // Create DATA_FLOW from the function's INGRESS to this local_call
-            const contained = functionContainedNodes.get(funcNodeId) || [];
+            const contained = containedMap.get(funcNodeId) || [];
             const ingressInFunc = contained.find(n => n.node_type === 'INGRESS');
             if (ingressInFunc) {
-              const alreadyExists = ingressInFunc.edges.some(
-                e => e.edge_type === 'DATA_FLOW' && e.target === lc.id
-              );
-              if (!alreadyExists) {
-                const edge: Edge = {
-                  target: lc.id,
-                  edge_type: 'DATA_FLOW',
-                  conditional: false,
-                  async: false,
-                };
-                ingressInFunc.edges.push(edge);
-                this.neuralMap.edges.push({ ...edge, source: ingressInFunc.id });
-              }
+              this.addEdge(ingressInFunc.id, lc.id, 'DATA_FLOW', undefined, ingressInFunc);
             }
             break;
           }
         }
       }
     }
+  }
 
-    // Step 5: Connect local_call return values to consumer sinks.
-    // When db.query(makeQuery()), the inner makeQuery() creates a local_call node
-    // but the outer db.query() was processed BEFORE the inner call.
+  /** Step 5: Connect tainted local_call return values to consumer sinks. */
+  private connectTaintedLocalCallsToSinks(
+    summaries: Map<string, { funcName: string; sinks: NeuralMapNode[] }>,
+  ): void {
     const taintedLocalCalls = this.neuralMap.nodes.filter(n =>
       n.node_subtype === 'local_call' && n.data_out.some(d => d.tainted)
     );
@@ -676,91 +629,52 @@ export class MapperContext {
     for (const lc of taintedLocalCalls) {
       for (const sink of sinkNodes) {
         if ((sink.analysis_snapshot || sink.code_snapshot).includes(lc.label.slice(0, 30)) && sink.id !== lc.id) {
-          const alreadyExists = lc.edges.some(e => e.edge_type === 'DATA_FLOW' && e.target === sink.id);
-          if (!alreadyExists) {
-            const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
-            lc.edges.push(edge);
-            this.neuralMap.edges.push({ ...edge, source: lc.id });
-          }
+          this.addEdge(lc.id, sink.id, 'DATA_FLOW', undefined, lc);
         }
       }
-
-      // Also: if this local_call's result is stored in a variable (same line),
-      // find the INGRESS nodes that can reach it and connect them to internal sinks
-      for (const summary of functionTaintSummaries.values()) {
+      for (const summary of summaries.values()) {
         if ((lc.analysis_snapshot || lc.code_snapshot).includes(summary.funcName + '(')) {
           for (const sink of summary.sinks) {
-            const alreadyExists = lc.edges.some(e => e.edge_type === 'DATA_FLOW' && e.target === sink.id);
-            if (!alreadyExists) {
-              const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
-              lc.edges.push(edge);
-              this.neuralMap.edges.push({ ...edge, source: lc.id });
-            }
+            this.addEdge(lc.id, sink.id, 'DATA_FLOW', undefined, lc);
           }
         }
       }
     }
+  }
 
-    // Step 6: Event emitter taint propagation.
-    // Match .emit('event', taintedData) with .on('event', handler) and create
-    // DATA_FLOW edges from the emit's tainted args to sinks inside the handler.
-    //
-    // Pattern: bus.on('search', (term) => { db.query(... + term + ...) })
-    //          bus.emit('search', req.query.term)
-    //
-    // Scan all nodes for .emit() calls with tainted data, then find matching
-    // .on() handlers and connect them.
+  /** Step 6: Propagate taint through event emitter .emit() / .on() pairs. */
+  private propagateEventEmitterTaint(): void {
     const emitPattern = /\.emit\s*\(\s*['"](\w+)['"]/;
     const onPattern = /\.on\s*\(\s*['"](\w+)['"]/;
 
-    // Collect all emit calls with their event names
     const emitNodes: Array<{ node: NeuralMapNode; eventName: string }> = [];
     const onNodes: Array<{ node: NeuralMapNode; eventName: string }> = [];
 
     for (const node of this.neuralMap.nodes) {
       const emitMatch = (node.analysis_snapshot || node.code_snapshot).match(emitPattern);
       if (emitMatch) emitNodes.push({ node, eventName: emitMatch[1] });
-
       const onMatch = (node.analysis_snapshot || node.code_snapshot).match(onPattern);
       if (onMatch) onNodes.push({ node, eventName: onMatch[1] });
     }
 
-    // For each emit with tainted data, find matching .on handlers and connect
     for (const emit of emitNodes) {
-      // Check if emit has tainted data
       const hasTaint = emit.node.data_in.some(d => d.tainted) ||
         this.profile.ingressPattern.test(emit.node.analysis_snapshot || emit.node.code_snapshot);
-
       if (!hasTaint) continue;
 
-      // Find matching .on handlers
       const matchingHandlers = onNodes.filter(on => on.eventName === emit.eventName);
-
       for (const handler of matchingHandlers) {
-        // Find sinks (STORAGE, EXTERNAL) that are contained by the same
-        // parent scope as the .on handler
         const handlerLine = handler.node.line_start;
-        // Look for sinks within a reasonable line range after the .on declaration
         const nearbySinks = this.neuralMap.nodes.filter(n =>
           (n.node_type === 'STORAGE' || n.node_type === 'EXTERNAL') &&
           n.line_start >= handlerLine && n.line_start <= handlerLine + 20
         );
-
-        // Find INGRESS nodes from the emit
         const ingressNodes = this.neuralMap.nodes.filter(n =>
           n.node_type === 'INGRESS' && n.attack_surface.includes('user_input')
         );
-
         for (const sink of nearbySinks) {
           for (const ingress of ingressNodes) {
-            const alreadyExists = ingress.edges.some(
-              e => e.edge_type === 'DATA_FLOW' && e.target === sink.id
-            );
-            if (!alreadyExists) {
-              const edge: Edge = { target: sink.id, edge_type: 'DATA_FLOW', conditional: false, async: false };
-              ingress.edges.push(edge);
-              this.neuralMap.edges.push({ ...edge, source: ingress.id });
-            }
+            this.addEdge(ingress.id, sink.id, 'DATA_FLOW', undefined, ingress);
           }
         }
       }
@@ -774,27 +688,10 @@ export class MapperContext {
   buildCallsEdges(): void {
     for (const pending of this.pendingCalls) {
       const calleeNodeId = this.functionRegistry.get(pending.calleeName);
-      if (!calleeNodeId) continue; // callee not a locally-defined function
-      if (calleeNodeId === pending.callerContainerId) continue; // skip self-recursion
-
-      // Avoid duplicate CALLS edges (same caller -> same callee)
-      const callerNode = this.neuralMap.nodes.find(n => n.id === pending.callerContainerId);
-      if (!callerNode) continue;
-
-      const alreadyExists = callerNode.edges.some(
-        e => e.edge_type === 'CALLS' && e.target === calleeNodeId
-      );
-      if (alreadyExists) continue;
-
-      const edge: Edge = {
-        target: calleeNodeId,
-        edge_type: 'CALLS',
-        conditional: false,
-        async: pending.isAsync,
-      };
-
-      callerNode.edges.push(edge);
-      this.neuralMap.edges.push({ ...edge, source: callerNode.id });
+      if (!calleeNodeId) continue;
+      if (calleeNodeId === pending.callerContainerId) continue;
+      this.addEdge(pending.callerContainerId, calleeNodeId, 'CALLS',
+        { async: pending.isAsync });
     }
   }
 
@@ -959,6 +856,9 @@ export function buildNeuralMap(
   // NOTE: We intentionally do NOT pop the module scope here.
   // The module scope remains on ctx.scopeStack so that callers can use
   // ctx.resolveVariable() on the returned context (e.g., for constant-folding tests).
+
+  // Post-processing: build node index for O(1) lookups in post-walk passes
+  ctx.buildNodeIndex();
 
   // Post-processing: initialize taint markers and detect sensitivity
   initializeTaint(ctx.neuralMap);

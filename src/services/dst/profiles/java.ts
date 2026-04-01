@@ -1329,11 +1329,28 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         methodNode.tags.push('auth_gate');
       }
 
+      // Extract param names from AST and populate param_names on the STRUCTURAL node
+      const params = node.childForFieldName('parameters');
+      if (params) {
+        const pNames: string[] = [];
+        for (let pi = 0; pi < params.namedChildCount; pi++) {
+          const p = params.namedChild(pi);
+          if (p && (p.type === 'formal_parameter' || p.type === 'spread_parameter')) {
+            const pName = p.childForFieldName('name')?.text;
+            if (pName) pNames.push(pName);
+          }
+        }
+        if (pNames.length > 0) methodNode.param_names = pNames;
+      }
+
       ctx.neuralMap.nodes.push(methodNode);
       ctx.lastCreatedNodeId = methodNode.id;
       ctx.emitContainsIfNeeded(methodNode.id);
       if (ctx.currentScope) ctx.currentScope.containerNodeId = methodNode.id;
       ctx.functionRegistry.set(name, methodNode.id);
+      // Also register with param count to avoid overloading collisions
+      const paramCount = params ? params.namedChildCount : 0;
+      ctx.functionRegistry.set(`${name}:${paramCount}`, methodNode.id);
       break;
     }
 
@@ -1356,6 +1373,10 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       ctx.emitContainsIfNeeded(ctorNode.id);
       if (ctx.currentScope) ctx.currentScope.containerNodeId = ctorNode.id;
       ctx.functionRegistry.set(name, ctorNode.id);
+      // Also register with param count to avoid overloading collisions
+      const ctorParams = node.childForFieldName('parameters');
+      const ctorParamCount = ctorParams ? ctorParams.namedChildCount : 0;
+      ctx.functionRegistry.set(`${name}:${ctorParamCount}`, ctorNode.id);
       break;
     }
 
@@ -1445,6 +1466,15 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             const methodName = member.childForFieldName('name')?.text;
             if (methodName && !ctx.functionRegistry.has(methodName)) {
               ctx.functionRegistry.set(methodName, `__pre_${methodName}`);
+            }
+            // Also pre-register with param count for overloading support
+            if (methodName) {
+              const memberParams = member.childForFieldName('parameters');
+              const memberParamCount = memberParams ? memberParams.namedChildCount : 0;
+              const qualifiedKey = `${methodName}:${memberParamCount}`;
+              if (!ctx.functionRegistry.has(qualifiedKey)) {
+                ctx.functionRegistry.set(qualifiedKey, `__pre_${methodName}`);
+              }
             }
           }
         }

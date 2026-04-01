@@ -272,6 +272,9 @@ export function resolveImportPath(
   specifier: string,
   importingFile: string,
   allFiles: string[],
+  /** Pre-built set of normalized file paths — pass this from the caller to
+   *  avoid rebuilding it on every call. When omitted, built on the fly. */
+  cachedFileSet?: Set<string>,
 ): string | null {
   // Skip npm packages
   if (!specifier.startsWith('.') && !specifier.startsWith('/')) {
@@ -282,14 +285,10 @@ export function resolveImportPath(
   const normalizedImporting = importingFile.replace(/\\/g, '/');
   const dir = path.posix.dirname(normalizedImporting);
 
-  // Use posix join to avoid Windows drive letter injection
-  // path.posix.resolve needs an absolute path, so we use join + normalize
   const joined = path.posix.join(dir, specifier);
-  // Normalize away any .. or . segments
   const normalizedResolved = path.posix.normalize(joined);
 
-  // Build a set of normalized file paths for quick lookup
-  const fileSet = new Set(allFiles.map(f => f.replace(/\\/g, '/')));
+  const fileSet = cachedFileSet ?? new Set(allFiles.map(f => f.replace(/\\/g, '/')));
 
   // Try exact match first
   if (fileSet.has(normalizedResolved)) {
@@ -328,6 +327,8 @@ export function buildDependencyGraph(files: string[]): DependencyGraph {
   const importsOf = new Map<string, string[]>();
   const importedBy = new Map<string, string[]>();
   const normalizedFiles = files.map(f => f.replace(/\\/g, '/'));
+  // Build the normalized file set ONCE for all resolveImportPath calls
+  const fileSet = new Set(normalizedFiles);
 
   for (const file of normalizedFiles) {
     importsOf.set(file, []);
@@ -345,7 +346,7 @@ export function buildDependencyGraph(files: string[]): DependencyGraph {
     const imports = extractImports(source, file);
 
     for (const imp of imports) {
-      const resolvedPath = resolveImportPath(imp.specifier, file, normalizedFiles);
+      const resolvedPath = resolveImportPath(imp.specifier, file, normalizedFiles, fileSet);
       imp.resolvedPath = resolvedPath;
 
       if (resolvedPath) {

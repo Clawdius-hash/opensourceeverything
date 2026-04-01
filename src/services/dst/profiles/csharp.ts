@@ -1259,11 +1259,28 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         methodNode.tags.push('auth_gate');
       }
 
+      // Populate param_names from AST
+      const csParams = node.childForFieldName('parameters');
+      if (csParams) {
+        const pNames: string[] = [];
+        for (let pi = 0; pi < csParams.namedChildCount; pi++) {
+          const p = csParams.namedChild(pi);
+          if (p?.type === 'parameter') {
+            const pName = p.childForFieldName('name')?.text;
+            if (pName) pNames.push(pName);
+          }
+        }
+        if (pNames.length > 0) methodNode.param_names = pNames;
+      }
+
       ctx.neuralMap.nodes.push(methodNode);
       ctx.lastCreatedNodeId = methodNode.id;
       ctx.emitContainsIfNeeded(methodNode.id);
       if (ctx.currentScope) ctx.currentScope.containerNodeId = methodNode.id;
       ctx.functionRegistry.set(name, methodNode.id);
+      // Also register with param count to avoid overloading collisions
+      const csParamCount = csParams ? csParams.namedChildCount : 0;
+      ctx.functionRegistry.set(`${name}:${csParamCount}`, methodNode.id);
       break;
     }
 
@@ -1286,6 +1303,10 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       ctx.emitContainsIfNeeded(ctorNode.id);
       if (ctx.currentScope) ctx.currentScope.containerNodeId = ctorNode.id;
       ctx.functionRegistry.set(name, ctorNode.id);
+      // Also register with param count to avoid overloading collisions
+      const csCtorParams = node.childForFieldName('parameters');
+      const csCtorParamCount = csCtorParams ? csCtorParams.namedChildCount : 0;
+      ctx.functionRegistry.set(`${name}:${csCtorParamCount}`, ctorNode.id);
       break;
     }
 

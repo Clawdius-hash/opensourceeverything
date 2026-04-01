@@ -1066,6 +1066,23 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         line_end: node.endPosition.row + 1,
         code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
+      // Populate param_names from AST
+      const fnParams = node.childForFieldName('parameters');
+      if (fnParams) {
+        const pNames: string[] = [];
+        for (let pi = 0; pi < fnParams.namedChildCount; pi++) {
+          const p = fnParams.namedChild(pi);
+          if (p?.type === 'identifier') pNames.push(p.text);
+          else if (p?.type === 'assignment_pattern') {
+            const left = p.childForFieldName('left');
+            if (left?.type === 'identifier') pNames.push(left.text);
+          } else if (p?.type === 'rest_pattern') {
+            const inner = p.namedChildren[0];
+            if (inner?.type === 'identifier') pNames.push(inner.text);
+          }
+        }
+        if (pNames.length > 0) fnNode.param_names = pNames;
+      }
       ctx.neuralMap.nodes.push(fnNode);
       ctx.lastCreatedNodeId = fnNode.id;
       ctx.emitContainsIfNeeded(fnNode.id);

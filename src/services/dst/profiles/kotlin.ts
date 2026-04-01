@@ -1380,6 +1380,10 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       ctx.emitContainsIfNeeded(funcN.id);
       if (ctx.currentScope) ctx.currentScope.containerNodeId = funcN.id;
       ctx.functionRegistry.set(name, funcN.id);
+      // Also register with param count to avoid overloading collisions
+      const ktParams = node.childForFieldName('value_parameters') ?? node.childForFieldName('parameters');
+      const ktParamCount = ktParams ? ktParams.namedChildCount : 0;
+      ctx.functionRegistry.set(`${name}:${ktParamCount}`, funcN.id);
       break;
     }
 
