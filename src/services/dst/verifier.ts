@@ -35934,6 +35934,64 @@ function verifyCWE129(map: NeuralMap): VerificationResult {
         }
       }
     }
+
+    // Phase 3: Detect completely unvalidated array access (no bounds check at all).
+    // Phase 2 catches "upper-bound-only" (check_max). Phase 3 catches "no check at all"
+    // (no_check), which is arguably the more dangerous variant.
+    if (pvars.size > 0) {
+      for (let li = 0; li < sl129.length; li++) {
+        const ln3 = sl129[li]!;
+        const tr3 = ln3.trim();
+        if (!tr3 || tr3.startsWith('//') || tr3.startsWith('*') || tr3.startsWith('/*')) continue;
+
+        for (const vn of pvars) {
+          const ev3 = vn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Match array[var] usage
+          const arrUseRe = new RegExp(`\\[\\s*${ev3}\\s*\\]`);
+          if (!arrUseRe.test(ln3)) continue;
+
+          // Check: is there ANY bounds check within 10 lines above?
+          const ctxStart = Math.max(0, li - 10);
+          const ctxEnd = Math.min(sl129.length, li + 1);
+          const ctx3 = sl129.slice(ctxStart, ctxEnd).join('\n');
+          const anyBoundsRe3 = new RegExp(
+            `${ev3}\\s*<\\s*\\w+\\.length|` +
+            `${ev3}\\s*>=\\s*0|` +
+            `0\\s*<=\\s*${ev3}|` +
+            `${ev3}\\s*>\\s*0|` +
+            `Math\\.max\\s*\\(\\s*0|` +
+            `Math\\.min\\s*\\(`
+          );
+          if (anyBoundsRe3.test(ctx3)) continue;
+
+          // Hardcoded check: skip if variable was assigned a literal (goodG2B pattern)
+          let isHardcoded3 = false;
+          const hardLitRe3 = new RegExp(`\\b${ev3}\\s*=\\s*\\d+\\s*;`);
+          for (let j = li - 1; j >= Math.max(0, li - 20); j--) {
+            if (hardLitRe3.test(sl129[j]!.trim())) { isHardcoded3 = true; break; }
+            if (new RegExp(`\\b${ev3}\\s*=.*(?:parseInt|readLine|getParameter|getInput)`).test(sl129[j]!.trim())) break;
+          }
+          if (isHardcoded3) continue;
+
+          // Dedup against existing findings from Phase 1 or Phase 2
+          const dup3 = findings.some(f => f.sink.line !== undefined && Math.abs(f.sink.line - (li + 1)) <= 3);
+          if (dup3) continue;
+
+          const sn3 = ingress.length > 0 ? ingress[0]! : findNearestNode(map, li + 1);
+          if (sn3) {
+            findings.push({
+              source: nodeRef(sn3),
+              sink: { id: `line-${li + 1}`, label: `unvalidated array access (line ${li + 1})`, line: li + 1, code: tr3.slice(0, 200) },
+              missing: 'CONTROL (no bounds validation before array access)',
+              severity: 'high',
+              description: `Array index "${vn}" from external input is used at line ${li + 1}: "${tr3.slice(0, 80)}" with NO bounds validation. ` +
+                `Any value including negative numbers will be accepted, causing ArrayIndexOutOfBoundsException.`,
+              fix: `Add bounds validation: if (${vn} >= 0 && ${vn} < array.length) before accessing array[${vn}].`,
+            });
+          }
+        }
+      }
+    }
   }
 
   return {

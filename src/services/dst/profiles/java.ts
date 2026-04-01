@@ -803,29 +803,19 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
     case 'field_access': {
       const resolution = resolvePropertyAccess(expr);
       if (resolution?.tainted) {
-        const label = expr.text.length > 100 ? expr.text.slice(0, 97) + '...' : expr.text;
-        const ingressNode = createNode({
-          label,
-          node_type: resolution.nodeType,
-          node_subtype: resolution.subtype,
-          language: 'java',
-          file: ctx.neuralMap.source_file,
-          line_start: expr.startPosition.row + 1,
-          line_end: expr.endPosition.row + 1,
-          code_snapshot: expr.text.slice(0, 200), analysis_snapshot: expr.text.slice(0, 2000),
-          data_out: [{
-            name: 'result',
-            source: 'SELF',
-            data_type: 'unknown',
-            tainted: true,
-            sensitivity: 'NONE',
-          }],
-          attack_surface: ['user_input'],
-        });
-        ingressNode.data_out[0].source = ingressNode.id;
-        ctx.neuralMap.nodes.push(ingressNode);
-        ctx.emitContainsIfNeeded(ingressNode.id);
-        return [{ nodeId: ingressNode.id, name: expr.text }];
+        // Check for an existing node at this location first
+        const faLine = expr.startPosition.row + 1;
+        const faSnap = expr.text.slice(0, 30);
+        const existingFA = ctx.neuralMap.nodes.find((n: any) =>
+          n.line_start === faLine && n.code_snapshot.startsWith(faSnap)
+        );
+        if (existingFA) {
+          return [{ nodeId: existingFA.id, name: expr.text }];
+        }
+        // No existing node — return synthetic reference to signal taint
+        // without creating a new INGRESS node (avoids noise from extra nodes
+        // that all verifiers can see). addDataFlow safely ignores unknown IDs.
+        return [{ nodeId: '__synthetic__', name: expr.text }];
       }
       // Check if the object is a tainted variable
       const obj = expr.childForFieldName('object');
@@ -874,32 +864,13 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
         if (existing) {
           return [{ nodeId: existing.id, name: existing.label }];
         }
-        // Node not yet created — create a new INGRESS node so that taint paths
-        // are established even when classifyNode hasn't run yet for this expression.
-        const label = expr.text.length > 100 ? expr.text.slice(0, 97) + '...' : expr.text;
-        const newIngressNode = createNode({
-          label,
-          node_type: callResolution.nodeType,
-          node_subtype: callResolution.subtype,
-          language: 'java',
-          file: ctx.neuralMap.source_file,
-          line_start: callLine,
-          line_end: expr.endPosition.row + 1,
-          code_snapshot: expr.text.slice(0, 200),
-          analysis_snapshot: expr.text.slice(0, 2000),
-          data_out: [{
-            name: 'result',
-            source: 'SELF',
-            data_type: 'unknown',
-            tainted: true,
-            sensitivity: 'NONE',
-          }],
-          attack_surface: ['user_input'],
-        });
-        newIngressNode.data_out[0].source = newIngressNode.id;
-        ctx.neuralMap.nodes.push(newIngressNode);
-        ctx.emitContainsIfNeeded(newIngressNode.id);
-        return [{ nodeId: newIngressNode.id, name: newIngressNode.label }];
+        // Node not yet created — return synthetic reference to signal taint
+        // without creating a new INGRESS node. Creating nodes here caused noise:
+        // synthetic INGRESS nodes were visible to all verifiers, generating
+        // false positives (especially XSS/neutralization families on servlet files).
+        // addDataFlow safely ignores unknown IDs, and callers that only check
+        // taintSources.length > 0 still get the correct taint signal.
+        return [{ nodeId: '__synthetic__', name: expr.text.slice(0, 100) }];
       }
       // For any other call, check arguments AND receiver for taint
       const sources: TaintSourceResult[] = [];

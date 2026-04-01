@@ -468,6 +468,13 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'UUID.randomUUID':              { nodeType: 'TRANSFORM', subtype: 'format',   tainted: false },
   'UUID.fromString':              { nodeType: 'TRANSFORM', subtype: 'parse',    tainted: false },
 
+  // -- Collection constructors (CWE-789 uncontrolled memory allocation) --
+  'ArrayList.new':                { nodeType: 'TRANSFORM', subtype: 'alloc',    tainted: false },
+  'HashMap.new':                  { nodeType: 'TRANSFORM', subtype: 'alloc',    tainted: false },
+  'HashSet.new':                  { nodeType: 'TRANSFORM', subtype: 'alloc',    tainted: false },
+  'LinkedList.new':               { nodeType: 'TRANSFORM', subtype: 'alloc',    tainted: false },
+  'Vector.new':                   { nodeType: 'TRANSFORM', subtype: 'alloc',    tainted: false },
+
   // -- Date / time --
   'LocalDateTime.now':            { nodeType: 'TRANSFORM', subtype: 'format',   tainted: false },
   'LocalDate.now':                { nodeType: 'TRANSFORM', subtype: 'format',   tainted: false },

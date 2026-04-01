@@ -597,20 +597,40 @@ export class MapperContext {
         if ((lc.analysis_snapshot || lc.code_snapshot).match(
           new RegExp('\\b' + escaped + '\\s*\\(')
         ) !== null) {
+          // Only mark the call as tainted if postVisitFunction explicitly set the
+          // functionReturnTaint flag (meaning a return statement referenced tainted data).
+          // Previously we also checked funcNode.data_out.some(d => d.tainted), which
+          // fired whenever the STRUCTURAL node had ANY tainted data_out — including from
+          // parameter processing or containment, not just return taint. This caused excess
+          // taint propagation and noise (e.g., 17 extra FPs on CWE-526 servlet files).
+          if (this.functionReturnTaint.get(funcNodeId) !== true) break;
+
+          // Extra guard: verify the function's code has a return statement referencing
+          // a tainted variable name. This prevents tainting when the return doesn't
+          // actually propagate tainted data (e.g., returns a constant or unrelated var).
           const funcNode = nodeById.get(funcNodeId);
-          if ((funcNode?.data_out.some(d => d.tainted)) ||
-              this.functionReturnTaint.get(funcNodeId) === true) {
-            lc.data_out.push({
-              name: 'return', source: lc.id, data_type: 'unknown',
-              tainted: true, sensitivity: 'NONE' as const,
+          const contained = containedMap.get(funcNodeId) || [];
+          const taintedNames = contained
+            .filter(n => n.data_out.some(d => d.tainted) && n.node_type !== 'STRUCTURAL')
+            .map(n => n.label.replace(/\s*=\s*$/, '').trim())
+            .filter(name => name.length > 0 && name.length < 40);
+          const snap = funcNode?.analysis_snapshot || funcNode?.code_snapshot || '';
+          const hasReturnWithTaint = taintedNames.length === 0 ||
+            taintedNames.some(name => {
+              const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(`return\\s+[^;]*\\b${esc}\\b`).test(snap);
             });
-            const contained = containedMap.get(funcNodeId) || [];
-            const ingressInFunc = contained.find(n => n.node_type === 'INGRESS');
-            if (ingressInFunc) {
-              this.addEdge(ingressInFunc.id, lc.id, 'DATA_FLOW', undefined, ingressInFunc);
-            }
-            break;
+          if (!hasReturnWithTaint) break;
+
+          lc.data_out.push({
+            name: 'return', source: lc.id, data_type: 'unknown',
+            tainted: true, sensitivity: 'NONE' as const,
+          });
+          const ingressInFunc = contained.find(n => n.node_type === 'INGRESS');
+          if (ingressInFunc) {
+            this.addEdge(ingressInFunc.id, lc.id, 'DATA_FLOW', undefined, ingressInFunc);
           }
+          break;
         }
       }
     }
