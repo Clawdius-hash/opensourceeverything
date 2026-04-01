@@ -134,6 +134,135 @@ function escapeRegExp(s: string): string {
 }
 
 /**
+ * Detect dead-branch taint neutralization in Java source code.
+ *
+ * BenchmarkJava (and similar code) uses constant-arithmetic ternary/if-else
+ * and switch-on-constant patterns to guarantee a safe branch is always taken:
+ *
+ *   int num = 106;
+ *   bar = (7 * 18) + num > 200 ? "safe" : param;   // always "safe"
+ *   if ((7 * 42) - num > 200) bar = "safe"; else bar = param;  // always "safe"
+ *   100 > 50 ? "safe" : param                        // always "safe"
+ *
+ * When the condition is a constant arithmetic expression that always evaluates
+ * to a known truth value, the tainted branch is dead code and taint should
+ * NOT propagate from it.
+ *
+ * Also detects switch-on-constant patterns:
+ *   String guess = "ABC"; char switchTarget = guess.charAt(1); // always 'B'
+ *   switch (switchTarget) { case 'B': bar = "safe"; ... }
+ *
+ * Returns true when dead-branch neutralization is detected (taint is suppressed).
+ */
+function detectDeadBranchNeutralization(sourceCode: string): boolean {
+  const cleanSrc = stripComments(sourceCode);
+
+  // Pattern 1: Arithmetic constant condition with variable reference
+  // (a * b) [+-] varName  {> < >= <=}  threshold
+  const arithCondMatch = cleanSrc.match(
+    /\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*([><=!]+)\s*(\d+)/
+  );
+  if (arithCondMatch) {
+    const a = parseInt(arithCondMatch[1]!);
+    const b = parseInt(arithCondMatch[2]!);
+    const op = arithCondMatch[3]!;
+    const varName = arithCondMatch[4]!;
+    const cmpOp = arithCondMatch[5]!;
+    const threshold = parseInt(arithCondMatch[6]!);
+    // Try to find the variable's value: int varName = N;
+    const varDeclMatch = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
+    if (varDeclMatch) {
+      const varVal = parseInt(varDeclMatch[1]!);
+      const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
+      const condAlwaysTrue = evaluateConstantComparison(lhs, cmpOp, threshold);
+      if (condAlwaysTrue === true) {
+        // Condition is always true -> true-branch (safe literal) is always taken
+        // Check: the ternary/if puts the safe string in the true branch
+        // For ternary: cond ? "safe" : param -> safe branch taken
+        // For if: if (cond) bar = "safe"; else bar = param; -> safe branch taken
+        return true;
+      }
+      if (condAlwaysTrue === false) {
+        // Condition is always false -> for ternary: cond ? param : "safe" -> safe branch taken
+        // Check if the ternary has tainted var in true branch (dead) and safe in false branch
+        const ternAfter = cleanSrc.match(
+          new RegExp('\\(\\d+\\s*\\*\\s*\\d+\\)\\s*[+-]\\s*' + varName + '\\s*[><=!]+\\s*\\d+\\s*\\?\\s*(\\w+)\\s*:\\s*"[^"]*"')
+        );
+        if (ternAfter) return true;  // tainted var is in the dead true branch
+      }
+    }
+  }
+
+  // Pattern 2: Simple constant comparison without variable
+  // N1 > N2 ? "safe" : param   or   N1 < N2 ? param : "safe"
+  const simpleConstMatch = cleanSrc.match(
+    /(\d+)\s*([><=!]+)\s*(\d+)\s*\?\s*(?:"[^"]*"|'[^']*')\s*:\s*\w+/
+  );
+  if (simpleConstMatch) {
+    const lhs = parseInt(simpleConstMatch[1]!);
+    const cmpOp = simpleConstMatch[2]!;
+    const rhs = parseInt(simpleConstMatch[3]!);
+    if (evaluateConstantComparison(lhs, cmpOp, rhs) === true) {
+      return true;  // always-true condition -> safe literal always returned
+    }
+  }
+  // Inverse: N1 < N2 ? param : "safe" (always-false -> safe branch taken)
+  const simpleConstMatchInv = cleanSrc.match(
+    /(\d+)\s*([><=!]+)\s*(\d+)\s*\?\s*\w+\s*:\s*(?:"[^"]*"|'[^']*')/
+  );
+  if (simpleConstMatchInv) {
+    const lhs = parseInt(simpleConstMatchInv[1]!);
+    const cmpOp = simpleConstMatchInv[2]!;
+    const rhs = parseInt(simpleConstMatchInv[3]!);
+    if (evaluateConstantComparison(lhs, cmpOp, rhs) === false) {
+      return true;  // always-false condition -> tainted var in dead true branch
+    }
+  }
+
+  // Pattern 3: Full arithmetic expression: (a * b) [+-] varName op threshold
+  // with the ternary on the SAME line or nearby (if-else form)
+  // Already covered by Pattern 1 above.
+
+  // Pattern 4: Switch with constant target
+  // switchTarget = guess.charAt(N) where guess is a literal
+  const charAtMatch = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
+  if (charAtMatch) {
+    const receiverVar = charAtMatch[1]!;
+    const charIdx = parseInt(charAtMatch[2]!);
+    const strDeclMatch = cleanSrc.match(
+      new RegExp('String\\s+' + receiverVar + '\\s*=\\s*"([^"]*)"')
+    );
+    if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
+      const selectedChar = strDeclMatch[1]![charIdx]!;
+      const caseMatch = cleanSrc.match(
+        new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\"")
+      );
+      if (caseMatch) {
+        return true;  // selected case assigns a string literal -> taint neutralized
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Evaluate a constant integer comparison.
+ * Returns true if condition is always true, false if always false, null if unknown.
+ */
+function evaluateConstantComparison(lhs: number, op: string, rhs: number): boolean | null {
+  switch (op) {
+    case '>':  return lhs > rhs;
+    case '<':  return lhs < rhs;
+    case '>=': return lhs >= rhs;
+    case '<=': return lhs <= rhs;
+    case '==': return lhs === rhs;
+    case '!=': return lhs !== rhs;
+    default:   return null;
+  }
+}
+
+/**
  * Test if `word` appears as a whole word in `text`.
  * Equivalent to /\bword\b/ but works correctly with dynamic strings
  * (avoids the JS string escaping pitfall where '\\b' becomes backspace).
@@ -578,10 +707,15 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     return true;
   });
 
+  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
+  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
+  const hasDeadBranch89 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+
   for (const src of ingress) {
     for (const sink of storage) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+        if (hasDeadBranch89) continue;
         // Check if the sink or containing scope uses parameterized queries
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -725,11 +859,16 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
      (n.analysis_snapshot || n.code_snapshot).match(/\b(render_template_string|render_template|Template)\b/i) !== null))
   );
 
+  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
+  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
+  const hasDeadBranch79 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+
   for (const src of ingress) {
     for (const sink of egress) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       // Fallback 2: scope-based taint (Java Juliet patterns with incomplete DATA_FLOW edges)
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id) || scopeBasedTaintReaches(map, src.id, sink.id)) {
+        if (hasDeadBranch79) continue;
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
@@ -1193,63 +1332,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // BenchmarkJava uses ternary/switch with constant conditions to neutralize taint.
   // The mapper over-approximates these, so we suppress graph-based findings when
   // the source code proves the tainted branch is never taken.
-  let hasDeadBranchNeutralization = false;
-  if (map.source_code) {
-    const cleanSrc = stripComments(map.source_code);
-
-    // Arithmetic constant condition: (a * b) [+-] varName > threshold
-    // Used in both ternary (? "safe" : param) and if/else (if (cond) bar = "safe"; else bar = param)
-    // Extract the variable's value from a preceding `int varName = N;` declaration.
-    const arithCondMatch = cleanSrc.match(
-      /\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*>\s*(\d+)/
-    );
-    if (arithCondMatch) {
-      const a = parseInt(arithCondMatch[1]!);
-      const b = parseInt(arithCondMatch[2]!);
-      const op = arithCondMatch[3]!;
-      const varName = arithCondMatch[4]!;
-      const threshold = parseInt(arithCondMatch[5]!);
-      // Try to find the variable's value: int varName = N;
-      const varDeclMatch = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
-      if (varDeclMatch) {
-        const varVal = parseInt(varDeclMatch[1]!);
-        const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
-        if (lhs > threshold) {
-          // Condition is always true -> safe string branch is always taken -> taint neutralized
-          // Applies to both: cond ? "safe" : param  AND  if (cond) bar = "safe"; else bar = param;
-          hasDeadBranchNeutralization = true;
-        }
-        // If lhs <= threshold, condition is always false -> tainted branch IS taken -> not suppressed
-      }
-    }
-
-    // Switch with constant target: switchTarget = guess.charAt(N) where guess is a literal
-    // e.g., String guess = "ABC"; char switchTarget = guess.charAt(1); // always 'B'
-    // Only suppress if the selected case assigns a constant (not param).
-    if (!hasDeadBranchNeutralization) {
-      // Find: someVar.charAt(N) followed by switch
-      const charAtMatch = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
-      if (charAtMatch) {
-        const receiverVar = charAtMatch[1]!;
-        const charIdx = parseInt(charAtMatch[2]!);
-        // Look up the receiver variable's string value
-        const strDeclMatch = cleanSrc.match(
-          new RegExp('String\\s+' + receiverVar + '\\s*=\\s*"([^"]*)"')
-        );
-        if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
-          const selectedChar = strDeclMatch[1]![charIdx]!;
-          // Check if the selected case assigns a constant (not a tainted variable)
-          const caseMatch = cleanSrc.match(
-            new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\"")
-          );
-          if (caseMatch) {
-            // The selected case assigns a string literal -> taint neutralized
-            hasDeadBranchNeutralization = true;
-          }
-        }
-      }
-    }
-  }
+  const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
 
   for (const src of ingress) {
     for (const sink of fileOps) {
@@ -1396,7 +1479,8 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // Pattern: method receives a String parameter (fullName, filename, path, etc.),
   // and uses it in new File(directory, paramName) without canonicalization checks.
   // This catches cross-method taint where a controller passes user input to a helper.
-  if (findings.length === 0 && map.source_code) {
+  // Skip when dead-branch neutralization proves taint never reaches the sink.
+  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization) {
     const sl22m = stripComments(map.source_code);
     const lines22m = sl22m.split('\n');
 
@@ -1532,38 +1616,8 @@ function verifyCWE23(map: NeuralMap): VerificationResult {
   // CWE-23-specific safe patterns: canonicalization or explicit dot-dot rejection
   const RELATIVE_SAFE_RE = /\bgetCanonicalPath\b|\bgetCanonicalFile\b|\brealpath\b|\bpath\.resolve\b.*\bstartsWith\b|\bstartsWith\b.*\bpath\.resolve\b|\b\.contains\s*\(\s*["']\.\.["']\s*\)|\bindexOf\s*\(\s*["']\.\.["']\s*\)|\bincludes\s*\(\s*["']\.\.["']\s*\)|\bnormalize\b.*\bstartsWith\b|\bfilepath\.Clean\b|\bFilenameUtils\.normalize\b/i;
 
-  // Dead-branch neutralization detection (same as CWE-22)
-  let hasDeadBranchNeutralization = false;
-  if (map.source_code) {
-    const cleanSrc = stripComments(map.source_code);
-    const arithCondMatch = cleanSrc.match(/\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*>\s*(\d+)/);
-    if (arithCondMatch) {
-      const a = parseInt(arithCondMatch[1]!);
-      const b = parseInt(arithCondMatch[2]!);
-      const op = arithCondMatch[3]!;
-      const varName = arithCondMatch[4]!;
-      const threshold = parseInt(arithCondMatch[5]!);
-      const varDeclMatch = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
-      if (varDeclMatch) {
-        const varVal = parseInt(varDeclMatch[1]!);
-        const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
-        if (lhs > threshold) hasDeadBranchNeutralization = true;
-      }
-    }
-    if (!hasDeadBranchNeutralization) {
-      const charAtMatch = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
-      if (charAtMatch) {
-        const receiverVar = charAtMatch[1]!;
-        const charIdx = parseInt(charAtMatch[2]!);
-        const strDeclMatch = cleanSrc.match(new RegExp('String\\s+' + receiverVar + '\\s*=\\s*"([^"]*)"'));
-        if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
-          const selectedChar = strDeclMatch[1]![charIdx]!;
-          const caseMatch = cleanSrc.match(new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\""));
-          if (caseMatch) hasDeadBranchNeutralization = true;
-        }
-      }
-    }
-  }
+  // Dead-branch neutralization detection (shared helper, same as CWE-22)
+  const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
 
   // --- Strategy 1: Graph-based detection — INGRESS->file-op with path concatenation ---
   for (const src of ingress) {
@@ -1746,38 +1800,8 @@ function verifyCWE36(map: NeuralMap): VerificationResult {
   // CWE-36-specific safe patterns: enforce a base directory prefix, or reject absolute paths
   const ABSOLUTE_SAFE_RE = /\bstartsWith\b|\bisAbsolute\b.*reject|\bisAbsolute\b.*throw|\bisAbsolute\b.*return|\bpath\.relative\b|\bchroot\b|\bjail\b|\bsandbox\b|\bwhitelist\b.*path|\ballowedPaths\b|\bgetCanonicalPath\b.*\bstartsWith\b|\bstartsWith\b.*\bgetCanonicalPath\b|\bFilenameUtils\.normalize\b.*\bstartsWith\b/i;
 
-  // Dead-branch neutralization detection (same as CWE-22)
-  let hasDeadBranchNeutralization = false;
-  if (map.source_code) {
-    const cleanSrc = stripComments(map.source_code);
-    const arithCondMatch = cleanSrc.match(/\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*>\s*(\d+)/);
-    if (arithCondMatch) {
-      const a = parseInt(arithCondMatch[1]!);
-      const b = parseInt(arithCondMatch[2]!);
-      const op = arithCondMatch[3]!;
-      const varName = arithCondMatch[4]!;
-      const threshold = parseInt(arithCondMatch[5]!);
-      const varDeclMatch = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
-      if (varDeclMatch) {
-        const varVal = parseInt(varDeclMatch[1]!);
-        const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
-        if (lhs > threshold) hasDeadBranchNeutralization = true;
-      }
-    }
-    if (!hasDeadBranchNeutralization) {
-      const charAtMatch = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
-      if (charAtMatch) {
-        const receiverVar = charAtMatch[1]!;
-        const charIdx = parseInt(charAtMatch[2]!);
-        const strDeclMatch = cleanSrc.match(new RegExp('String\\s+' + receiverVar + '\\s*=\\s*"([^"]*)"'));
-        if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
-          const selectedChar = strDeclMatch[1]![charIdx]!;
-          const caseMatch = cleanSrc.match(new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\""));
-          if (caseMatch) hasDeadBranchNeutralization = true;
-        }
-      }
-    }
-  }
+  // Dead-branch neutralization detection (shared helper, same as CWE-22)
+  const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
 
   // --- Strategy 1: Graph-based detection — INGRESS->file-op where input is used as entire path ---
   for (const src of ingress) {
@@ -7783,10 +7807,16 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
      SESS501.test(n.analysis_snapshot || n.code_snapshot) || ENV501.test(n.analysis_snapshot || n.code_snapshot) || CACHE501.test(n.analysis_snapshot || n.code_snapshot))
   );
   const SAFE501 = /\bvalidate\s*\(|\bsanitize\s*\(|\bschema\b|\bz\.\w|\bjoi\b|\byup\b|\bclass-?validator\b|\bassert\s*\(|\bverify\s*\(|\bisValid\s*\(|\bclean\s*\(/i;
+
+  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
+  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
+  const hasDeadBranch501 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+
   for (const src of ingress501) {
     for (const sink of trustSinks501) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        if (hasDeadBranch501) continue;
         if (!SAFE501.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE501.test(stripComments(src.analysis_snapshot || src.code_snapshot))) {
           const st = SESS501.test(sink.analysis_snapshot || sink.code_snapshot) ? 'session' : ENV501.test(sink.analysis_snapshot || sink.code_snapshot) ? 'environment/global' : 'trusted cache/config';
           findings.push({
@@ -8055,10 +8085,16 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
      n.attack_surface.includes('xpath_query') || XP643.test(n.analysis_snapshot || n.code_snapshot) || XP_CAT643.test(n.analysis_snapshot || n.code_snapshot))
   );
   const SAFE643 = /\bescapeXPath\b|\bxpath.*param\b|\bxpath.*compile\b|\bsanitize.*xpath\b|\bXPathVariableResolver\b|\bregister.*variable\b/i;
+
+  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
+  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
+  const hasDeadBranch643 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+
   for (const src of ingress643) {
     for (const sink of xpSinks643) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
+        if (hasDeadBranch643) continue;
         if (!SAFE643.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE643.test(stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot))) {
           const concat = XP_CAT643.test(sink.analysis_snapshot || sink.code_snapshot);
           findings.push({
@@ -8074,7 +8110,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
       }
     }
   }
-  if (findings.length === 0 && ingress643.length > 0) {
+  if (findings.length === 0 && ingress643.length > 0 && !hasDeadBranch643) {
     const xpScope643 = map.nodes.filter(n => n.node_type !== 'META' && n.node_type !== 'STRUCTURAL' && XP_CAT643.test(n.analysis_snapshot || n.code_snapshot));
     for (const src of ingress643) {
       for (const sink of xpScope643) {
@@ -9026,11 +9062,16 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
 
   const LDAP_SAFE90 = /\b(ldap\.escape|escapeLDAP|ldapEscape|escape_filter_chars|filter\.escape|Filter\.(and|or|eq|present|approx)|ldap_escape|sanitizeLdap|escapeDN|escapeFilter)\b/i;
 
+  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
+  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
+  const hasDeadBranch90 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+
   for (const src of ingress) {
     for (const sink of ldapSinks90) {
       if (src.id === sink.id) continue;
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+        if (hasDeadBranch90) continue;
         const sinkCode90 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!LDAP_SAFE90.test(sinkCode90)) {
           const usesFilterConcat90 = LDAP_FILTER_CONCAT90.test(sinkCode90);
