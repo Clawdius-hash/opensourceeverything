@@ -1647,6 +1647,23 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           });
         }
 
+        // Collection mutation tainting: list.add(tainted) → mark list as tainted
+        if (callHasTaintedArgs && calleeObj?.type === 'identifier') {
+          const MUTATING_METHODS = new Set([
+            'add', 'put', 'set', 'offer', 'push', 'addAll', 'putAll',
+            'append', 'insert', 'write', 'print', 'println',
+            'setAttribute', 'setProperty', 'addElement',
+          ]);
+          const methodName = node.childForFieldName('name')?.text;
+          if (methodName && MUTATING_METHODS.has(methodName)) {
+            const receiverVar = ctx.resolveVariable(calleeObj.text);
+            if (receiverVar && !receiverVar.tainted) {
+              receiverVar.tainted = true;
+              receiverVar.producingNodeId = n.id;
+            }
+          }
+        }
+
         // Callback parameter taint (for lambdas passed as args)
         if (callHasTaintedArgs) {
           const callArgs = node.childForFieldName('arguments');
@@ -1821,6 +1838,45 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
 
           for (const source of taintSources) {
             ctx.addDataFlow(source.nodeId, callNode.id, source.name, 'unknown', true);
+          }
+        } else {
+          // -- Unresolved method chain passthrough --
+          // No phoneme, no alias, no local call. If tainted data flows through,
+          // create a TRANSFORM/passthrough so producingNodeId is real, not __synthetic__.
+          const unresolvedArgs = node.childForFieldName('arguments');
+          const unresolvedObj = node.childForFieldName('object');
+          const unresolvedTaint: TaintSourceResult[] = [];
+          if (unresolvedArgs) {
+            for (let a = 0; a < unresolvedArgs.namedChildCount; a++) {
+              const arg = unresolvedArgs.namedChild(a);
+              if (arg) unresolvedTaint.push(...extractTaintSources(arg, ctx));
+            }
+          }
+          if (unresolvedObj) {
+            unresolvedTaint.push(...extractTaintSources(unresolvedObj, ctx));
+          }
+          if (unresolvedTaint.length > 0) {
+            const label = node.text.length > 100 ? node.text.slice(0, 97) + '...' : node.text;
+            const ptNode = createNode({
+              label,
+              node_type: 'TRANSFORM',
+              node_subtype: 'passthrough',
+              language: 'java',
+              file: ctx.neuralMap.source_file,
+              line_start: node.startPosition.row + 1,
+              line_end: node.endPosition.row + 1,
+              code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
+            });
+            ptNode.data_out.push({
+              name: 'result', source: ptNode.id,
+              data_type: 'unknown', tainted: true, sensitivity: 'NONE',
+            });
+            ctx.neuralMap.nodes.push(ptNode);
+            ctx.lastCreatedNodeId = ptNode.id;
+            ctx.emitContainsIfNeeded(ptNode.id);
+            for (const source of unresolvedTaint) {
+              ctx.addDataFlow(source.nodeId, ptNode.id, source.name, 'unknown', true);
+            }
           }
         }
       }
@@ -2159,6 +2215,19 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             if (varInfo) {
               varInfo.tainted = true;
               varInfo.producingNodeId = assignN.id;
+            }
+          } else if (assignLeft?.type === 'field_access') {
+            // this.field = tainted  or  obj.prop = tainted
+            const fieldName = assignLeft.childForFieldName('field')?.text;
+            if (fieldName) {
+              const fieldVar = ctx.resolveVariable(fieldName);
+              if (fieldVar) {
+                fieldVar.tainted = true;
+                fieldVar.producingNodeId = assignN.id;
+              } else {
+                // Declare the field as a new tainted variable in current scope
+                ctx.declareVariable(fieldName, 'let', null, true, assignN.id);
+              }
             }
           }
           if (!assignN.data_out.some((d: any) => d.tainted)) {

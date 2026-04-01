@@ -149,6 +149,20 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Gson.fromJson':              { nodeType: 'TRANSFORM', subtype: 'parse',      tainted: false },
   'JAXBContext.createUnmarshaller': { nodeType: 'TRANSFORM', subtype: 'parse',  tainted: false },
 
+  // -- Deserialization: Kryo (Spark, Akka, microservices) --
+  'Kryo.readObject':              { nodeType: 'INGRESS', subtype: 'deserialize_rce', tainted: true },
+  'Kryo.readClassAndObject':      { nodeType: 'INGRESS', subtype: 'deserialize_rce', tainted: true },
+  'Kryo.readObjectOrNull':        { nodeType: 'INGRESS', subtype: 'deserialize_rce', tainted: true },
+  // -- Deserialization: Hessian (Dubbo, Spring Remoting) --
+  'HessianInput.readObject':      { nodeType: 'INGRESS', subtype: 'deserialize_rce', tainted: true },
+  'Hessian2Input.readObject':     { nodeType: 'INGRESS', subtype: 'deserialize_rce', tainted: true },
+
+  // -- Archive extraction (CWE-22 Zip Slip) --
+  'ZipEntry.getName':             { nodeType: 'INGRESS', subtype: 'archive_entry', tainted: true },
+  'ZipInputStream.getNextEntry':  { nodeType: 'INGRESS', subtype: 'archive_entry', tainted: true },
+  'TarArchiveEntry.getName':      { nodeType: 'INGRESS', subtype: 'archive_entry', tainted: true },
+  'JarEntry.getName':             { nodeType: 'INGRESS', subtype: 'archive_entry', tainted: true },
+
   // -- JSF (JavaServer Faces) — Jakarta EE --
   'FacesContext.getExternalContext': { nodeType: 'INGRESS', subtype: 'jsf_request', tainted: true },
   'ExternalContext.getRequestParameterMap': { nodeType: 'INGRESS', subtype: 'jsf_request', tainted: true },
@@ -311,6 +325,30 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Runtime.getRuntime.exec':    { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'runtime.exec':               { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
   'ProcessBuilder.start':       { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'ProcessBuilder.command':     { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+  'ProcessBuilder.new':         { nodeType: 'EXTERNAL', subtype: 'system_exec', tainted: false },
+
+  // -- javax.script — JSR 223 Scripting API (CWE-94) --
+  'ScriptEngine.eval':            { nodeType: 'EXTERNAL', subtype: 'script_eval',  tainted: false },
+  'ScriptEngineManager.getEngineByName': { nodeType: 'EXTERNAL', subtype: 'script_eval', tainted: false },
+
+  // -- Groovy scripting (CWE-94) --
+  'GroovyShell.evaluate':        { nodeType: 'EXTERNAL', subtype: 'script_eval',  tainted: false },
+  'GroovyShell.parse':           { nodeType: 'EXTERNAL', subtype: 'script_eval',  tainted: false },
+  'GroovyClassLoader.parseClass': { nodeType: 'EXTERNAL', subtype: 'script_eval', tainted: false },
+
+  // -- Template engines (SSTI) --
+  // FreeMarker
+  'Template.process':             { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  'Configuration.getTemplate':    { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  // Apache Velocity
+  'Velocity.evaluate':            { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  'VelocityEngine.evaluate':      { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  'VelocityEngine.mergeTemplate': { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  // Thymeleaf
+  'TemplateEngine.process':       { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  'SpringTemplateEngine.process': { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
+  'ITemplateEngine.process':      { nodeType: 'EXTERNAL', subtype: 'template_exec', tainted: false },
 
   // -- EJB / JNDI (Jakarta EE) --
   'EJBContext.lookup':          { nodeType: 'EXTERNAL', subtype: 'jndi_lookup',    tainted: true },
@@ -497,6 +535,36 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Jsoup.clean':                  { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
   'ESAPI.encoder':                { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
 
+  // -- XML parsers (CWE-611: XXE) --
+  // DOM parsing
+  'DocumentBuilderFactory.newInstance': { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  'DocumentBuilder.parse':              { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  // SAX parsing
+  'SAXParserFactory.newInstance':       { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  'SAXParser.parse':                    { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  // StAX parsing
+  'XMLInputFactory.newInstance':        { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  'XMLInputFactory.createXMLStreamReader': { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  'XMLInputFactory.createXMLEventReader':  { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  // XMLReader (SAX2)
+  'XMLReader.parse':                    { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  'XMLReaderFactory.createXMLReader':   { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  // XSLT (transforms with embedded entity expansion)
+  'TransformerFactory.newInstance':     { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  'Transformer.transform':             { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  // Schema validation (can trigger XXE during validation)
+  'SchemaFactory.newInstance':          { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+  // JAXB unmarshalling
+  'Unmarshaller.unmarshal':             { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
+
+  // -- SSL/TLS configuration (CWE-295/CWE-327) --
+  'SSLContext.getInstance':             { nodeType: 'TRANSFORM', subtype: 'ssl_config', tainted: false },
+  'SSLContext.init':                    { nodeType: 'TRANSFORM', subtype: 'ssl_config', tainted: false },
+  'TrustManagerFactory.getInstance':    { nodeType: 'TRANSFORM', subtype: 'ssl_config', tainted: false },
+  'SSLSocketFactory.createSocket':      { nodeType: 'EXTERNAL',  subtype: 'ssl_config', tainted: false },
+  'HttpsURLConnection.setDefaultSSLSocketFactory': { nodeType: 'META', subtype: 'ssl_config', tainted: false },
+  'HttpsURLConnection.setDefaultHostnameVerifier': { nodeType: 'META', subtype: 'ssl_config', tainted: false },
+
   // =========================================================================
   // CONTROL
   // =========================================================================
@@ -619,6 +687,15 @@ const NON_DB_OBJECTS = new Set([
   'FacesContext', 'ExternalContext', 'MessageListener', 'TextMessage',
   'JMSConsumer', 'JMSProducer', 'Instance', 'BeanManager',
   'EJBContext', 'SessionContext',
+  // XML parsers, script engines, template engines, SSL — not DB objects
+  'DocumentBuilderFactory', 'DocumentBuilder', 'SAXParserFactory', 'SAXParser',
+  'XMLInputFactory', 'XMLReader', 'XMLReaderFactory', 'TransformerFactory', 'Transformer',
+  'SchemaFactory', 'Unmarshaller',
+  'ScriptEngine', 'ScriptEngineManager', 'GroovyShell', 'GroovyClassLoader',
+  'Template', 'Velocity', 'VelocityEngine', 'TemplateEngine', 'SpringTemplateEngine', 'ITemplateEngine', 'Configuration',
+  'SSLContext', 'TrustManagerFactory', 'SSLSocketFactory', 'HttpsURLConnection',
+  'Kryo', 'HessianInput', 'Hessian2Input',
+  'ZipEntry', 'ZipInputStream', 'TarArchiveEntry', 'JarEntry',
 ]);
 
 // =========================================================================
@@ -690,6 +767,27 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   // DataSource / pools
   'dataSource': 'DataSource', 'ds': 'DataSource',
   'hikariDataSource': 'HikariDataSource',
+  // XML parsers (XXE)
+  'dbf': 'DocumentBuilderFactory', 'documentBuilderFactory': 'DocumentBuilderFactory',
+  'documentBuilder': 'DocumentBuilder',
+  'spf': 'SAXParserFactory', 'saxParserFactory': 'SAXParserFactory',
+  'saxParser': 'SAXParser',
+  'xif': 'XMLInputFactory', 'xmlInputFactory': 'XMLInputFactory',
+  'transformerFactory': 'TransformerFactory',
+  'transformer': 'Transformer',
+  'unmarshaller': 'Unmarshaller',
+  // Script engines
+  'scriptEngine': 'ScriptEngine', 'engine': 'ScriptEngine',
+  'scriptEngineManager': 'ScriptEngineManager',
+  // Deserialization (Kryo, Hessian)
+  'kryo': 'Kryo',
+  'hessianInput': 'HessianInput', 'hessian2Input': 'Hessian2Input',
+  // Template engines
+  'velocityEngine': 'VelocityEngine',
+  'templateEngine': 'TemplateEngine', 'springTemplateEngine': 'SpringTemplateEngine',
+  // SSL/TLS
+  'sslContext': 'SSLContext',
+  'trustManagerFactory': 'TrustManagerFactory', 'tmf': 'TrustManagerFactory',
 };
 
 // Helper: try to resolve a key across MEMBER_CALLS + EXPANSION_ENTRIES
