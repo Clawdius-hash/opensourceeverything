@@ -2057,8 +2057,12 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
     // Skip nodes that are known to source from env
     if (envRefs.has(node.id)) continue;
 
+    // Strip literals so detection regexes inside DST's own verifier code don't self-trigger.
+    // e.g. /(?:password|passwd)\s*[:=]/ in a verifier function body would otherwise match itself.
+    const nodeSnap798 = stripLiterals(stripComments(node.analysis_snapshot || node.code_snapshot));
+
     for (const pattern of secretPatterns) {
-      if (pattern.test(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot)) {
+      if (pattern.test(nodeSnap798)) {
         findings.push({
           source: nodeRef(node),
           sink: nodeRef(node),
@@ -6960,10 +6964,25 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
   const STRONG_ALGO_RE = /\bAES[-_]?(?:128|256|GCM)\b|\bChaCha20\b|\bPoly1305\b|\bXSalsa20\b|\baes[-_]?256[-_]?(?:gcm|cbc|ctr)\b|\bcreateDecipheriv\s*\(\s*['"]aes/i;
   const ECB_MODE_RE = /\bECB\b|\/ECB\/|['"]aes[-_]?(?:128|256)[-_]?ecb['"]|\bMode\.ECB\b|\bCipher\.getInstance\s*\(\s*['"]AES\/ECB/i;
 
+  // Regex that matches ACTUAL crypto API calls with weak algorithm names in string args.
+  // These are real vulns even when the algo name is inside a string literal.
+  const CRYPTO_API_CALL_RE = /Cipher\.getInstance\s*\(\s*['"](?:DES|DESede|RC4|RC2|Blowfish)|createCipher(?:iv)?\s*\(\s*['"](?:des|des-ede3|des3|rc4|rc2|bf|blowfish)|CryptoJS\.(?:DES|TripleDES|RC4|Rabbit)\b|MessageDigest\.getInstance\s*\(\s*['"](?:MD[245]|SHA-?1)['"]|EVP_(?:des|rc4|bf)_/i;
+
   for (const node of map.nodes) {
     const raw = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
     const code = stripLiterals(raw); // avoid self-detection on regex/string patterns
-    if (BROKEN_ALGO_RE.test(code) && !STRONG_ALGO_RE.test(code)) {
+    // For self-scan safety: also check raw (unstripped) code for actual API call patterns.
+    // Algorithm names inside Cipher.getInstance("DES") survive stripLiterals because
+    // the function name Cipher.getInstance is OUTSIDE the string.
+    // But also check raw for the full pattern including string arg as fallback.
+    const rawAlgoInCall = /(?:Cipher\.getInstance|createCipher(?:iv)?|CryptoJS\.)\s*\(?\s*['"]?(?:DES|DESede|3DES|TripleDES|RC4|RC2|Blowfish|des|des-ede3|rc4|bf|blowfish)/i.test(raw);
+    if ((BROKEN_ALGO_RE.test(code) || rawAlgoInCall) && !STRONG_ALGO_RE.test(code)) {
+      if (process.env.DST_DEBUG_327) {
+        const m1 = BROKEN_ALGO_RE.exec(code);
+        const rawPattern = /(?:Cipher\.getInstance|createCipher(?:iv)?|CryptoJS\.)\s*\(?\s*['"]?(?:DES|DESede|3DES|TripleDES|RC4|RC2|Blowfish|des|des-ede3|rc4|bf|blowfish)/i;
+        const m2 = rawPattern.exec(raw);
+        console.error('CWE327 DEBUG node:', node.label, '\nBROKEN match:', m1 ? m1[0]+' idx='+m1.index+' ctx='+JSON.stringify(code.slice(Math.max(0,m1.index-40),m1.index+60)) : 'none', '\nRAW match:', m2 ? m2[0]+' idx='+m2.index+' ctx='+JSON.stringify(raw.slice(Math.max(0,m2.index-40),m2.index+60)) : 'none');
+      }
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'TRANSFORM (modern cryptographic algorithm — AES-256-GCM or ChaCha20-Poly1305)',
