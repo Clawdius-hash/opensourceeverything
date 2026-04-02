@@ -883,7 +883,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   // Source-line fallback for Java: detect SQL injection inside anonymous inner classes
   // where taint crosses class boundaries (e.g., JWT header.get("kid") → executeQuery).
   // The mapper doesn't trace taint across inner class boundaries, so BFS misses these.
-  if (findings.length === 0 && map.source_code) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranch89) {
     const sl89 = stripComments(map.source_code);
     const lines89 = sl89.split('\n');
 
@@ -913,6 +913,12 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         if (!innerSrcLine) { innerSrcLine = i + 1; innerSrcCode = ln; }
       }
 
+      // For-each loop taint propagation: for (Type varName : collection)
+      const forEachMatch89 = ln.match(/\bfor\s*\(\s*(?:\w+\.)*\w+(?:\[\])?\s+(\w+)\s*:\s*(\w+)\s*\)/);
+      if (forEachMatch89 && innerTainted.has(forEachMatch89[2]!)) {
+        innerTainted.add(forEachMatch89[1]!);
+      }
+
       // Propagate simple assignments
       const assignMatch = ln.match(/^(?:\w+\s+)*(\w+)\s*=\s*(.+)/);
       if (assignMatch) {
@@ -926,17 +932,33 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         }
       }
 
+      // HashMap taint resolution: bar = (Type) map.get("key")
+      const mapGet89 = ln.match(/^(?:\w+\s+)*(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+      if (mapGet89) {
+        const mkr89 = resolveMapKeyTaint(lines89, innerTainted, mapGet89[2]!, mapGet89[3]!, i);
+        if (mkr89 === 'tainted') innerTainted.add(mapGet89[1]!); else innerTainted.delete(mapGet89[1]!);
+      }
+
       // Check for SQL execution with string concatenation using tainted var
       // Handle both single-line and multi-line SQL statements
       const SQL_CALL_RE89 = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement|queryForRowSet|queryForObject|queryForList|queryForMap|queryForInt|queryForLong|prepareCall|jdbcTemplate\.query)\s*\(/;
       if ((SQL_EXEC_RE.test(ln) || SQL_CALL_RE89.test(ln)) && !PARAM_RE.test(ln)) {
         // Build a window of nearby lines to check for tainted vars in SQL concat
-        const windowStart = Math.max(0, i - 5);
+        // Use a wider lookback (15 lines) to cover multi-line SQL setup patterns
+        // where the SQL string is built several lines before the execute call
+        const windowStart = Math.max(0, i - 15);
         const windowEnd = Math.min(lines89.length - 1, i + 5);
         const window89 = lines89.slice(windowStart, windowEnd + 1).join(' ');
 
-        // Skip if parameterized
-        if (!PARAM_RE.test(window89)) {
+        // Skip if parameterized — but allow partial parameterization detection:
+        // if prepareStatement is present AND tainted var is concatenated into the SQL
+        // string, it's NOT properly parameterized (e.g., prepareStatement("SELECT ... '" + bar + "'"))
+        let paramSuppressed89 = PARAM_RE.test(window89);
+        if (paramSuppressed89 && /\bprepareStatement\b/.test(window89)) {
+          const sqlConcatPattern89 = /["']\s*\+\s*\w+\s*\+\s*["']|["']\s*\+\s*\w+\s*[);]/;
+          if (sqlConcatPattern89.test(window89)) paramSuppressed89 = false;
+        }
+        if (!paramSuppressed89) {
           for (const tv of innerTainted) {
             // Check if tainted var appears in string concatenation near the SQL call
             if (new RegExp('["+\'\\s]\\s*\\+\\s*\\b' + escapeRegExp(tv) + '\\b|\\b' + escapeRegExp(tv) + '\\b\\s*\\+\\s*["+\'\\s]').test(window89)) {
@@ -8607,7 +8629,10 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
     if (!hasListOffset643) {
       const sl643 = map.source_code.split('\n');
       const SRC643 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv)\s*\(/;
-      const XPATH_SINK_RE643 = /\b(?:xpath\.evaluate|XPathExpression\.evaluate|xpath\.compile|selectNodes|selectSingleNode|XPathFactory|DocumentBuilder)\s*\(/;
+      const hasXPathContext643 = /\b(?:XPathFactory|javax\.xml\.xpath|XPath|XPathExpression|DOMXPath|SimpleXMLElement|etree\.XPath|tree\.xpath)\b/.test(map.source_code!);
+      const XPATH_SINK_RE643 = hasXPathContext643
+        ? /\b(?:xpath\.evaluate|XPathExpression\.evaluate|xpath\.compile|selectNodes|selectSingleNode|XPathFactory|DocumentBuilder|\w+\.evaluate)\s*\(/
+        : /\b(?:xpath\.evaluate|XPathExpression\.evaluate|xpath\.compile|selectNodes|selectSingleNode|XPathFactory|DocumentBuilder)\s*\(/;
       const tv643 = new Set<string>();
       let sln643 = 0; let scd643 = '';
       for (let i = 0; i < sl643.length; i++) {
@@ -8618,6 +8643,33 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
         if (va643 && tv643.has(va643[2]!)) tv643.add(va643[1]!);
         const ma643 = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
         if (ma643 && tv643.has(ma643[2]!)) tv643.add(ma643[1]!);
+        // Multi-arg call propagation: var = SomeClass.method(taintedVar, otherArg)
+        // Also handles: var = new Type(nested.call(taintedVar.method()))
+        if (!ma643) {
+          const genAssign643 = ln.match(/^(?:(?:\w+\.)*\w+(?:\[\])?\s+)*(\w+)\s*=\s*(.*)/);
+          if (genAssign643) {
+            const gaLhs643 = genAssign643[1]!;
+            let gaRhs643 = genAssign643[2]!;
+            // Handle multi-line assignments: if the RHS is empty or doesn't end with ';',
+            // join continuation lines until we find one that ends with ';'
+            if (!gaRhs643.trimEnd().endsWith(';')) {
+              for (let k = i + 1; k < Math.min(i + 8, sl643.length); k++) {
+                const cont = sl643[k]!.trim();
+                gaRhs643 += ' ' + cont;
+                if (cont.endsWith(';')) break;
+              }
+            }
+            // Skip constant string assignments
+            if (!/^\s*"[^"]*"\s*;/.test(gaRhs643)) {
+              for (const t of tv643) {
+                if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(gaRhs643)) {
+                  tv643.add(gaLhs643);
+                  break;
+                }
+              }
+            }
+          }
+        }
         const ca643 = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
         if (ca643 && tv643.has(ca643[2]!)) tv643.add(ca643[1]!);
         const ck643 = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
