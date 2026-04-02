@@ -8054,14 +8054,29 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
 
   // Phase 2: source-line fallback for Java HttpSession patterns
   if (findings.length === 0 && map.source_code && !hasDeadBranch501) {
-    // Join multi-line assignments: if a line ends without semicolon, join with next line
+    // Join multi-line assignments: if a line ends without semicolon, join with next line.
+    // Strip inline comments (// ...) before checking line endings so that
+    // "valuesList.remove(0); // comment" is recognized as ending with ";".
+    const stripTrailingComment501 = (s: string): string => {
+      const t = s.trim();
+      if (t.startsWith('//')) return t;
+      const idx = t.indexOf('//');
+      if (idx > 0) {
+        const before = t.substring(0, idx);
+        const dq = (before.match(/"/g) || []).length;
+        if (dq % 2 === 0) return before.trimEnd();
+      }
+      return t;
+    };
     const rawLines501 = map.source_code.split('\n');
     const srcLines: string[] = [];
     for (let i = 0; i < rawLines501.length; i++) {
       let line = rawLines501[i]!;
-      while (i + 1 < rawLines501.length && !line.trim().endsWith(';') && !line.trim().endsWith('{') && !line.trim().endsWith('}') && !line.trim().startsWith('//') && !line.trim().startsWith('*') && !line.trim().startsWith('/*') && line.trim().length > 0) {
+      let code = stripTrailingComment501(line);
+      while (i + 1 < rawLines501.length && !code.endsWith(';') && !code.endsWith('{') && !code.endsWith('}') && !line.trim().startsWith('//') && !line.trim().startsWith('*') && !line.trim().startsWith('/*') && line.trim().length > 0) {
         i++;
         line += ' ' + rawLines501[i]!.trim();
+        code = stripTrailingComment501(line);
       }
       srcLines.push(line);
     }
@@ -8128,6 +8143,7 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
         const methName = callM[2];
         let methodKillsTaint = false;
         for (let j = 0; j < srcLines.length; j++) {
+          if (j === i) continue; // skip the call site itself — look for the actual definition
           const mdef = srcLines[j].trim();
           if (mdef.includes(`${methName}(`) && (mdef.includes('String ') || mdef.includes('public '))) {
             let braceDepth = 0; let foundOpen = false;
@@ -8146,10 +8162,52 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
                   }
                 }
               }
-              // ArrayList remove+get neutralization inside method body
-              if (/\.remove\s*\(\s*\d+\s*\)/.test(mtl) && /\.get\s*\(\s*\d+\s*\)/.test(
-                srcLines.slice(k, Math.min(k + 10, srcLines.length)).join(' ')
-              )) { methodKillsTaint = true; break; }
+              // ArrayList remove+get neutralization inside method body:
+              // Collect add/remove/get from the method body and verify the retrieved index is safe.
+              if (/\.remove\s*\(\s*\d+\s*\)/.test(mtl)) {
+                const methodSlice = srcLines.slice(k, Math.min(k + 10, srcLines.length)).join(' ');
+                const getM501 = methodSlice.match(/\.get\s*\(\s*(\d+)\s*\)/);
+                if (getM501) {
+                  // Scan backwards from remove line to find the list variable and adds
+                  const listVarM = mtl.match(/(\w+)\.remove/);
+                  if (listVarM) {
+                    const lv = listVarM[1];
+                    let adds = 0; let paramAdds = 0; let removes = 0;
+                    for (let m = j; m <= k; m++) {
+                      const ml = srcLines[m].trim();
+                      if (ml.includes(`${lv}.add(`)) {
+                        adds++;
+                        if (/param|request|tainted/.test(ml) && !/"[^"]*"/.test(ml.match(new RegExp(lv + '\\.add\\s*\\((.*)\\)'))?.[1] || '')) paramAdds++;
+                      }
+                      if (ml.includes(`${lv}.remove(`)) removes++;
+                    }
+                    // Also count removes+get on lines after k
+                    for (let m = k + 1; m < Math.min(k + 10, srcLines.length); m++) {
+                      const ml = srcLines[m].trim();
+                      if (ml.includes(`${lv}.remove(`)) removes++;
+                    }
+                    const getIdx = parseInt(getM501[1]);
+                    // After 'removes' removals from front, the item at getIdx maps to original index getIdx + removes
+                    const origIdx = getIdx + removes;
+                    // Build a taint map: which add indices are tainted?
+                    // Pattern: add("safe"), add(param), add("moresafe") -> indices 0=safe, 1=tainted, 2=safe
+                    // If origIdx points to a non-param add, taint is killed
+                    let addIdx = 0; let taintedAtOrig = true; // default: assume tainted
+                    for (let m = j; m <= k + 10 && m < srcLines.length; m++) {
+                      const ml = srcLines[m].trim();
+                      const addMatch = ml.match(new RegExp(lv + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)'));
+                      if (addMatch) {
+                        if (addIdx === origIdx) {
+                          taintedAtOrig = !!addMatch[1]; // true if variable (param), false if string literal
+                          break;
+                        }
+                        addIdx++;
+                      }
+                    }
+                    if (!taintedAtOrig) { methodKillsTaint = true; break; }
+                  }
+                }
+              }
             }
             break;
           }
