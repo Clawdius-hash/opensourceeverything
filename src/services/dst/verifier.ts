@@ -2506,27 +2506,28 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
       let mx = ln.match(SRC78); if (mx) { tv.add(mx[1]!); sln = i + 1; scd = ln; }
       mx = ln.match(CK78); if (mx) { tv.add(mx[1]!); if (!sln) { sln = i + 1; scd = ln; } }
       mx = ln.match(EN78); if (mx) { tv.add(mx[1]!); if (!sln) { sln = i + 1; scd = ln; } }
-      const va = ln.match(/^(\w+)\s*=\s*(\w+)\s*;/);
+      // Assignment propagation: supports both "bar = param;" and "String bar = param;"
+      const va = ln.match(/^(?:(?:final\s+)?(?:String|int|long|Object|byte)\s+)?(\w+)\s*=\s*(\w+)\s*;/);
       if (va && tv.has(va[2]!)) tv.add(va[1]!);
-      const mc = ln.match(/^(\w+)\s*=\s*(\w+)\.\w+\s*\(/);
+      const mc = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.\w+\s*\(/);
       if (mc && tv.has(mc[2]!)) tv.add(mc[1]!);
-      const ma = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
+      const ma = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
       if (ma && tv.has(ma[2]!)) tv.add(ma[1]!);
-      const ca = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+      const ca = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
       if (ca && tv.has(ca[2]!)) tv.add(ca[1]!);
-      const cc = ln.match(/^(\w+)\s*=\s*.*\+.*\b(\w+)\b/);
+      const cc = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*.*\+.*\b(\w+)\b/);
       if (cc && tv.has(cc[2]!)) tv.add(cc[1]!);
       const ai = ln.match(/^(?:\w+\[\]\s+)?(\w+)\s*=\s*(?:new\s+\w+\s*\[\]\s*)?\{([^}]+)\}/);
       if (ai) { for (const t of tv) { if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(ai[2]!)) { tv.add(ai[1]!); break; } } }
       const sb = ln.match(/(\w+)\s*=\s*new\s+StringBuilder\s*\(\s*(\w+)\s*\)/);
       if (sb && tv.has(sb[2]!)) tv.add(sb[1]!);
-      const ts = ln.match(/^(\w+)\s*=\s*(\w+)\.(?:append\s*\([^)]*\)\s*\.)*toString\s*\(\s*\)/);
+      const ts = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.(?:append\s*\([^)]*\)\s*\.)*toString\s*\(\s*\)/);
       if (ts && tv.has(ts[2]!)) tv.add(ts[1]!);
-      const ck = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
+      const ck = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*"[^"]*"\s*;/);
       if (ck) tv.delete(ck[1]!);
       const atm = ln.match(/if\s*\(\s*\(\s*(\d+)\s*\*\s*(\d+)\s*\)\s*-\s*\w+\s*>\s*(\d+)\s*\)\s*(\w+)\s*=\s*"[^"]*"/);
       if (atm && parseInt(atm[1]!) * parseInt(atm[2]!) > parseInt(atm[3]!) + 100) tv.delete(atm[4]!);
-      const mg = ln.match(/^(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+      const mg = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
       if (mg) {
         const mv = mg[2]!; const gk = mg[3]!; let kt = false;
         for (let j = 0; j < i; j++) {
@@ -2536,7 +2537,7 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
         }
         if (kt) tv.add(mg[1]!); else tv.delete(mg[1]!);
       }
-      const lg = ln.match(/^(\w+)\s*=\s*(\w+)\.get\s*\(\s*(\d+)\s*\)/);
+      const lg = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.get\s*\(\s*(\d+)\s*\)/);
       if (lg) {
         const lv = lg[2]!; const gi = parseInt(lg[3]!);
         const items: { tainted: boolean }[] = []; let rc = 0;
@@ -2555,18 +2556,149 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
       if (ipCall78 && tv.has(ipCall78[3]!)) {
         const mn78 = ipCall78[2]!;
         let kills78 = false;
+        // Search for the method DECLARATION (not call site): must have access modifier or
+        // return-type keyword before the method name, indicating a method signature not a call.
+        const methodDeclRe = new RegExp('(?:private|protected|public|static|final)\\s+.*\\b' + escapeRegExp(mn78) + '\\s*\\(');
         for (let j = 0; j < sl78.length; j++) {
+          if (j === i) continue; // skip the call site itself
           const md78 = sl78[j]!.trim();
-          if (md78.includes(`${mn78}(`) && (md78.includes('String ') || md78.includes('public '))) {
+          if (methodDeclRe.test(md78) || (md78.includes(`${mn78}(`) && /^\s*(?:public|private|protected)\s/.test(sl78[j]!))) {
             let bd78 = 0; let fo78 = false;
-            for (let k = j; k < Math.min(j + 40, sl78.length); k++) {
+            // Collect the method body lines to analyze return taint
+            const bodyLines78: string[] = [];
+            for (let k = j; k < Math.min(j + 50, sl78.length); k++) {
               if (sl78[k]!.includes('{')) { bd78++; fo78 = true; }
               if (sl78[k]!.includes('}')) bd78--;
               if (fo78 && bd78 <= 0) break;
               const mt78 = sl78[k]!.trim();
+              if (k !== j) bodyLines78.push(mt78);
+              // Strong sanitizers kill taint unconditionally
               if (/\b(?:parseInt|parseLong|parseFloat|parseDouble|Integer\.valueOf|Long\.valueOf|Pattern\.matches|Pattern\.compile|\.matches\s*\(\s*"[^"]*"|validate\s*\(|sanitize\s*\()\b/i.test(mt78)) { kills78 = true; break; }
-              if (/^\w+\s*=\s*"[^"]{5,}"/.test(mt78) && !/param/.test(mt78) && !/request/.test(mt78)) { kills78 = true; break; }
-              if (/\.remove\s*\(\s*\d+\s*\)/.test(mt78)) { kills78 = true; break; }
+            }
+            if (!kills78) {
+              // Analyze whether the method's return value carries taint from param.
+              // Strategy: track a mini taint set within the method body.
+              const mtv = new Set<string>(['param']);
+              let returnVar78 = '';
+              // Track pending multi-line assignment: when we see "bar =" or "bar ="
+              // on one line, look for tainted refs on subsequent lines until ";"
+              let pendingAssignVar78 = '';
+              // Dead-branch detection for switch statements: track constant char values
+              // derived from charAt() on string literals to identify which case is taken.
+              const constChars78 = new Map<string, string>(); // var -> resolved char value
+              const constStrings78 = new Map<string, string>(); // var -> literal string
+              let activeSwitchVar78 = ''; let activeSwitchChar78 = '';
+              let inDeadBranch78 = false;
+              for (const bl of bodyLines78) {
+                // Multi-line assignment continuation: if a pending var is being assigned
+                // and this line contains a tainted reference, taint the pending var
+                if (pendingAssignVar78) {
+                  for (const t of mtv) {
+                    if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(bl)) { mtv.add(pendingAssignVar78); break; }
+                  }
+                  if (bl.includes(';')) pendingAssignVar78 = '';
+                }
+                // Track constant string literals: String x = "literal"
+                const strLit78 = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*"([^"]*)"\s*;/);
+                if (strLit78) constStrings78.set(strLit78[1]!, strLit78[2]!);
+                // Track charAt on constant strings: x = str.charAt(N)
+                const charAtMatch = bl.match(/(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.charAt\s*\(\s*(\d+)\s*\)/);
+                if (charAtMatch && constStrings78.has(charAtMatch[2]!)) {
+                  const s = constStrings78.get(charAtMatch[2]!)!;
+                  const idx = parseInt(charAtMatch[3]!);
+                  if (idx < s.length) constChars78.set(charAtMatch[1]!, s[idx]!);
+                }
+                // Switch statement: check if switching on a known constant char
+                const switchMatch = bl.match(/switch\s*\(\s*(\w+)\s*\)/);
+                if (switchMatch && constChars78.has(switchMatch[1]!)) {
+                  activeSwitchVar78 = switchMatch[1]!;
+                  activeSwitchChar78 = constChars78.get(switchMatch[1]!)!;
+                  inDeadBranch78 = true; // assume dead until we find the matching case
+                }
+                // Case label: check if this is the active case.
+                // Once we find the matching case, stay in live branch until break.
+                const caseMatch = bl.match(/case\s+'(.)'/);
+                if (caseMatch && activeSwitchVar78) {
+                  if (caseMatch[1] === activeSwitchChar78) {
+                    inDeadBranch78 = false; // found the live case
+                  } else if (inDeadBranch78) {
+                    // Stay dead (haven't found live case yet, or past it after break)
+                  }
+                  // If we're already in a live branch (fall-through from matching case),
+                  // another case label doesn't make it dead.
+                }
+                if (bl === 'default:' && activeSwitchVar78 && inDeadBranch78) {
+                  // default is dead only if we haven't been in a live branch
+                }
+                // break exits the live branch of the switch
+                if (bl === 'break;' && activeSwitchVar78 && !inDeadBranch78) {
+                  inDeadBranch78 = true; // after break, subsequent cases are dead again
+                }
+                // Simple assignment propagation: x = param or x = tainted_var
+                // Skip assignments in dead branches of constant-resolved switch statements
+                const simpleAssign = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\s*;/);
+                if (simpleAssign && mtv.has(simpleAssign[2]!) && !inDeadBranch78) mtv.add(simpleAssign[1]!);
+                // If-gated assignment: if (...) x = param;
+                const ifAssign = bl.match(/\bif\s*\(.*\)\s*(\w+)\s*=\s*(\w+)\s*;/);
+                if (ifAssign && mtv.has(ifAssign[2]!)) mtv.add(ifAssign[1]!);
+                // Method call propagation: x = something(tainted)
+                const mcProp = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*.*\(\s*.*\b(\w+)\b.*\)/);
+                if (mcProp && mtv.has(mcProp[2]!)) mtv.add(mcProp[1]!);
+                // Multi-line assignment start: "bar =" at end of line (no semicolon)
+                const multiAssign = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*$/);
+                if (multiAssign && !bl.includes(';')) pendingAssignVar78 = multiAssign[1]!;
+                // Also detect: "bar = \n new String(" pattern
+                const multiAssign2 = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*\S+/);
+                if (multiAssign2 && !bl.includes(';')) pendingAssignVar78 = multiAssign2[1]!;
+                // StringBuilder: sb = new StringBuilder(tainted)
+                const sbProp = bl.match(/(\w+)\s*=\s*new\s+StringBuilder\s*\(\s*(\w+)\s*\)/);
+                if (sbProp && mtv.has(sbProp[2]!)) mtv.add(sbProp[1]!);
+                // toString: x = sb.toString() or x = sb.append(...).toString()
+                // Exclude .get(N) which is handled by the precise list tracking below
+                const tsProp = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(?:\(\w+\)\s*)?(\w+)\.(?:append\s*\([^)]*\)\s*\.)*(?:toString)\s*\(/);
+                if (tsProp && mtv.has(tsProp[2]!)) mtv.add(tsProp[1]!);
+                // HashMap put/get tracking
+                const putCall = bl.match(/(\w+)\.put\s*\(\s*"([^"]*)"?\s*,\s*(?:\w+\.toString\s*\(\s*\)|\w+)\s*\)/);
+                if (putCall) { for (const t of mtv) { if (bl.includes(t)) { mtv.add(putCall[1]!); break; } } }
+                const getCast = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(/);
+                if (getCast && mtv.has(getCast[2]!)) mtv.add(getCast[1]!);
+                // List add/get tracking with mutation awareness
+                const addCall = bl.match(/(\w+)\.add\s*\(\s*(\w+)\s*\)/);
+                if (addCall && mtv.has(addCall[2]!)) mtv.add(addCall[1]!);
+                const listGet = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.get\s*\(\s*(\d+)\s*\)/);
+                if (listGet) {
+                  // Precise list tracking: replay add/remove operations to determine
+                  // whether the element at the requested index is tainted.
+                  const listVar = listGet[2]!; const getIdx = parseInt(listGet[3]!);
+                  const listItems: { tainted: boolean }[] = []; let removeCount = 0;
+                  for (const prev of bodyLines78) {
+                    const prevAdd = prev.match(new RegExp(escapeRegExp(listVar) + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)'));
+                    if (prevAdd) listItems.push({ tainted: prevAdd[1] ? mtv.has(prevAdd[1]) : false });
+                    if (prev.includes(listVar + '.remove(')) removeCount++;
+                    if (prev === bl) break;
+                  }
+                  const adjusted = listItems.slice(removeCount);
+                  if (getIdx < adjusted.length && adjusted[getIdx]!.tainted) mtv.add(listGet[1]!);
+                  else if (getIdx < adjusted.length && !adjusted[getIdx]!.tainted) { /* safe: don't taint */ }
+                  else if (mtv.has(listVar)) mtv.add(listGet[1]!); // fallback: list is tainted
+                }
+                // Concat propagation: x = ... + tainted or x = tainted + ...
+                const concatProp = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(.+)/);
+                if (concatProp && /\+/.test(concatProp[2]!)) {
+                  for (const t of mtv) { if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(concatProp[2]!)) { mtv.add(concatProp[1]!); break; } }
+                }
+                // Note: we do NOT apply static string kills in the mini-taint tracker.
+                // Multi-branch code (switch/if) may assign both param and literals to the
+                // same variable. Conservative analysis: if ANY branch taints it, it's tainted.
+                // Capture return variable
+                const ret = bl.match(/return\s+(\w+)\s*;/);
+                if (ret) returnVar78 = ret[1]!;
+              }
+              // If we can identify a return variable and it's NOT in the mini taint set,
+              // the method neutralizes the tainted input.
+              if (returnVar78 && !mtv.has(returnVar78)) kills78 = true;
+              // If param is never referenced at all in the body, taint doesn't flow.
+              if (!bodyLines78.some(l => /\bparam\b/.test(l))) kills78 = true;
             }
             break;
           }
@@ -2582,12 +2714,34 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
         const ea = em[1] || ''; let hit = false;
         for (const t of tv) { if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(ea)) { hit = true; break; } }
         if (!hit) {
+          // Lookback: check nearby lines for tainted data flowing into exec args.
+          // First, identify variables that appear in the exec arg list.
+          const execArgVars = new Set<string>();
+          for (const word of ea.match(/\b[a-zA-Z_]\w*\b/g) || []) execArgVars.add(word);
           for (let j = Math.max(0, i - 25); j < i; j++) {
             const pl = sl78[j]!.trim();
             for (const t of tv) {
-              if (new RegExp('\\+\\s*\\b' + escapeRegExp(t) + '\\b|\\b' + escapeRegExp(t) + '\\b\\s*\\+').test(pl)) { hit = true; break; }
-              if (new RegExp('\\{[^}]*\\b' + escapeRegExp(t) + '\\b').test(pl)) { hit = true; break; }
-              if (new RegExp('\\.add\\s*\\([^)]*\\b' + escapeRegExp(t) + '\\b').test(pl)) { hit = true; break; }
+              // Only match concat/array/add patterns that involve an exec arg variable
+              const concatRe = new RegExp('\\+\\s*\\b' + escapeRegExp(t) + '\\b|\\b' + escapeRegExp(t) + '\\b\\s*\\+');
+              if (concatRe.test(pl)) {
+                // Check that this line involves an exec arg var or feeds into one
+                for (const av of execArgVars) {
+                  if (new RegExp('\\b' + escapeRegExp(av) + '\\b').test(pl)) { hit = true; break; }
+                }
+                if (hit) break;
+              }
+              const arrRe = new RegExp('\\{[^}]*\\b' + escapeRegExp(t) + '\\b');
+              if (arrRe.test(pl)) {
+                // Check that this array init assigns to an exec arg variable
+                const arrAssign = pl.match(/^(?:\w+\[\]\s+)?(\w+)\s*=/);
+                if (arrAssign && execArgVars.has(arrAssign[1]!)) { hit = true; break; }
+              }
+              const addRe = new RegExp('\\.add\\s*\\([^)]*\\b' + escapeRegExp(t) + '\\b');
+              if (addRe.test(pl)) {
+                // Check that this .add() is on an exec arg variable
+                const addTarget = pl.match(/(\w+)\s*\.\s*add\s*\(/);
+                if (addTarget && execArgVars.has(addTarget[1]!)) { hit = true; break; }
+              }
             }
             if (hit) break;
           }
