@@ -870,9 +870,9 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         const sinkSnap = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         const paramRegex = /\$\d|\?\s*[,)"']|\bprepare(?:Statement|d)?\b|\bparameterized\b|\bplaceholder/i;
         let isParameterized = paramRegex.test(combinedScope) || paramRegex.test(sinkSnap);
-        // Partial parameterization fix: if prepareStatement is present but tainted variables
-        // are concatenated into the SQL string (+ var +), it's NOT properly parameterized
-        if (isParameterized && /\bprepareStatement\b/.test(combinedScope)) {
+        // Partial parameterization fix: if prepareStatement/prepareCall is present but tainted
+        // variables are concatenated into the SQL string (+ var +), it's NOT properly parameterized
+        if (isParameterized && /\bprepare(?:Statement|Call)\b/.test(combinedScope)) {
           const sqlConcatPattern = /["']\s*\+\s*\w+\s*\+\s*["']|["']\s*\+\s*\w+\s*[);]/;
           if (sqlConcatPattern.test(combinedScope)) isParameterized = false;
         }
@@ -934,7 +934,11 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
       }
 
       // Propagate simple assignments
-      const assignMatch = ln.match(/^(?:\w+\s+)*(\w+)\s*=\s*(.+)/);
+      // Also handle assignments after control-flow keywords:
+      //   if (...) param = values[0];   else param = "";
+      const assignMatch = ln.match(/^(?:\w+\s+)*(\w+)\s*=\s*(.+)/)
+        || ln.match(/\belse\s+(\w+)\s*=\s*(.+)/)
+        || ln.match(/\bif\s*\([^)]*\)\s*(\w+)\s*=\s*(.+)/);
       if (assignMatch) {
         const lhs = assignMatch[1]!;
         const rhs = assignMatch[2]!;
@@ -965,10 +969,10 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         const window89 = lines89.slice(windowStart, windowEnd + 1).join(' ');
 
         // Skip if parameterized — but allow partial parameterization detection:
-        // if prepareStatement is present AND tainted var is concatenated into the SQL
+        // if prepareStatement/prepareCall is present AND tainted var is concatenated into the SQL
         // string, it's NOT properly parameterized (e.g., prepareStatement("SELECT ... '" + bar + "'"))
         let paramSuppressed89 = PARAM_RE.test(window89);
-        if (paramSuppressed89 && /\bprepareStatement\b/.test(window89)) {
+        if (paramSuppressed89 && /\bprepare(?:Statement|Call)\b/.test(window89)) {
           const sqlConcatPattern89 = /["']\s*\+\s*\w+\s*\+\s*["']|["']\s*\+\s*\w+\s*[);]/;
           if (sqlConcatPattern89.test(window89)) paramSuppressed89 = false;
         }
