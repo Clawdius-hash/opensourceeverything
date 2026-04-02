@@ -1019,10 +1019,12 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
       }
 
       const callResolution = resolveCallee(expr);
-      // Sanitizer or encoder call stops taint
+      // Sanitizer, encoder, or safe_source call stops taint.
+      // safe_source methods (e.g., SeparateClassRequest.getTheValue()) return hardcoded
+      // values independent of their arguments or receiver state.
       if (callResolution &&
           callResolution.nodeType === 'TRANSFORM' &&
-          (callResolution.subtype === 'sanitize' || callResolution.subtype === 'encode')) {
+          (callResolution.subtype === 'sanitize' || callResolution.subtype === 'encode' || callResolution.subtype === 'safe_source')) {
         return [];
       }
       // If the call itself is a tainted INGRESS source (e.g. socket.getInputStream(),

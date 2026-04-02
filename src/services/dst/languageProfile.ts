@@ -237,6 +237,13 @@ export interface LanguageProfile {
    * Python: def name(params):
    */
   functionParamPattern?: RegExp;
+
+  /**
+   * Optional: evaluate a condition expression for dead-branch elimination.
+   * Returns true/false if the condition can be statically resolved, or null if unknown.
+   * Used by walkWithScopes to skip dead branches in if_statement nodes.
+   */
+  tryEvalCondition?: (condNode: SyntaxNode, ctx: MapperContextLike) => boolean | null;
 }
 
 // ─── Minimal context interface ─────────────────────────────────────────

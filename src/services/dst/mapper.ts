@@ -682,14 +682,19 @@ export class MapperContext {
                   }
                   // Track if/else inline assignments: if (cond) bar = param; or else bar = param;
                   // These don't match the standard assignment regex because the line starts with if/else.
-                  const ifAssignMatch = ln.match(/(?:if\s*\([^)]*\)|else)\s+(\w+)\s*=\s*(.*)/);
-                  if (ifAssignMatch) {
-                    const lhs = ifAssignMatch[1]!;
-                    const rhs = ifAssignMatch[2]!;
-                    for (const a of aliases) {
-                      if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(rhs)) {
-                        aliases.add(lhs);
-                        break;
+                  // Use a broader pattern that finds any "word = expr" within the line, even after
+                  // complex if conditions with nested parentheses.
+                  if (!assignMatch && (ln.startsWith('if ') || ln.startsWith('if(') || ln.startsWith('else '))) {
+                    // Find the last assignment pattern in the line: look for word = word/expr ;
+                    const ifAssignMatch = ln.match(/\b(\w+)\s*=\s*([^;]+);/);
+                    if (ifAssignMatch) {
+                      const lhs = ifAssignMatch[1]!;
+                      const rhs = ifAssignMatch[2]!;
+                      for (const a of aliases) {
+                        if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(rhs)) {
+                          aliases.add(lhs);
+                          break;
+                        }
                       }
                     }
                   }
@@ -724,7 +729,39 @@ export class MapperContext {
                 // Now check return statements
                 const returnMatch = body.match(/return\s+(\w+)\s*;/);
                 if (returnMatch && aliases.has(returnMatch[1]!)) {
-                  isPassthrough = true;
+                  // The function textually passes a non-request param to return.
+                  // But we also need to check: is the actual call-site argument
+                  // corresponding to that param tainted? If not, this passthrough
+                  // is safe (the non-request param carries safe data at this call site).
+                  // Extract arg names from the call-site code and match by position.
+                  const callSnap = lc.analysis_snapshot || lc.code_snapshot || '';
+                  const callArgMatch = callSnap.match(new RegExp(escaped + '\\s*\\(([^)]*)\\)'));
+                  if (callArgMatch) {
+                    const callArgs = callArgMatch[1]!.split(',').map(a => a.trim());
+                    // Find which passthrough params (that alias to the return) have
+                    // tainted call-site arguments.
+                    let hasAnyTaintedPassthroughArg = false;
+                    for (let pi = 0; pi < paramNames.length; pi++) {
+                      const pn = paramNames[pi]!;
+                      if (!nonRequestParams.includes(pn)) continue;
+                      if (!aliases.has(pn)) continue; // this param doesn't flow to return
+                      // Get the corresponding call-site argument
+                      const argName = callArgs[pi];
+                      if (!argName) continue;
+                      // Check if this argument is tainted in the call node's data_in
+                      const argIsTainted = lc.data_in.some(d =>
+                        d.tainted && d.name && new RegExp('\\b' + argName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(d.name)
+                      );
+                      if (argIsTainted) {
+                        hasAnyTaintedPassthroughArg = true;
+                        break;
+                      }
+                    }
+                    isPassthrough = hasAnyTaintedPassthroughArg;
+                  } else {
+                    // Can't parse call-site args — conservatively treat as passthrough
+                    isPassthrough = true;
+                  }
                 }
               }
             }
@@ -1139,6 +1176,23 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
   // ── Node classification — delegated to the language profile ──
   profile.classifyNode(node, ctx);
 
+  // ── Dead-branch elimination for if_statement / if_expression ──
+  // When the profile provides tryEvalCondition and the node is an if-statement,
+  // evaluate the condition statically. If the result is known (true/false),
+  // skip the dead branch to prevent it from clobbering taint set by the live branch.
+  // This handles patterns like: if ((500/42)+num > 200) bar = param; else bar = "safe";
+  const isIfNode = node.type === 'if_statement' || node.type === 'if_expression';
+  let skipConsequence = false;
+  let skipAlternative = false;
+  if (isIfNode && profile.tryEvalCondition) {
+    const condNode = node.childForFieldName('condition');
+    if (condNode) {
+      const condResult = profile.tryEvalCondition(condNode, ctx);
+      if (condResult === true) skipAlternative = true;   // condition always true: skip else
+      if (condResult === false) skipConsequence = true;  // condition always false: skip then
+    }
+  }
+
   // Recurse into children
   const isStatementContainer = profile.isStatementContainer(node.type);
   for (let i = 0; i < node.childCount; i++) {
@@ -1147,6 +1201,13 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
     }
     const child = node.child(i);
     if (child) {
+      // Dead-branch skip: if the child is the consequence or alternative of an if-statement
+      // and we determined that branch is dead, don't walk it.
+      if (isIfNode) {
+        const fieldName = node.fieldNameForChild(i);
+        if (skipConsequence && fieldName === 'consequence') continue;
+        if (skipAlternative && fieldName === 'alternative') continue;
+      }
       walkWithScopes(child, ctx, profile);
     }
   }
