@@ -7391,7 +7391,7 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
 
   // Regex that matches ACTUAL crypto API calls with weak algorithm names in string args.
   // These are real vulns even when the algo name is inside a string literal.
-  const CRYPTO_API_CALL_RE = /Cipher\.getInstance\s*\(\s*['"](?:DES|DESede|RC4|RC2|Blowfish)|createCipher(?:iv)?\s*\(\s*['"](?:des|des-ede3|des3|rc4|rc2|bf|blowfish)|CryptoJS\.(?:DES|TripleDES|RC4|Rabbit)\b|MessageDigest\.getInstance\s*\(\s*['"](?:MD[245]|SHA-?1)['"]|EVP_(?:des|rc4|bf)_/i;
+  const CRYPTO_API_CALL_RE = /Cipher\.getInstance\s*\(\s*['"](?:DES|DESede|RC4|RC2|Blowfish)|KeyGenerator\.getInstance\s*\(\s*['"](?:DES|DESede|RC4|RC2|Blowfish)|createCipher(?:iv)?\s*\(\s*['"](?:des|des-ede3|des3|rc4|rc2|bf|blowfish)|CryptoJS\.(?:DES|TripleDES|RC4|Rabbit)\b|MessageDigest\.getInstance\s*\(\s*['"](?:MD[245]|SHA-?1)['"]|EVP_(?:des|rc4|bf)_/i;
 
   for (const node of map.nodes) {
     // Skip verifier-internal functions and their child nodes: their snapshots contain
@@ -7438,18 +7438,23 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
   }
   // Source-line fallback: resolve variable-based algorithm specification
   // Catches: String algo = "DES"; Cipher.getInstance(algo);
+  // Also catches: String algo = props.getProperty("key", "DESede/ECB/PKCS5Padding"); Cipher.getInstance(algo);
   if (findings.length === 0 && map.source_code) {
     const sl327 = stripComments(map.source_code);
-    const CIPHER_VAR_RE = /Cipher\.getInstance\s*\(\s*(\w+)\s*\)|MessageDigest\.getInstance\s*\(\s*(\w+)\s*\)/;
+    const CIPHER_VAR_RE = /Cipher\.getInstance\s*\(\s*(\w+)\s*\)|KeyGenerator\.getInstance\s*\(\s*(\w+)\s*\)|MessageDigest\.getInstance\s*\(\s*(\w+)\s*\)/;
     const cipherVarM = sl327.match(CIPHER_VAR_RE);
     if (cipherVarM) {
-      const algoVar = cipherVarM[1] || cipherVarM[2];
+      const algoVar = cipherVarM[1] || cipherVarM[2] || cipherVarM[3];
       if (algoVar && !/^["']/.test(algoVar)) {
         // Resolve the variable backward to find the algorithm string
+        // Pattern 1: direct assignment — String algo = "DES";
         const algoAssignRe = new RegExp('(?:String\\s+)?' + escapeRegExp(algoVar) + '\\s*=\\s*"([^"]*)"');
         const algoM = sl327.match(algoAssignRe);
-        if (algoM) {
-          const resolvedAlgo = algoM[1]!;
+        // Pattern 2: getProperty with default — algo = props.getProperty("key", "DESede/ECB/PKCS5Padding");
+        const getPropRe = new RegExp('(?:String\\s+)?' + escapeRegExp(algoVar) + '\\s*=\\s*\\w+\\.getProperty\\s*\\([^,]*,\\s*"([^"]*)"\\s*\\)');
+        const getPropM = sl327.match(getPropRe);
+        const resolvedAlgo = algoM?.[1] || getPropM?.[1];
+        if (resolvedAlgo) {
           if (BROKEN_ALGO_RE.test(resolvedAlgo) && !STRONG_ALGO_RE.test(resolvedAlgo)) {
             const nearNode = map.nodes[0];
             if (nearNode) {
