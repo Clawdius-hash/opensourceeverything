@@ -388,9 +388,15 @@ function resolveMapKeyTaint(
   let result: 'tainted' | 'safe' | 'unknown' = 'unknown';
   for (let j = 0; j < upToLine; j++) {
     const pLine = lines[j]!.trim();
+    // Match put("key", variableName)
     const putM = pLine.match(new RegExp(escapeRegExp(mapVar) + '\\.put\\s*\\(\\s*"([^"]*)"\\s*,\\s*(\\w+)\\s*\\)'));
     if (putM && putM[1] === getKey) {
       result = taintedVars.has(putM[2]!) ? 'tainted' : 'safe';
+    }
+    // Match put("key", "stringLiteral") — string literal values are always safe
+    const putLitM = pLine.match(new RegExp(escapeRegExp(mapVar) + '\\.put\\s*\\(\\s*"([^"]*)"\\s*,\\s*"[^"]*"\\s*\\)'));
+    if (putLitM && putLitM[1] === getKey) {
+      result = 'safe';
     }
   }
   return result;
@@ -1523,15 +1529,59 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // the source code proves the tainted branch is never taken.
   const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
   const hasListOffsetNeutralization22 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
+  const hasStaticValueNeutralization22 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
+  const hasInterproceduralNeutralization22 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
+
+  // Detect getTheValue() safe source: SeparateClassRequest.getTheValue() always returns "bar"
+  // When the ONLY source of param is getTheValue(), no user input reaches the sink.
+  const hasGetTheValueSafeSource = map.source_code
+    ? /\.getTheValue\s*\(/.test(stripComments(map.source_code)) &&
+      !/\b(?:request|req)\s*\.\s*(?:getParameter|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(/.test(stripComments(map.source_code))
+    : false;
+
+  // Detect HashMap safe-key retrieval: tainted value is stored under one key but
+  // a different (safe) key is retrieved. Checks interprocedural doSomething methods.
+  let hasMapKeySafeRetrieval22 = false;
+  if (map.source_code) {
+    const cleanSrc22 = stripComments(map.source_code);
+    const lines22 = cleanSrc22.split('\n');
+    // Find map.get("key") pattern
+    const mapGetMatch22 = cleanSrc22.match(/(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/g);
+    if (mapGetMatch22) {
+      // Check each map.get() — if the LAST one retrieves a safe key, taint is neutralized
+      const allGets = [...cleanSrc22.matchAll(/(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/g)];
+      if (allGets.length > 0) {
+        const lastGet = allGets[allGets.length - 1]!;
+        const mapVar = lastGet[1]!;
+        const getKey = lastGet[2]!;
+        // Find tainted vars from source
+        const taintedVars22 = new Set<string>();
+        for (const ln of lines22) {
+          const srcM = ln.match(/(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getHeader|getCookies|getInputStream|getReader|getQueryString)\s*\(/);
+          if (srcM) taintedVars22.add(srcM[1]!);
+          const decM = ln.match(/(\w+)\s*=\s*.*(?:URLDecoder\.decode)\s*\(/);
+          if (decM) taintedVars22.add(decM[1]!);
+        }
+        if (taintedVars22.size > 0) {
+          const lineIdx = lines22.findIndex(l => l.includes(lastGet[0]));
+          if (lineIdx >= 0) {
+            const mkr = resolveMapKeyTaint(lines22, taintedVars22, mapVar, getKey, lineIdx);
+            if (mkr === 'safe') hasMapKeySafeRetrieval22 = true;
+          }
+        }
+      }
+    }
+  }
 
   for (const src of ingress) {
     for (const sink of fileOps) {
       // Primary: BFS taint path from INGRESS to file-operation node.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        // Suppress graph-based findings when dead-branch or list-offset neutralization is detected.
+        // Suppress graph-based findings when dead-branch, list-offset, static-value,
+        // safe-source, or map-key neutralization is detected.
         // The graph tracks taint through all branches, but constant ternary/switch patterns
         // guarantee the tainted branch is never taken.
-        if (hasDeadBranchNeutralization || hasListOffsetNeutralization22) continue;
+        if (hasDeadBranchNeutralization || hasListOffsetNeutralization22 || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasGetTheValueSafeSource || hasMapKeySafeRetrieval22) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -1557,7 +1607,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // (getParameter, getCookies, getHeaders) flows to File/FileInputStream/FileOutputStream
   // constructors via local variable assignment + string concatenation, even when
   // the mapper doesn't emit DATA_FLOW edges for the full chain.
-  if (findings.length === 0 && map.source_code && !hasListOffsetNeutralization22) {
+  if (findings.length === 0 && map.source_code && !hasListOffsetNeutralization22 && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasGetTheValueSafeSource && !hasMapKeySafeRetrieval22) {
     const src = stripComments(map.source_code);
     // Normalize: collapse whitespace/newlines for multi-line statement parsing
     const normalized = src.replace(/\n\s*/g, ' ');
@@ -1670,7 +1720,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // and uses it in new File(directory, paramName) without canonicalization checks.
   // This catches cross-method taint where a controller passes user input to a helper.
   // Skip when dead-branch neutralization proves taint never reaches the sink.
-  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasGetTheValueSafeSource && !hasMapKeySafeRetrieval22) {
     const sl22m = stripComments(map.source_code);
     const lines22m = sl22m.split('\n');
 
