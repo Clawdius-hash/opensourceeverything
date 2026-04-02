@@ -1058,12 +1058,44 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   const hasDeadBranch79 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
   const hasListOffset79 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
 
+  // Interprocedural neutralization: inner-class/helper methods that kill taint via
+  // static value replacement, HashMap safe-key retrieval, or taint abandonment.
+  const hasInterproceduralKill79 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
+
+  // HashMap safe-key retrieval (inline, non-interprocedural): tainted value is stored
+  // under one key but a different (safe) key is retrieved before reaching the sink.
+  let hasMapKeySafeRetrieval79 = false;
+  if (map.source_code) {
+    const cleanSrc79 = stripComments(map.source_code);
+    const lines79h = cleanSrc79.split('\n');
+    const allGets79 = [...cleanSrc79.matchAll(/(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/g)];
+    if (allGets79.length > 0) {
+      const lastGet79 = allGets79[allGets79.length - 1]!;
+      const mapVar79 = lastGet79[1]!;
+      const getKey79 = lastGet79[2]!;
+      const taintedVars79 = new Set<string>();
+      for (const ln of lines79h) {
+        const srcM = ln.match(/(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getInputStream|getReader|getQueryString|getTheValue|nextElement)\s*\(/);
+        if (srcM) taintedVars79.add(srcM[1]!);
+        const decM = ln.match(/(\w+)\s*=\s*.*(?:URLDecoder\.decode)\s*\(/);
+        if (decM) taintedVars79.add(decM[1]!);
+      }
+      if (taintedVars79.size > 0) {
+        const lineIdx79 = lines79h.findIndex(l => l.includes(lastGet79[0]));
+        if (lineIdx79 >= 0) {
+          const mkr79 = resolveMapKeyTaint(lines79h, taintedVars79, mapVar79, getKey79, lineIdx79);
+          if (mkr79 === 'safe') hasMapKeySafeRetrieval79 = true;
+        }
+      }
+    }
+  }
+
   for (const src of ingress) {
     for (const sink of egress) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       // Fallback 2: scope-based taint (Java Juliet patterns with incomplete DATA_FLOW edges)
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id) || scopeBasedTaintReaches(map, src.id, sink.id)) {
-        if (hasDeadBranch79 || hasListOffset79) continue;
+        if (hasDeadBranch79 || hasListOffset79 || hasInterproceduralKill79 || hasMapKeySafeRetrieval79) continue;
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
