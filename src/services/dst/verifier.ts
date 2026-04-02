@@ -2230,9 +2230,9 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
      (n.node_subtype.includes('deserialize') || n.node_subtype.includes('parse') ||
       (n.analysis_snapshot || n.code_snapshot).match(/\b(unserialize|pickle\.load|yaml\.load|eval|JSON\.parse|XStream|XMLDecoder|ObjectMapper|Kryo)\b/i) !== null)) ||
     // Python: pickle.loads is classified as EXTERNAL/deserialize, not TRANSFORM
-    (n.node_type === 'EXTERNAL' && n.node_subtype === 'deserialize') ||
-    // Rust: serde_json::from_str etc. are classified as INGRESS/deserialize
-    (n.node_type === 'INGRESS' && n.node_subtype === 'deserialize')
+    (n.node_type === 'EXTERNAL' && n.node_subtype.startsWith('deserialize')) ||
+    // Rust/Java: serde_json::from_str, XMLDecoder.readObject etc. may be INGRESS/deserialize or INGRESS/deserialize_rce
+    (n.node_type === 'INGRESS' && n.node_subtype.startsWith('deserialize'))
   );
 
   for (const src of ingress) {
@@ -2241,11 +2241,11 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
         // EXTERNAL/deserialize nodes are inherently dangerous (yaml.load, pickle.loads, etc.)
         // TRANSFORM/parse nodes need code_snapshot check to distinguish safe vs unsafe
         const isDangerous =
-          (sink.node_type === 'EXTERNAL' && sink.node_subtype === 'deserialize') ||
-          // Rust: serde_json::from_str/from_value/from_slice on untrusted INGRESS data
-          (sink.node_type === 'INGRESS' && sink.node_subtype === 'deserialize') ||
+          (sink.node_type === 'EXTERNAL' && sink.node_subtype.startsWith('deserialize')) ||
+          // Rust/Java: serde_json::from_str, XMLDecoder.readObject etc. — includes deserialize_rce
+          (sink.node_type === 'INGRESS' && sink.node_subtype.startsWith('deserialize')) ||
           (sink.analysis_snapshot || sink.code_snapshot).match(
-            /\b(unserialize|pickle\.load|yaml\.load|yaml\.loadAll|yaml\.safe_load|eval|Function\s*\(|deserialize|serde_json::from_str|serde_json::from_value|serde_json::from_slice|XStream\.fromXML|XMLDecoder\.readObject|ObjectMapper\.readValue|Kryo\.readObject|Yaml\.load)\b/i
+            /\b(unserialize|pickle\.load|yaml\.load|yaml\.loadAll|yaml\.safe_load|eval|Function\s*\(|deserialize|serde_json::from_str|serde_json::from_value|serde_json::from_slice|XStream\.fromXML|XMLDecoder\.readObject|\.readValue\s*\(|Kryo\.readObject|Yaml\.load)\b/i
           ) !== null;
 
         if (isDangerous) {
@@ -2268,7 +2268,7 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
   // Source-code fallback for Java deserialization sinks not caught by BFS
   if (findings.length === 0 && map.source_code) {
     const src502 = stripComments(map.source_code);
-    const DESER_SINK_502 = /\b(Yaml\.load|Yaml\.loadAll|XStream\.fromXML|XMLDecoder\.readObject|ObjectMapper\.readValue|Kryo\.readObject|ObjectInputStream\.readObject|readUnshared)\s*\(/i;
+    const DESER_SINK_502 = /\b(Yaml\.load|Yaml\.loadAll|XStream\.fromXML|XMLDecoder\.readObject|Kryo\.readObject|ObjectInputStream\.readObject|readUnshared)\s*\(|\.\s*readValue\s*\(/i;
     const DESER_SAFE_502 = /\benableDefaultTyping\b.*\bfalse\b|\bObjectInputFilter\b|\bvalidateObject\b|\bdefaultClassLoader\b.*\bnull\b|\bJsonTypeInfo\b/i;
     if (DESER_SINK_502.test(src502) && !DESER_SAFE_502.test(src502)) {
       const hasIngressSrc = /\b(?:request|req|httpRequest)\s*\.\s*(?:getParameter|getInputStream|getReader)\s*\(|\.readObject\s*\(/i.test(src502);
@@ -2333,6 +2333,35 @@ function verifyCWE918(map: NeuralMap): VerificationResult {
           });
         }
       }
+    }
+  }
+
+  // Source-code fallback: when the mapper doesn't emit an EXTERNAL node for HTTP calls
+  // (e.g., dynamically-resolved `client.get(url)` or indirect `http.get(url)`), fall back
+  // to scanning source_code for SSRF-indicative patterns.
+  if (findings.length === 0 && map.source_code) {
+    const src918 = stripComments(map.source_code);
+    // Direct HTTP client calls (literal API names)
+    const SSRF_SINK_DIRECT = /\b(fetch|axios\.get|axios\.post|axios\.put|axios\.delete|axios\.request|axios\(|http\.get|https\.get|http\.request|https\.request|got|got\.get|got\.post|request\.get|request\.post|urllib\.request\.urlopen|urllib2\.urlopen|requests\.get|requests\.post|requests\.put|requests\.delete|RestTemplate\.getForObject|RestTemplate\.exchange|RestTemplate\.postForObject|WebClient\.get|WebClient\.post|HttpClient\.send|HttpClient\.execute|OkHttpClient|http\.Get|http\.Post|curl_exec|file_get_contents|Net::HTTP\.get|open-uri|Faraday\.get|HTTPoison\.get|HttpClient\.GetAsync|WebRequest\.Create)\s*\(/i;
+    // Indirect HTTP client calls: require('http')/require('https') + dynamic .get/.request call
+    const hasHttpModule = /require\s*\(\s*['"]https?['"]\s*\)|from\s+['"]https?['"]/i.test(src918);
+    const hasDynamicHttpCall = /\w+\.get\s*\(\s*\w+|\w+\.request\s*\(\s*\w+/i.test(src918);
+    const hasSsrfSink = SSRF_SINK_DIRECT.test(src918) || (hasHttpModule && hasDynamicHttpCall);
+
+    const SSRF_INGRESS_918 = /\b(?:req|request|ctx)\s*\.\s*(?:headers|query|params|body|getParameter|getHeader|getQueryString)\b/i;
+    const SSRF_SAFE_918 = /\ballowlist\b|\bwhitelist\b|\bvalidateUrl\b|\bsafeUrl\b|\bisAllowed\b|\bstartsWith\s*\(\s*['"]https?:\/\/(?:api\.|internal\.)/i;
+    if (hasSsrfSink && SSRF_INGRESS_918.test(src918) && !SSRF_SAFE_918.test(src918)) {
+      findings.push({
+        source: { id: 'srcline-ssrf', label: 'user-controlled input', line: 0, code: '' },
+        sink: { id: 'srcline-ssrf-sink', label: 'HTTP client call', line: 0, code: '' },
+        missing: 'CONTROL (URL validation / allowlist)',
+        severity: 'high',
+        description: 'User-controlled input flows to an HTTP client call without URL validation. ' +
+          'An attacker can make the server request internal resources (SSRF).',
+        fix: 'Validate URLs against an allowlist of permitted domains. ' +
+          'Parse the URL with new URL() and check the hostname. ' +
+          'Never let user input directly control request destinations.',
+      });
     }
   }
 
@@ -29251,7 +29280,7 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
 
   // Crypto operations that use keys
-  const CRYPTO_OP_RE = /\b(createCipheriv|createDecipheriv|createHmac|createSign|createVerify|jwt\.sign|jwt\.verify|sign\s*\(|verify\s*\(|encrypt\s*\(|decrypt\s*\(|CryptoJS\.\w+\.encrypt|CryptoJS\.\w+\.decrypt|Cipher\.getInstance|Mac\.getInstance|Signature\.getInstance|secretbox|box\.open|nacl\.|HMAC|hmac|signWith|verifyWith)\b/i;
+  const CRYPTO_OP_RE = /\b(createCipheriv|createDecipheriv|createHmac|createSign|createVerify|jwt\.sign|jwt\.verify|sign\s*\(|verify\s*\(|encrypt\s*\(|decrypt\s*\(|CryptoJS\.\w+\.encrypt|CryptoJS\.\w+\.decrypt|Cipher\.getInstance|Mac\.getInstance|Signature\.getInstance|secretbox|box\.open|nacl\.|HMAC|hmac|signWith|verifyWith|setCipherKey|SecretKeySpec)\b/i;
 
   // Hard-coded key patterns — literal strings passed directly to crypto functions
   const HARDCODED_KEY_RE = /(?:key|secret|password|passphrase|privateKey|signingKey|encryptionKey|masterKey|hmacKey|cipherKey)\s*[:=]\s*['"`][A-Za-z0-9+/=_-]{8,}['"`]/i;
