@@ -622,8 +622,116 @@ export class MapperContext {
           // If the function was visited AND it does NOT return tainted data, remove
           // the conservative taint from the call/passthrough node.
           if (this.functionReturnTaint.has(funcNodeId) === false) {
-            lc.data_out = lc.data_out.filter(d => !d.tainted);
-            untaintedCallIds.add(lc.id);
+            // GUARD: Before removing taint, check if the function is a potential
+            // passthrough — a non-request parameter flows through to the return.
+            // The mapper doesn't propagate call-site argument taint into function
+            // parameter scopes (only HttpServletRequest/Response types are auto-tainted).
+            // So functionReturnTaint may be false even when the function passes tainted
+            // data through. Check if the function body returns a value derived from a
+            // non-request formal parameter. If so, preserve conservative taint.
+            const funcNode = nodeById.get(funcNodeId);
+            const paramNames = funcNode?.param_names;
+            let isPassthrough = false;
+            if (funcNode && paramNames && paramNames.length > 0) {
+              const snap = funcNode.analysis_snapshot || funcNode.code_snapshot || '';
+              // Identify non-request params (those that aren't HttpServletRequest/Response)
+              const REQUEST_TYPES = /\b(HttpServletRequest|ServletRequest|WebRequest|HttpRequest|HttpServletResponse|ServletResponse)\b/;
+              // Extract param declarations from the function signature
+              const sigMatch = snap.match(new RegExp(escaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]*)\\)'));
+              const sigText = sigMatch?.[1] ?? '';
+              const nonRequestParams: string[] = [];
+              for (const pn of paramNames) {
+                // Check if this parameter's type in the signature is a request type
+                const paramTypeRe = new RegExp('(\\w+(?:\\.\\w+)*)\\s+' + pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+                const ptMatch = sigText.match(paramTypeRe);
+                if (!ptMatch || !REQUEST_TYPES.test(ptMatch[1]!)) {
+                  nonRequestParams.push(pn);
+                }
+              }
+              if (nonRequestParams.length > 0) {
+                // Check if the return statement references any non-request param
+                // (directly or transitively via simple assignment chains).
+                // Look for: return <expr containing paramName>
+                // Also handle: bar = param; return bar;
+                const bodyMatch = snap.match(/\{([\s\S]*)\}/);
+                const body = bodyMatch ? bodyMatch[1]! : snap;
+                const lines = body.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('//') && !l.startsWith('*'));
+                const aliases = new Set(nonRequestParams);
+                for (let li = 0; li < lines.length; li++) {
+                  const ln = lines[li]!;
+                  // Track simple assignments: bar = param; or bar = someFunc(param);
+                  const assignMatch = ln.match(/^(?:(?:final\s+)?[\w.<>\[\]]+\s+)?(\w+)\s*=\s*(.*)/);
+                  if (assignMatch) {
+                    const lhs = assignMatch[1]!;
+                    // Handle multi-line expressions: if the RHS doesn't end with ';',
+                    // concatenate subsequent lines until we find a semicolon.
+                    // This catches patterns like: bar = \n new String(\n B64.decode(\n ... param.getBytes()));
+                    let rhs = assignMatch[2]!;
+                    if (!rhs.includes(';') && li + 1 < lines.length) {
+                      for (let ci = li + 1; ci < lines.length; ci++) {
+                        rhs += ' ' + lines[ci]!;
+                        if (lines[ci]!.includes(';')) break;
+                      }
+                    }
+                    for (const a of aliases) {
+                      if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(rhs)) {
+                        aliases.add(lhs);
+                        break;
+                      }
+                    }
+                  }
+                  // Track if/else inline assignments: if (cond) bar = param; or else bar = param;
+                  // These don't match the standard assignment regex because the line starts with if/else.
+                  const ifAssignMatch = ln.match(/(?:if\s*\([^)]*\)|else)\s+(\w+)\s*=\s*(.*)/);
+                  if (ifAssignMatch) {
+                    const lhs = ifAssignMatch[1]!;
+                    const rhs = ifAssignMatch[2]!;
+                    for (const a of aliases) {
+                      if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(rhs)) {
+                        aliases.add(lhs);
+                        break;
+                      }
+                    }
+                  }
+                  // Track ternary: bar = cond ? "safe" : param;
+                  const ternMatch = ln.match(/^(?:[\w.<>\[\]]+\s+)?(\w+)\s*=.*\?.*:(.*)/);
+                  if (ternMatch) {
+                    const lhs = ternMatch[1]!;
+                    const rhs = ternMatch[2]!;
+                    for (const a of aliases) {
+                      if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(rhs)) {
+                        aliases.add(lhs);
+                        break;
+                      }
+                    }
+                  }
+                  // Track map.put("key", param) + bar = map.get("key")
+                  const putMatch = ln.match(/(\w+)\.put\s*\(\s*"([^"]*)"\s*,\s*(\w+)\s*\)/);
+                  if (putMatch) {
+                    for (const a of aliases) {
+                      if (putMatch[3] === a) {
+                        // Mark the map+key as an alias source
+                        aliases.add(`__map_${putMatch[1]}_${putMatch[2]}`);
+                        break;
+                      }
+                    }
+                  }
+                  const getMatch = ln.match(/(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+                  if (getMatch && aliases.has(`__map_${getMatch[2]}_${getMatch[3]}`)) {
+                    aliases.add(getMatch[1]!);
+                  }
+                }
+                // Now check return statements
+                const returnMatch = body.match(/return\s+(\w+)\s*;/);
+                if (returnMatch && aliases.has(returnMatch[1]!)) {
+                  isPassthrough = true;
+                }
+              }
+            }
+            if (!isPassthrough) {
+              lc.data_out = lc.data_out.filter(d => !d.tainted);
+              untaintedCallIds.add(lc.id);
+            }
           }
           break;
         }
