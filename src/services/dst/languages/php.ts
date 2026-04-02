@@ -48,6 +48,13 @@ const DIRECT_CALLS: Record<string, CalleePattern> = {
   getopt:            { nodeType: 'INGRESS',   subtype: 'env_read',      tainted: true },
   readline:          { nodeType: 'INGRESS',   subtype: 'user_input',    tainted: true },
 
+  // Cacti / WordPress request input functions
+  get_nfilter_request_var: { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  get_filter_request_var:  { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  apache_request_headers:  { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  getallheaders:           { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+  filter_input:            { nodeType: 'INGRESS', subtype: 'http_request', tainted: true },
+
   // Procedural mysqli (these are direct function calls, not OOP method calls)
   mysqli_query:        { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },
   mysqli_real_query:   { nodeType: 'STORAGE',   subtype: 'sql_query',    tainted: false },

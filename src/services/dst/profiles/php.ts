@@ -771,6 +771,10 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
           callResolution.subtype === 'encode') {
         return [];
       }
+      // If the callee is a known tainted source (e.g., get_nfilter_request_var), treat output as tainted
+      if (callResolution && callResolution.tainted) {
+        return [{ type: 'direct', variable: expr.text?.slice(0, 100) || 'call', line: expr.startPosition.row + 1 }];
+      }
       // For any other call, check arguments for taint
       const sources: TaintSourceResult[] = [];
       const args = expr.childForFieldName('arguments');

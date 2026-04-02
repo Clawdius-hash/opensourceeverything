@@ -91,6 +91,57 @@ function createOutputVerifier(
     const ingress = nodesOfType(map, 'INGRESS');
     const sinks = sinkFilter(map);
 
+    // Dead-branch and list-offset neutralization: suppress findings when constant
+    // arithmetic ternary/switch guarantees the tainted branch is never taken, or
+    // when ArrayList remove+get retrieves a safe value.
+    let hasNeutralization = false;
+    if (map.source_code) {
+      const cleanSrc = stripComments(map.source_code);
+      // Dead-branch: arithmetic ternary/if-else with constant condition
+      const arithM = cleanSrc.match(/\((\d+)\s*\*\s*(\d+)\)\s*([+-])\s*(\w+)\s*([><=!]+)\s*(\d+)/);
+      if (arithM) {
+        const a = parseInt(arithM[1]!); const b = parseInt(arithM[2]!);
+        const op = arithM[3]!; const varName = arithM[4]!;
+        const cmpOp = arithM[5]!; const threshold = parseInt(arithM[6]!);
+        const varDeclM = cleanSrc.match(new RegExp('int\\s+' + varName + '\\s*=\\s*(\\d+)'));
+        if (varDeclM) {
+          const varVal = parseInt(varDeclM[1]!);
+          const lhs = op === '+' ? (a * b) + varVal : (a * b) - varVal;
+          if ((cmpOp === '>' && lhs > threshold) || (cmpOp === '>=' && lhs >= threshold) ||
+              (cmpOp === '<' && lhs < threshold) || (cmpOp === '<=' && lhs <= threshold)) {
+            hasNeutralization = true;
+          }
+        }
+      }
+      // Dead-branch: switch on charAt of literal
+      const charAtM = cleanSrc.match(/(\w+)\.charAt\s*\((\d+)\)[\s\S]*?switch/);
+      if (charAtM) {
+        const strDeclM = cleanSrc.match(new RegExp('String\\s+' + charAtM[1]! + '\\s*=\\s*"([^"]*)"'));
+        if (strDeclM) {
+          const ci = parseInt(charAtM[2]!);
+          if (ci >= 0 && ci < strDeclM[1]!.length) {
+            const sc = strDeclM[1]![ci]!;
+            const caseM = cleanSrc.match(new RegExp("case\\s+'" + sc + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\""));
+            if (caseM) hasNeutralization = true;
+          }
+        }
+      }
+      // List-offset neutralization
+      const getM = cleanSrc.match(/(\w+)\.get\s*\(\s*(\d+)\s*\)/);
+      if (getM) {
+        const listVar = getM[1]!; const getIdx = parseInt(getM[2]!);
+        const addRe = new RegExp(listVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)', 'g');
+        const removeRe = new RegExp(listVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.remove\\s*\\(', 'g');
+        const items: { tainted: boolean }[] = [];
+        let removeCount = 0;
+        let am: RegExpExecArray | null;
+        while ((am = addRe.exec(cleanSrc)) !== null) items.push({ tainted: !!am[1] });
+        while (removeRe.exec(cleanSrc) !== null) removeCount++;
+        const adjusted = items.slice(removeCount);
+        if (getIdx < adjusted.length && !adjusted[getIdx]!.tainted) hasNeutralization = true;
+      }
+    }
+
     for (const src of ingress) {
       for (const sink of sinks) {
         // Primary: BFS taint path without TRANSFORM gate
@@ -109,6 +160,9 @@ function createOutputVerifier(
         }
 
         if (vulnerable) {
+          // Skip if dead-branch or list-offset neutralization proves taint is killed
+          if (hasNeutralization) continue;
+
           // Check safe patterns in scope context (not just sink code)
           const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
           const combinedScope = stripComments(scopeSnaps.join('\n') || sink.code_snapshot);

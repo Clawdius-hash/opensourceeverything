@@ -100,15 +100,16 @@ function includeTransformNodes(map: NeuralMap): NeuralMapNode[] {
   );
 }
 
-/** TRANSFORM nodes performing expression language evaluation */
+/** TRANSFORM or EXTERNAL nodes performing expression language evaluation */
 function expressionEvalNodes(map: NeuralMap): NeuralMapNode[] {
   return map.nodes.filter(n =>
-    n.node_type === 'TRANSFORM' &&
+    (n.node_type === 'TRANSFORM' || n.node_type === 'EXTERNAL') &&
     (n.node_subtype.includes('expression') || n.node_subtype.includes('template') ||
      n.node_subtype.includes('ognl') || n.node_subtype.includes('spel') ||
+     n.node_subtype.includes('jndi_lookup') || n.node_subtype.includes('expression_eval') ||
      n.attack_surface.includes('expression_eval') ||
      n.code_snapshot.match(
-       /\b(OGNL|SpEL|MVEL|JEXL|ELProcessor|ExpressionFactory|evalExpression|templateEngine)\b/i
+       /\b(OGNL|SpEL|MVEL|JEXL|ELProcessor|ExpressionFactory|evalExpression|templateEngine|parseExpression|SpelExpressionParser|InitialContext\.lookup|StringSubstitutor)\b/i
      ) !== null)
   );
 }

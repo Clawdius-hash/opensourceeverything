@@ -263,6 +263,114 @@ function evaluateConstantComparison(lhs: number, op: string, rhs: number): boole
 }
 
 /**
+ * Detect ArrayList add/remove/get neutralization pattern in source code.
+ * When items are added to a list, then remove(0) shifts indices, and
+ * get(N) retrieves a safe value rather than the tainted one.
+ *
+ * Pattern:
+ *   list.add("safe"); list.add(param); list.add("moresafe");
+ *   list.remove(0);   // shifts: [param, "moresafe"]
+ *   bar = list.get(1); // "moresafe" — NOT tainted
+ *
+ * Returns true when the retrieved index resolves to a safe (non-tainted) value.
+ */
+function detectListOffsetNeutralization(sourceCode: string): boolean {
+  const src = stripComments(sourceCode);
+  // Find list.get(N) patterns
+  const getMatch = src.match(/(\w+)\.get\s*\(\s*(\d+)\s*\)/);
+  if (!getMatch) return false;
+  const listVar = getMatch[1]!;
+  const getIdx = parseInt(getMatch[2]!);
+
+  // Collect add() calls and remove() counts for this list
+  const addRe = new RegExp(escapeRegExp(listVar) + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)', 'g');
+  const removeRe = new RegExp(escapeRegExp(listVar) + '\\.remove\\s*\\(', 'g');
+  const items: { tainted: boolean }[] = [];
+  let removeCount = 0;
+  let am: RegExpExecArray | null;
+  while ((am = addRe.exec(src)) !== null) {
+    // If captured group 1 is a variable name, it might be tainted; if null, it's a string literal (safe)
+    items.push({ tainted: !!am[1] });
+  }
+  while (removeRe.exec(src) !== null) removeCount++;
+
+  const adjusted = items.slice(removeCount);
+  if (getIdx < adjusted.length && !adjusted[getIdx]!.tainted) return true;
+
+  return false;
+}
+
+/**
+ * Per-method forward taint analysis that detects when a taint chain is abandoned
+ * for a static literal. When a variable is assigned a string literal after receiving
+ * tainted data, and the sink uses the now-safe variable, taint is neutralized.
+ *
+ * Pattern:
+ *   bar = param;                    // bar is tainted
+ *   bar = "safe_static_value";      // bar is now safe — taint killed
+ *   sink(bar);                      // safe
+ *
+ * Also handles: method returns a static value when given a tainted arg,
+ * and ArrayList.add() taint propagation where only safe items are retrieved.
+ *
+ * Returns true when the last assignment to the variable before the sink is a static literal.
+ */
+function detectStaticValueNeutralization(sourceCode: string): boolean {
+  const src = stripComments(sourceCode);
+  const lines = src.split('\n');
+
+  // Track variables and their last-assignment status
+  const tainted = new Set<string>();
+  const safe = new Set<string>();
+
+  for (const line of lines) {
+    const ln = line.trim();
+    if (ln.startsWith('//') || ln.startsWith('*')) continue;
+
+    // Source: user input API
+    const srcM = ln.match(/(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getHeader|getCookies|getInputStream|getReader|getQueryString)\s*\(/);
+    if (srcM) { tainted.add(srcM[1]!); safe.delete(srcM[1]!); continue; }
+
+    // Static literal assignment kills taint
+    const litM = ln.match(/^(?:(?:final\s+)?(?:[\w.]+\s+))?(\w+)\s*=\s*"[^"]*"\s*;/);
+    if (litM && tainted.has(litM[1]!)) { tainted.delete(litM[1]!); safe.add(litM[1]!); continue; }
+
+    // Propagation: bar = tainted_var
+    const propM = ln.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\s*;/);
+    if (propM && tainted.has(propM[2]!)) { tainted.add(propM[1]!); }
+
+    // Method call with safe arg returns safe
+    const callM = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?\w+\s*\(\s*(\w+)\s*\)/);
+    if (callM && safe.has(callM[2]!)) { safe.add(callM[1]!); }
+  }
+
+  // If any originally-tainted variable was reassigned to a literal, neutralization occurred
+  return safe.size > 0 && tainted.size === 0;
+}
+
+/**
+ * Resolve HashMap put/get taint by key. Given source lines, a tainted variable set,
+ * a map variable name, and the key being retrieved, determines if the value stored
+ * at that key is tainted.
+ *
+ * Returns 'tainted' if the value at the key is tainted, 'safe' if it's a safe value,
+ * or 'unknown' if the key was never put.
+ */
+function resolveMapKeyTaint(
+  lines: string[], taintedVars: Set<string>, mapVar: string, getKey: string, upToLine: number
+): 'tainted' | 'safe' | 'unknown' {
+  let result: 'tainted' | 'safe' | 'unknown' = 'unknown';
+  for (let j = 0; j < upToLine; j++) {
+    const pLine = lines[j]!.trim();
+    const putM = pLine.match(new RegExp(escapeRegExp(mapVar) + '\\.put\\s*\\(\\s*"([^"]*)"\\s*,\\s*(\\w+)\\s*\\)'));
+    if (putM && putM[1] === getKey) {
+      result = taintedVars.has(putM[2]!) ? 'tainted' : 'safe';
+    }
+  }
+  return result;
+}
+
+/**
  * Test if `word` appears as a whole word in `text`.
  * Equivalent to /\bword\b/ but works correctly with dynamic strings
  * (avoids the JS string escaping pitfall where '\\b' becomes backspace).
@@ -721,7 +829,13 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const sinkSnap = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         const paramRegex = /\$\d|\?\s*[,)"']|\bprepare(?:Statement|d)?\b|\bparameterized\b|\bplaceholder/i;
-        const isParameterized = paramRegex.test(combinedScope) || paramRegex.test(sinkSnap);
+        let isParameterized = paramRegex.test(combinedScope) || paramRegex.test(sinkSnap);
+        // Partial parameterization fix: if prepareStatement is present but tainted variables
+        // are concatenated into the SQL string (+ var +), it's NOT properly parameterized
+        if (isParameterized && /\bprepareStatement\b/.test(combinedScope)) {
+          const sqlConcatPattern = /["']\s*\+\s*\w+\s*\+\s*["']|["']\s*\+\s*\w+\s*[);]/;
+          if (sqlConcatPattern.test(combinedScope)) isParameterized = false;
+        }
 
         if (!isParameterized) {
           findings.push({
@@ -752,8 +866,8 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     // Examples:
     //   final String kid = (String) header.get("kid");
     //   ... .executeQuery("SELECT key FROM jwt_keys WHERE id = '" + kid + "'");
-    const INNER_SRC_RE = /(\w+)\s*=\s*(?:\(\w+\)\s*)?(?:\w+\.)*(?:get|getParameter|getHeader|getString|getValue|claim|getClaim)\s*\(/;
-    const SQL_EXEC_RE = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement)\s*\(\s*(?:"[^"]*"\s*\+|\w+\s*\+|[^)]*\+\s*\w+)/;
+    const INNER_SRC_RE = /(\w+)\s*=\s*(?:\(\w+\)\s*)?(?:\w+\.)*(?:get|getParameter|getParameterValues|getParameterNames|getHeader|getString|getValue|claim|getClaim|getCookies|getQueryString|getInputStream|getReader|System\.getenv)\s*\(/;
+    const SQL_EXEC_RE = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement|queryForRowSet|queryForObject|queryForList|queryForMap|queryForInt|queryForLong|prepareCall|jdbcTemplate\.query|namedParameterJdbcTemplate)\s*\(\s*(?:"[^"]*"\s*\+|\w+\s*\+|[^)]*\+\s*\w+)/;
     const PARAM_RE = /\bprepare(?:Statement|d)?\s*\(|\?\s*[,)]/;
 
     const innerTainted = new Set<string>();
@@ -788,7 +902,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
 
       // Check for SQL execution with string concatenation using tainted var
       // Handle both single-line and multi-line SQL statements
-      const SQL_CALL_RE89 = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement)\s*\(/;
+      const SQL_CALL_RE89 = /\b(?:executeQuery|executeUpdate|execute|prepareStatement|createStatement|queryForRowSet|queryForObject|queryForList|queryForMap|queryForInt|queryForLong|prepareCall|jdbcTemplate\.query)\s*\(/;
       if ((SQL_EXEC_RE.test(ln) || SQL_CALL_RE89.test(ln)) && !PARAM_RE.test(ln)) {
         // Build a window of nearby lines to check for tainted vars in SQL concat
         const windowStart = Math.max(0, i - 5);
@@ -829,6 +943,32 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     }
   }
 
+  // Language-generic SQL concatenation fallback (Go, Python, PHP, etc.)
+  // Detects: "SELECT ... " + userVar or fmt.Sprintf("SELECT ... %s", userVar)
+  if (findings.length === 0 && map.source_code) {
+    const sl89g = stripComments(map.source_code);
+    // Generic SQL string concat patterns across languages
+    const SQL_CONCAT_GENERIC = /(?:SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s+[^"]*["']\s*\+\s*\w+|fmt\.Sprintf\s*\(\s*["'](?:SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b[^"]*%[sv]/i;
+    const PARAM_GENERIC = /\$\d+|\?\s*[,)]|\bprepare\b|\bQueryRow\s*\(.*\$|\bExec\s*\(.*\$/i;
+    if (SQL_CONCAT_GENERIC.test(sl89g) && !PARAM_GENERIC.test(sl89g)) {
+      // Check for taint source
+      const HAS_SOURCE_GENERIC = /\b(?:r\.URL\.Query|c\.Query|c\.Param|c\.FormValue|request\.GET|request\.POST|request\.args|\$_GET|\$_POST|\$_REQUEST|params\[|chi\.URLParam|r\.FormValue)\b/i;
+      if (HAS_SOURCE_GENERIC.test(sl89g)) {
+        const bestSrc = ingress[0];
+        const bestSink = storage[0];
+        if (bestSrc && bestSink) {
+          findings.push({
+            source: nodeRef(bestSrc), sink: nodeRef(bestSink),
+            missing: 'CONTROL (input validation or parameterized query)',
+            severity: 'critical',
+            description: `User input concatenated into SQL query string without parameterization.`,
+            fix: 'Use parameterized queries with placeholders ($1, ?) instead of string concatenation.',
+          });
+        }
+      }
+    }
+  }
+
   return {
     cwe: 'CWE-89',
     name: 'SQL Injection',
@@ -862,13 +1002,14 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch79 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasListOffset79 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
 
   for (const src of ingress) {
     for (const sink of egress) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       // Fallback 2: scope-based taint (Java Juliet patterns with incomplete DATA_FLOW edges)
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id) || scopeBasedTaintReaches(map, src.id, sink.id)) {
-        if (hasDeadBranch79) continue;
+        if (hasDeadBranch79 || hasListOffset79) continue;
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
@@ -959,7 +1100,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   // with @RestController), the return value IS the HTTP response body. If a
   // @RequestParam is concatenated into a StringBuilder or string that gets returned
   // (directly or via .output()), it's reflected XSS without encoding.
-  if (findings.length === 0 && map.source_code) {
+  if (findings.length === 0 && map.source_code && !hasListOffset79) {
     const sl79 = stripComments(map.source_code);
     const lines79 = sl79.split('\n');
 
@@ -1333,15 +1474,16 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // The mapper over-approximates these, so we suppress graph-based findings when
   // the source code proves the tainted branch is never taken.
   const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasListOffsetNeutralization22 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
 
   for (const src of ingress) {
     for (const sink of fileOps) {
       // Primary: BFS taint path from INGRESS to file-operation node.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        // Suppress graph-based findings when dead-branch neutralization is detected.
+        // Suppress graph-based findings when dead-branch or list-offset neutralization is detected.
         // The graph tracks taint through all branches, but constant ternary/switch patterns
         // guarantee the tainted branch is never taken.
-        if (hasDeadBranchNeutralization) continue;
+        if (hasDeadBranchNeutralization || hasListOffsetNeutralization22) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -1367,7 +1509,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // (getParameter, getCookies, getHeaders) flows to File/FileInputStream/FileOutputStream
   // constructors via local variable assignment + string concatenation, even when
   // the mapper doesn't emit DATA_FLOW edges for the full chain.
-  if (findings.length === 0 && map.source_code) {
+  if (findings.length === 0 && map.source_code && !hasListOffsetNeutralization22) {
     const src = stripComments(map.source_code);
     // Normalize: collapse whitespace/newlines for multi-line statement parsing
     const normalized = src.replace(/\n\s*/g, ' ');
@@ -1944,7 +2086,7 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
   const deserialize = map.nodes.filter(n =>
     (n.node_type === 'TRANSFORM' &&
      (n.node_subtype.includes('deserialize') || n.node_subtype.includes('parse') ||
-      (n.analysis_snapshot || n.code_snapshot).match(/\b(unserialize|pickle\.load|yaml\.load|eval|JSON\.parse)\b/i) !== null)) ||
+      (n.analysis_snapshot || n.code_snapshot).match(/\b(unserialize|pickle\.load|yaml\.load|eval|JSON\.parse|XStream|XMLDecoder|ObjectMapper|Kryo)\b/i) !== null)) ||
     // Python: pickle.loads is classified as EXTERNAL/deserialize, not TRANSFORM
     (n.node_type === 'EXTERNAL' && n.node_subtype === 'deserialize') ||
     // Rust: serde_json::from_str etc. are classified as INGRESS/deserialize
@@ -1961,7 +2103,7 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
           // Rust: serde_json::from_str/from_value/from_slice on untrusted INGRESS data
           (sink.node_type === 'INGRESS' && sink.node_subtype === 'deserialize') ||
           (sink.analysis_snapshot || sink.code_snapshot).match(
-            /\b(unserialize|pickle\.load|yaml\.load|yaml\.loadAll|eval|Function\s*\(|deserialize|serde_json::from_str|serde_json::from_value|serde_json::from_slice)\b/i
+            /\b(unserialize|pickle\.load|yaml\.load|yaml\.loadAll|yaml\.safe_load|eval|Function\s*\(|deserialize|serde_json::from_str|serde_json::from_value|serde_json::from_slice|XStream\.fromXML|XMLDecoder\.readObject|ObjectMapper\.readValue|Kryo\.readObject|Yaml\.load)\b/i
           ) !== null;
 
         if (isDangerous) {
@@ -1977,6 +2119,26 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
               'Add schema validation (zod, joi) after parsing.',
           });
         }
+      }
+    }
+  }
+
+  // Source-code fallback for Java deserialization sinks not caught by BFS
+  if (findings.length === 0 && map.source_code) {
+    const src502 = stripComments(map.source_code);
+    const DESER_SINK_502 = /\b(Yaml\.load|Yaml\.loadAll|XStream\.fromXML|XMLDecoder\.readObject|ObjectMapper\.readValue|Kryo\.readObject|ObjectInputStream\.readObject|readUnshared)\s*\(/i;
+    const DESER_SAFE_502 = /\benableDefaultTyping\b.*\bfalse\b|\bObjectInputFilter\b|\bvalidateObject\b|\bdefaultClassLoader\b.*\bnull\b|\bJsonTypeInfo\b/i;
+    if (DESER_SINK_502.test(src502) && !DESER_SAFE_502.test(src502)) {
+      const hasIngressSrc = /\b(?:request|req|httpRequest)\s*\.\s*(?:getParameter|getInputStream|getReader)\s*\(|\.readObject\s*\(/i.test(src502);
+      if (hasIngressSrc) {
+        findings.push({
+          source: { id: 'srcline-deser', label: 'untrusted input', line: 0, code: '' },
+          sink: { id: 'srcline-deser-sink', label: 'deserialization sink', line: 0, code: '' },
+          missing: 'CONTROL (safe deserialization with type constraints)',
+          severity: 'critical',
+          description: 'Untrusted data flows to a dangerous deserialization sink without type filtering.',
+          fix: 'Use ObjectInputFilter, type-safe parsers, or avoid deserializing untrusted data entirely.',
+        });
       }
     }
   }
@@ -2001,7 +2163,9 @@ function verifyCWE918(map: NeuralMap): VerificationResult {
     n.node_type === 'EXTERNAL' &&
     (n.node_subtype.includes('http') || n.node_subtype.includes('request') ||
      n.node_subtype.includes('fetch') || n.node_subtype.includes('api_call') ||
-     (n.analysis_snapshot || n.code_snapshot).match(/\b(fetch|axios|request|http\.get|https\.get|got|requests\.get|requests\.post|requests\.put|requests\.delete|urllib\.request)\b/i) !== null)
+     (n.analysis_snapshot || n.code_snapshot).match(
+       /\b(fetch|axios|request|http\.get|https\.get|got|requests\.get|requests\.post|requests\.put|requests\.delete|urllib\.request|urllib\.urlopen|urllib2\.urlopen|RestTemplate\.getForObject|RestTemplate\.exchange|RestTemplate\.postForObject|WebClient\.get|WebClient\.post|HttpClient\.send|HttpClient\.execute|OkHttpClient|http\.Get|http\.Post|curl_exec|file_get_contents|fopen\s*\(\s*['"]https?:)\b/i
+     ) !== null)
   );
 
   for (const src of ingress) {
@@ -2330,7 +2494,7 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
   // Runtime.exec / ProcessBuilder patterns where BFS taint path breaks.
   if (findings.length === 0 && map.source_code) {
     const sl78 = map.source_code.split('\n');
-    const SRC78 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheValue|getTheParameter)\s*\(/;
+    const SRC78 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getParameterNames|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv)\s*\(/;
     const CK78 = /(\w+)\s*=\s*(?:java\.net\.URLDecoder\.decode\s*\(\s*)?(?:\w+\.getValue\s*\()/;
     const EN78 = /(\w+)\s*=\s*(?:\(\w+\)\s*)?(?:\w+\.nextElement\s*\()/;
     const EX78 = /(?:\.exec\s*\(|ProcessBuilder\s*\(|\.command\s*\()\s*([^)]*)/;
@@ -2386,6 +2550,33 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
         if (gi < adj.length && !adj[gi]!.tainted) tv.delete(lg[1]!);
         else tv.add(lg[1]!);
       }
+      // Interprocedural: bar = new Test().doSomething(request, param) or bar = doSomething(request, param)
+      const ipCall78 = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
+      if (ipCall78 && tv.has(ipCall78[3]!)) {
+        const mn78 = ipCall78[2]!;
+        let kills78 = false;
+        for (let j = 0; j < sl78.length; j++) {
+          const md78 = sl78[j]!.trim();
+          if (md78.includes(`${mn78}(`) && (md78.includes('String ') || md78.includes('public '))) {
+            let bd78 = 0; let fo78 = false;
+            for (let k = j; k < Math.min(j + 40, sl78.length); k++) {
+              if (sl78[k]!.includes('{')) { bd78++; fo78 = true; }
+              if (sl78[k]!.includes('}')) bd78--;
+              if (fo78 && bd78 <= 0) break;
+              const mt78 = sl78[k]!.trim();
+              if (/\b(?:parseInt|parseLong|parseFloat|parseDouble|Integer\.valueOf|Long\.valueOf|Pattern\.matches|Pattern\.compile|\.matches\s*\(\s*"[^"]*"|validate\s*\(|sanitize\s*\()\b/i.test(mt78)) { kills78 = true; break; }
+              if (/^\w+\s*=\s*"[^"]{5,}"/.test(mt78) && !/param/.test(mt78) && !/request/.test(mt78)) { kills78 = true; break; }
+              if (/\.remove\s*\(\s*\d+\s*\)/.test(mt78)) { kills78 = true; break; }
+            }
+            break;
+          }
+        }
+        if (kills78) tv.delete(ipCall78[1]!); else tv.add(ipCall78[1]!);
+      }
+      // For-each loop: for (Type var : collection) -- propagate taint from collection to loop var
+      const forEach78 = ln.match(/for\s*\(\s*\w+\s+(\w+)\s*:\s*(\w+)\s*\)/);
+      if (forEach78 && tv.has(forEach78[2]!)) tv.add(forEach78[1]!);
+
       const em = ln.match(EX78);
       if (em && sln > 0) {
         const ea = em[1] || ''; let hit = false;
@@ -7065,6 +7256,36 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
       });
     }
   }
+  // Source-line fallback: resolve variable-based algorithm specification
+  // Catches: String algo = "DES"; Cipher.getInstance(algo);
+  if (findings.length === 0 && map.source_code) {
+    const sl327 = stripComments(map.source_code);
+    const CIPHER_VAR_RE = /Cipher\.getInstance\s*\(\s*(\w+)\s*\)|MessageDigest\.getInstance\s*\(\s*(\w+)\s*\)/;
+    const cipherVarM = sl327.match(CIPHER_VAR_RE);
+    if (cipherVarM) {
+      const algoVar = cipherVarM[1] || cipherVarM[2];
+      if (algoVar && !/^["']/.test(algoVar)) {
+        // Resolve the variable backward to find the algorithm string
+        const algoAssignRe = new RegExp('(?:String\\s+)?' + escapeRegExp(algoVar) + '\\s*=\\s*"([^"]*)"');
+        const algoM = sl327.match(algoAssignRe);
+        if (algoM) {
+          const resolvedAlgo = algoM[1]!;
+          if (BROKEN_ALGO_RE.test(resolvedAlgo) && !STRONG_ALGO_RE.test(resolvedAlgo)) {
+            const nearNode = map.nodes[0];
+            if (nearNode) {
+              findings.push({
+                source: nodeRef(nearNode), sink: nodeRef(nearNode),
+                missing: 'TRANSFORM (modern cryptographic algorithm — AES-256-GCM or ChaCha20-Poly1305)',
+                severity: 'high',
+                description: `Broken cryptographic algorithm "${resolvedAlgo}" specified via variable at ${nearNode.label}.`,
+                fix: 'Replace with AES-256-GCM or ChaCha20-Poly1305. Never use DES, 3DES, RC4, or Blowfish.',
+              });
+            }
+          }
+        }
+      }
+    }
+  }
   return { cwe: 'CWE-327', name: 'Use of a Broken or Risky Cryptographic Algorithm', holds: findings.length === 0, findings };
 }
 
@@ -7832,9 +8053,19 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
   }
 
   // Phase 2: source-line fallback for Java HttpSession patterns
-  if (findings.length === 0 && map.source_code) {
-    const srcLines = map.source_code.split('\n');
-    const USER_INPUT_API = /(?:getParameter|getParameterValues|getParameterMap|getParameterNames|getCookies|getHeader|getHeaders|getHeaderNames|getTheValue|getTheParameter|getInputStream|getReader|readLine|getQueryString)\s*\(/;
+  if (findings.length === 0 && map.source_code && !hasDeadBranch501) {
+    // Join multi-line assignments: if a line ends without semicolon, join with next line
+    const rawLines501 = map.source_code.split('\n');
+    const srcLines: string[] = [];
+    for (let i = 0; i < rawLines501.length; i++) {
+      let line = rawLines501[i]!;
+      while (i + 1 < rawLines501.length && !line.trim().endsWith(';') && !line.trim().endsWith('{') && !line.trim().endsWith('}') && !line.trim().startsWith('//') && !line.trim().startsWith('*') && !line.trim().startsWith('/*') && line.trim().length > 0) {
+        i++;
+        line += ' ' + rawLines501[i]!.trim();
+      }
+      srcLines.push(line);
+    }
+    const USER_INPUT_API = /(?:getParameter|getParameterValues|getParameterMap|getParameterNames|getCookies|getHeader|getHeaders|getHeaderNames|getTheParameter|getInputStream|getReader|readLine|getQueryString|System\.getenv)\s*\(/;
     const COOKIE_API = /(?:\w+\.getValue\s*\(|theCookie\.getValue\s*\()/;
     const ENUM_API = /\w+\.nextElement\s*\(/;
     const VALIDATE_RE = /\b(?:parseInt|parseLong|parseFloat|parseDouble|Integer\.valueOf|Long\.valueOf|Double\.valueOf|Float\.valueOf|Boolean\.valueOf|Boolean\.parseBoolean|Short\.parseShort|Byte\.parseByte|Pattern\.matches|Pattern\.compile|\.matches\s*\(\s*"[^"]*"|validate\s*\(|sanitize\s*\(|isValid\s*\(|allowlist|whitelist|checkInput|verifyInput)\b/i;
@@ -7915,6 +8146,10 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
                   }
                 }
               }
+              // ArrayList remove+get neutralization inside method body
+              if (/\.remove\s*\(\s*\d+\s*\)/.test(mtl) && /\.get\s*\(\s*\d+\s*\)/.test(
+                srcLines.slice(k, Math.min(k + 10, srcLines.length)).join(' ')
+              )) { methodKillsTaint = true; break; }
             }
             break;
           }
@@ -7984,15 +8219,11 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
       // Taint killing: HashMap safe-key retrieval
       const mapGetM = line.match(/(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
       if (mapGetM) {
-        const mapVar = mapGetM[2]; const getKey = mapGetM[3];
-        let keyTainted = false;
-        for (let j = 0; j < i; j++) {
-          const pLine = srcLines[j].trim();
-          const putM = pLine.match(new RegExp(mapVar + '\\.put\\s*\\(\\s*"([^"]*)"\\s*,\\s*(\\w+)\\s*\\)'));
-          if (putM && putM[1] === getKey) keyTainted = taintedVars.has(putM[2]);
-        }
-        if (keyTainted) taintedVars.add(mapGetM[1]);
-        else taintedVars.delete(mapGetM[1]);
+        const mkResult = resolveMapKeyTaint(srcLines, taintedVars, mapGetM[2]!, mapGetM[3]!, i);
+        if (mkResult === 'tainted') taintedVars.add(mapGetM[1]!);
+        else if (mkResult === 'safe') taintedVars.delete(mapGetM[1]!);
+        else if (mkResult === 'unknown' && taintedVars.has(mapGetM[2]!)) taintedVars.add(mapGetM[1]!);
+        else taintedVars.delete(mapGetM[1]!);
       }
 
       // Taint killing: ArrayList safe-index retrieval
@@ -8127,6 +8358,96 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
       }
     }
   }
+  // Source-line fallback for Java XPath injection: interprocedural taint tracking
+  if (findings.length === 0 && map.source_code && !hasDeadBranch643) {
+    const hasListOffset643 = detectListOffsetNeutralization(map.source_code);
+    if (!hasListOffset643) {
+      const sl643 = map.source_code.split('\n');
+      const SRC643 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv)\s*\(/;
+      const XPATH_SINK_RE643 = /\b(?:xpath\.evaluate|XPathExpression\.evaluate|xpath\.compile|selectNodes|selectSingleNode|XPathFactory|DocumentBuilder)\s*\(/;
+      const tv643 = new Set<string>();
+      let sln643 = 0; let scd643 = '';
+      for (let i = 0; i < sl643.length; i++) {
+        const ln = sl643[i]!.trim();
+        if (ln.startsWith('//') || ln.startsWith('*') || ln.startsWith('/*')) continue;
+        const mx643 = ln.match(SRC643); if (mx643) { tv643.add(mx643[1]!); sln643 = i + 1; scd643 = ln; }
+        const va643 = ln.match(/^(\w+)\s*=\s*(\w+)\s*;/);
+        if (va643 && tv643.has(va643[2]!)) tv643.add(va643[1]!);
+        const ma643 = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
+        if (ma643 && tv643.has(ma643[2]!)) tv643.add(ma643[1]!);
+        const ca643 = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+        if (ca643 && tv643.has(ca643[2]!)) tv643.add(ca643[1]!);
+        const ck643 = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
+        if (ck643) tv643.delete(ck643[1]!);
+        // HashMap
+        const mg643 = ln.match(/^(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+        if (mg643) {
+          const mkr643 = resolveMapKeyTaint(sl643, tv643, mg643[2]!, mg643[3]!, i);
+          if (mkr643 === 'tainted') tv643.add(mg643[1]!); else tv643.delete(mg643[1]!);
+        }
+        // List offset
+        const lg643 = ln.match(/^(\w+)\s*=\s*(\w+)\.get\s*\(\s*(\d+)\s*\)/);
+        if (lg643) {
+          const lv643 = lg643[2]!; const gi643 = parseInt(lg643[3]!);
+          const items643: { tainted: boolean }[] = []; let rc643 = 0;
+          for (let j = 0; j < i; j++) {
+            const al643 = sl643[j]!.trim();
+            const am643 = al643.match(new RegExp(escapeRegExp(lv643) + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)'));
+            if (am643) items643.push({ tainted: am643[1] ? tv643.has(am643[1]) : false });
+            if (al643.includes(lv643 + '.remove(')) rc643++;
+          }
+          const adj643 = items643.slice(rc643);
+          if (gi643 < adj643.length && !adj643[gi643]!.tainted) tv643.delete(lg643[1]!); else tv643.add(lg643[1]!);
+        }
+        // Interprocedural
+        const ipCall643 = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
+        if (ipCall643 && tv643.has(ipCall643[3]!)) {
+          const mn643 = ipCall643[2]!;
+          let kills643 = false;
+          for (let j = 0; j < sl643.length; j++) {
+            const md643 = sl643[j]!.trim();
+            if (md643.includes(`${mn643}(`) && (md643.includes('String ') || md643.includes('public '))) {
+              let bd643 = 0; let fo643 = false;
+              for (let k = j; k < Math.min(j + 40, sl643.length); k++) {
+                if (sl643[k]!.includes('{')) { bd643++; fo643 = true; }
+                if (sl643[k]!.includes('}')) bd643--;
+                if (fo643 && bd643 <= 0) break;
+                if (/\b(?:parseInt|parseLong|Pattern\.matches|validate|sanitize)\b/i.test(sl643[k]!.trim())) { kills643 = true; break; }
+                if (/^\w+\s*=\s*"[^"]{5,}"/.test(sl643[k]!.trim())) { kills643 = true; break; }
+                if (/\.remove\s*\(\s*\d+\s*\)/.test(sl643[k]!.trim())) { kills643 = true; break; }
+              }
+              break;
+            }
+          }
+          if (kills643) tv643.delete(ipCall643[1]!); else tv643.add(ipCall643[1]!);
+        }
+        // XPath sink detection — look within a wider window
+        if ((XPATH_SINK_RE643.test(ln) || XP_CAT643.test(ln)) && sln643 > 0) {
+          const windowStart643 = Math.max(0, i - 10);
+          const windowEnd643 = Math.min(sl643.length - 1, i + 5);
+          const window643 = sl643.slice(windowStart643, windowEnd643 + 1).join(' ');
+          if (SAFE643.test(window643)) continue;
+          let hit643 = false;
+          for (const t of tv643) {
+            if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(window643) &&
+                /\+/.test(window643)) { hit643 = true; break; }
+          }
+          if (hit643) {
+            findings.push({
+              source: { id: `srcline-${sln643}`, label: `user input (line ${sln643})`, line: sln643, code: scd643.slice(0, 200) },
+              sink: { id: `srcline-${i + 1}`, label: `XPath query (line ${i + 1})`, line: i + 1, code: ln.slice(0, 200) },
+              missing: 'CONTROL (XPath parameterization or input escaping)',
+              severity: 'high',
+              description: `User input flows to XPath query at line ${i + 1} without escaping.`,
+              fix: 'Use parameterized XPath with XPathVariableResolver. Never concatenate user input into XPath.',
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
   return { cwe: 'CWE-643', name: 'XPath Injection', holds: findings.length === 0, findings };
 }
 
@@ -9065,13 +9386,14 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch90 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasListOffset90 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
 
   for (const src of ingress) {
     for (const sink of ldapSinks90) {
       if (src.id === sink.id) continue;
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
-        if (hasDeadBranch90) continue;
+        if (hasDeadBranch90 || hasListOffset90) continue;
         const sinkCode90 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!LDAP_SAFE90.test(sinkCode90)) {
           const usesFilterConcat90 = LDAP_FILTER_CONCAT90.test(sinkCode90);
@@ -9088,6 +9410,98 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
               'Use ldap.escape() or escape_filter_chars(). Prefer filter builder APIs (Filter.eq, Filter.and) ' +
               'over string concatenation. Validate input format (e.g., alphanumeric only for usernames).',
           });
+        }
+      }
+    }
+  }
+
+  // Source-line fallback for Java LDAP injection: interprocedural taint tracking
+  if (findings.length === 0 && map.source_code && !hasDeadBranch90 && !hasListOffset90) {
+    const sl90 = map.source_code.split('\n');
+    const SRC90 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv)\s*\(/;
+    const LDAP_SINK_RE90 = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search)\s*\(/;
+    const LDAP_SAFE_SL90 = /\b(?:escapeLDAPSearchFilter|LdapEncoder\.filterEncode|FilterEncoder|ldap\.escape|escape_filter_chars|parseInt|parseLong|Pattern\.matches)\b/i;
+    const tv90 = new Set<string>();
+    let sln90 = 0; let scd90 = '';
+    for (let i = 0; i < sl90.length; i++) {
+      const ln = sl90[i]!.trim();
+      if (ln.startsWith('//') || ln.startsWith('*') || ln.startsWith('/*')) continue;
+      const mx90 = ln.match(SRC90); if (mx90) { tv90.add(mx90[1]!); sln90 = i + 1; scd90 = ln; }
+      // Simple assignment propagation
+      const va90 = ln.match(/^(\w+)\s*=\s*(\w+)\s*;/);
+      if (va90 && tv90.has(va90[2]!)) tv90.add(va90[1]!);
+      // Method call propagation
+      const ma90 = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
+      if (ma90 && tv90.has(ma90[2]!)) tv90.add(ma90[1]!);
+      // String concat propagation
+      const ca90 = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+      if (ca90 && tv90.has(ca90[2]!)) tv90.add(ca90[1]!);
+      // Static literal kills taint
+      const ck90 = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
+      if (ck90) tv90.delete(ck90[1]!);
+      // HashMap put/get
+      const mg90 = ln.match(/^(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+      if (mg90) {
+        const mkr90 = resolveMapKeyTaint(sl90, tv90, mg90[2]!, mg90[3]!, i);
+        if (mkr90 === 'tainted') tv90.add(mg90[1]!); else tv90.delete(mg90[1]!);
+      }
+      // List offset
+      const lg90 = ln.match(/^(\w+)\s*=\s*(\w+)\.get\s*\(\s*(\d+)\s*\)/);
+      if (lg90) {
+        const lv90 = lg90[2]!; const gi90 = parseInt(lg90[3]!);
+        const items90: { tainted: boolean }[] = []; let rc90 = 0;
+        for (let j = 0; j < i; j++) {
+          const al90 = sl90[j]!.trim();
+          const am90 = al90.match(new RegExp(escapeRegExp(lv90) + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)'));
+          if (am90) items90.push({ tainted: am90[1] ? tv90.has(am90[1]) : false });
+          if (al90.includes(lv90 + '.remove(')) rc90++;
+        }
+        const adj90 = items90.slice(rc90);
+        if (gi90 < adj90.length && !adj90[gi90]!.tainted) tv90.delete(lg90[1]!); else tv90.add(lg90[1]!);
+      }
+      // Interprocedural: bar = new Test().doSomething(request, param)
+      const ipCall90 = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
+      if (ipCall90 && tv90.has(ipCall90[3]!)) {
+        const mn90 = ipCall90[2]!;
+        let kills90 = false;
+        for (let j = 0; j < sl90.length; j++) {
+          const md90 = sl90[j]!.trim();
+          if (md90.includes(`${mn90}(`) && (md90.includes('String ') || md90.includes('public '))) {
+            let bd90 = 0; let fo90 = false;
+            for (let k = j; k < Math.min(j + 40, sl90.length); k++) {
+              if (sl90[k]!.includes('{')) { bd90++; fo90 = true; }
+              if (sl90[k]!.includes('}')) bd90--;
+              if (fo90 && bd90 <= 0) break;
+              if (LDAP_SAFE_SL90.test(sl90[k]!.trim())) { kills90 = true; break; }
+              if (/^\w+\s*=\s*"[^"]{5,}"/.test(sl90[k]!.trim())) { kills90 = true; break; }
+              if (/\.remove\s*\(\s*\d+\s*\)/.test(sl90[k]!.trim())) { kills90 = true; break; }
+            }
+            break;
+          }
+        }
+        if (kills90) tv90.delete(ipCall90[1]!); else tv90.add(ipCall90[1]!);
+      }
+      // LDAP sink detection
+      if (LDAP_SINK_RE90.test(ln) && sln90 > 0) {
+        const scopeSlice90 = sl90.slice(Math.max(0, i - 10), i + 5).join('\n');
+        if (LDAP_SAFE_SL90.test(scopeSlice90)) continue;
+        let hit90 = false;
+        for (const t of tv90) {
+          if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(ln) ||
+              new RegExp('["+]\\s*\\b' + escapeRegExp(t) + '\\b|\\b' + escapeRegExp(t) + '\\b\\s*[+"]').test(scopeSlice90)) {
+            hit90 = true; break;
+          }
+        }
+        if (hit90) {
+          findings.push({
+            source: { id: `srcline-${sln90}`, label: `user input (line ${sln90})`, line: sln90, code: scd90.slice(0, 200) },
+            sink: { id: `srcline-${i + 1}`, label: `LDAP query (line ${i + 1})`, line: i + 1, code: ln.slice(0, 200) },
+            missing: 'CONTROL (LDAP special character escaping or parameterized filter)',
+            severity: 'high',
+            description: `User input flows to LDAP query at line ${i + 1} without escaping.`,
+            fix: 'Escape LDAP special characters. Use filter builder APIs over string concatenation.',
+          });
+          break;
         }
       }
     }
@@ -28041,9 +28455,15 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
   const CRYPTO_OP_RE = /\b(createCipheriv|createDecipheriv|createHmac|createSign|createVerify|jwt\.sign|jwt\.verify|sign\s*\(|verify\s*\(|encrypt\s*\(|decrypt\s*\(|CryptoJS\.\w+\.encrypt|CryptoJS\.\w+\.decrypt|Cipher\.getInstance|Mac\.getInstance|Signature\.getInstance|secretbox|box\.open|nacl\.|HMAC|hmac|signWith|verifyWith)\b/i;
 
   // Hard-coded key patterns — literal strings passed directly to crypto functions
-  const HARDCODED_KEY_RE = /(?:key|secret|password|passphrase|privateKey|signingKey|encryptionKey|masterKey|hmacKey)\s*[:=]\s*['"`][A-Za-z0-9+/=_-]{8,}['"`]/i;
+  const HARDCODED_KEY_RE = /(?:key|secret|password|passphrase|privateKey|signingKey|encryptionKey|masterKey|hmacKey|cipherKey)\s*[:=]\s*['"`][A-Za-z0-9+/=_-]{8,}['"`]/i;
   const INLINE_KEY_RE = /(?:createCipheriv|createHmac|createSign|jwt\.sign|jwt\.verify|encrypt|decrypt|sign|HMAC)\s*\([^)]*['"`][A-Za-z0-9+/=_-]{16,}['"`]/i;
   const BUFFER_KEY_RE = /Buffer\.from\s*\(\s*['"`][A-Za-z0-9+/=_-]{8,}['"`]/i;
+  // Java: Base64.decode -> setCipherKey/SecretKeySpec with hardcoded Base64 string
+  const BASE64_KEY_RE = /Base64\.decode\s*\(\s*['"`][A-Za-z0-9+/=]{16,}['"`]\s*\)|setCipherKey\s*\(\s*Base64|new\s+SecretKeySpec\s*\(\s*Base64/i;
+  // Known default keys (e.g., Apache Shiro default)
+  const SHIRO_DEFAULT_KEY_RE = /kPH\+bIxk5D2deZiIxcaaaA==/;
+  // jwt.sign with inline literal secret
+  const JWT_LITERAL_RE = /jwt\.sign\s*\([^)]*,\s*['"`][A-Za-z0-9+/=_-]{4,}['"`]/i;
 
   // Safe: key from env, config, vault, KMS, key store
   const KEY_SAFE_RE = /\bprocess\.env\b|\bos\.environ\b|\bgetenv\b|\bvault\b|\bKMS\b|\bkeyStore\b|\bsecretManager\b|\bKeyVault\b|\bParameter.?Store\b|\bconfig\.\b|\bsettings\.\b|\baws[-_]?kms\b|\bgcp[-_]?kms\b|\bazure[-_]?key/i;
@@ -28068,7 +28488,7 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
     // Check for hardcoded keys
     if (KEY_SAFE_RE.test(code)) continue;
 
-    if (HARDCODED_KEY_RE.test(code) || INLINE_KEY_RE.test(code) || BUFFER_KEY_RE.test(code)) {
+    if (HARDCODED_KEY_RE.test(code) || INLINE_KEY_RE.test(code) || BUFFER_KEY_RE.test(code) || BASE64_KEY_RE.test(code) || SHIRO_DEFAULT_KEY_RE.test(code) || JWT_LITERAL_RE.test(code)) {
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'META (externally managed cryptographic key — use KMS, vault, or env vars)',

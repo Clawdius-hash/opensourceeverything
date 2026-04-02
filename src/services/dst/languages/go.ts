@@ -369,6 +369,18 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'db.Migrator':            { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
   'db.Transaction':         { nodeType: 'STORAGE', subtype: 'db_write',      tainted: false },
 
+  // -- XORM --
+  'sess.And':               { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'sess.Or':                { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'sess.Where':             { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'sess.Having':            { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'sess.SQL':               { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'engine.SQL':             { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'engine.Where':           { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'x.Where':                { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'x.And':                  { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+  'x.Or':                   { nodeType: 'STORAGE', subtype: 'sql_query',     tainted: false },
+
   // -- ent ORM (Facebook) --
   'ent.Open':               { nodeType: 'STORAGE', subtype: 'db_connect',    tainted: false },
 
