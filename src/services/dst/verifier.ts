@@ -7606,6 +7606,19 @@ function verifyCWE330(map: NeuralMap): VerificationResult {
       return t && (t.node_type === 'AUTH' || t.node_type === 'CONTROL');
     });
     if ((isSec || flowsToAuth) && !CSPRNG_RE330.test(code)) {
+      // Polymorphic typing check: if the node uses java.util.Random as the declared type
+      // but the full source shows the actual instance is SecureRandom (e.g.,
+      // java.util.Random numGen = java.security.SecureRandom.getInstance(...)),
+      // then the PRNG is actually secure despite the declared type.
+      if (map.source_code && /\bjava\.util\.Random\b/.test(code)) {
+        const fullSrc330 = stripComments(map.source_code);
+        // Check if a java.util.Random variable is assigned from SecureRandom
+        if (/java\.util\.Random\s+\w+\s*=\s*(?:java\.security\.)?SecureRandom\b/.test(fullSrc330) ||
+            /java\.util\.Random\s+\w+\s*=\s*(?:java\.security\.)?SecureRandom\.getInstance\b/.test(fullSrc330) ||
+            /java\.util\.Random\s+\w+\s*=\s*new\s+(?:java\.security\.)?SecureRandom\b/.test(fullSrc330)) {
+          continue;
+        }
+      }
       findings.push({
         source: nodeRef(node), sink: nodeRef(node),
         missing: 'EXTERNAL (cryptographically secure PRNG — crypto.randomBytes, SecureRandom, os.urandom)',
@@ -9839,33 +9852,27 @@ function detectInterproceduralNeutralization90(sourceCode: string): boolean {
 
   // Pattern 2: HashMap safe key retrieval
   // put("keyB", param) [tainted], but get("keyA") [safe] is what flows to return
-  const putMatches = [...methodBody.matchAll(/(\w+)\.put\s*\(\s*"([^"]*)"\s*,\s*(\w+)\s*\)/g)];
+  const putVarMatches = [...methodBody.matchAll(/(\w+)\.put\s*\(\s*"([^"]*)"\s*,\s*(\w+)\s*\)/g)];
+  const putLitMatches = [...methodBody.matchAll(/(\w+)\.put\s*\(\s*"([^"]*)"\s*,\s*"[^"]*"\s*\)/g)];
+  const putAllKeys = [...putVarMatches, ...putLitMatches];
   const getMatches = [...methodBody.matchAll(/(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/g)];
-  if (putMatches.length > 0 && getMatches.length > 0) {
+  if (putAllKeys.length > 0 && getMatches.length > 0) {
     // Find the LAST get() before return — that's what's actually returned
     const returnMatch = methodBody.match(/return\s+(\w+)\s*;/);
     if (returnMatch) {
       const returnVar = returnMatch[1]!;
-      // Find the get() that assigns to returnVar (or to bar which is returned)
-      const lastGet = getMatches.filter(g => g[1] === returnVar || returnVar === 'bar');
-      // Check if the last get() key is NOT the key where tainted data was stored
-      // Tainted keys: those where the put() value matches a known tainted variable (param, or derived from it)
+      // Tainted keys: those where a put() value is a tainted variable (param or derived)
       const paramRe = /\bparam\b/;
-      for (const gm of getMatches.reverse()) {
+      const taintedKeys = new Set(putVarMatches.filter(p => paramRe.test(p[3]!)).map(p => p[1] + '::' + p[2]));
+      for (const gm of [...getMatches].reverse()) {
         const getKey = gm[3]!;
         const mapVarGet = gm[2]!;
         const assignVar = gm[1]!;
         // Is this the final assignment to the returned variable?
         if (assignVar === returnVar || (returnVar === 'bar' && assignVar === 'bar')) {
-          // Check if the key retrieved is a tainted or safe key
-          const putsForThisMap = putMatches.filter(p => p[1] === mapVarGet);
-          const putForKey = putsForThisMap.find(p => p[2] === getKey);
-          if (putForKey) {
-            const putValue = putForKey[3]!;
-            if (!paramRe.test(putValue)) {
-              // The final get() retrieves a key that was put with a safe (non-param) value
-              return true;
-            }
+          // If the retrieved key is NOT among tainted keys, it's safe
+          if (!taintedKeys.has(mapVarGet + '::' + getKey)) {
+            return true;
           }
           break; // only check the last assignment to the returned var
         }
