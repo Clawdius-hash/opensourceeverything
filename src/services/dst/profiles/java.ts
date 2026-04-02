@@ -980,6 +980,44 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
 
     // -- Method invocation: check if sanitizer, then check args --
     case 'method_invocation': {
+      // -- Per-index collection resolution: list.get(N) --
+      // If the receiver has collectionTaint and method is 'get' with an integer literal,
+      // resolve per-index taint instead of falling through to whole-collection taint.
+      {
+        const getMethodName = expr.childForFieldName('name');
+        const getObj = expr.childForFieldName('object');
+        if (getMethodName?.text === 'get' && getObj?.type === 'identifier') {
+          const getVar = ctx.resolveVariable(getObj.text);
+          if (getVar?.collectionTaint) {
+            const getArgs = expr.childForFieldName('arguments');
+            const firstArg = getArgs?.namedChild(0);
+            let resolvedIdx: number | undefined;
+            if (firstArg?.type === 'decimal_integer_literal') {
+              resolvedIdx = parseInt(firstArg.text);
+            } else if (firstArg?.type === 'identifier') {
+              // Try resolving the index from a variable's numericValue
+              const idxVar = ctx.resolveVariable(firstArg.text);
+              if (idxVar?.numericValue !== undefined) {
+                resolvedIdx = idxVar.numericValue;
+              }
+            }
+            if (resolvedIdx !== undefined && resolvedIdx >= 0 && resolvedIdx < getVar.collectionTaint.length) {
+              const entry = getVar.collectionTaint[resolvedIdx];
+              if (!entry.tainted) {
+                // This index holds a safe (non-tainted) value — no taint sources
+                return [];
+              }
+              // This index is tainted — return its producing node
+              if (entry.producingNodeId) {
+                return [{ nodeId: entry.producingNodeId, name: getObj.text + '.get(' + resolvedIdx + ')' }];
+              }
+              // Tainted but no producing node — fall back to whole-collection
+            }
+            // Index out of range or unresolvable — fall through to generic behavior
+          }
+        }
+      }
+
       const callResolution = resolveCallee(expr);
       // Sanitizer or encoder call stops taint
       if (callResolution &&
@@ -1815,7 +1853,8 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
 
         // Collection mutation tainting: list.add(tainted) → mark list as tainted
-        if (callHasTaintedArgs && calleeObj?.type === 'identifier') {
+        // Also maintains per-index collection taint when applicable.
+        if (calleeObj?.type === 'identifier') {
           const MUTATING_METHODS = new Set([
             'add', 'put', 'set', 'offer', 'push', 'addAll', 'putAll',
             'append', 'insert', 'write', 'print', 'println',
@@ -1824,9 +1863,47 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           const methodName = node.childForFieldName('name')?.text;
           if (methodName && MUTATING_METHODS.has(methodName)) {
             const receiverVar = ctx.resolveVariable(calleeObj.text);
-            if (receiverVar && !receiverVar.tainted) {
-              receiverVar.tainted = true;
-              receiverVar.producingNodeId = n.id;
+            if (receiverVar) {
+              // Per-index tracking for add/remove/set
+              if (methodName === 'add') {
+                const collArgs = node.childForFieldName('arguments');
+                const argCount = collArgs?.namedChildCount ?? 0;
+                if (argCount === 1) {
+                  const arg = collArgs!.namedChild(0)!;
+                  const isStringLiteral = arg.type === 'string_literal';
+                  const argTainted = isStringLiteral ? false : extractTaintSources(arg, ctx).length > 0;
+                  if (!receiverVar.collectionTaint) receiverVar.collectionTaint = [];
+                  receiverVar.collectionTaint.push({ tainted: argTainted, producingNodeId: argTainted ? n.id : null });
+                }
+              } else if (methodName === 'remove') {
+                const collArgs = node.childForFieldName('arguments');
+                const firstArg = collArgs?.namedChild(0);
+                if (firstArg?.type === 'decimal_integer_literal' && receiverVar.collectionTaint) {
+                  const removeIdx = parseInt(firstArg.text);
+                  if (removeIdx >= 0 && removeIdx < receiverVar.collectionTaint.length) {
+                    receiverVar.collectionTaint.splice(removeIdx, 1);
+                  }
+                }
+              } else if (methodName === 'set') {
+                const collArgs = node.childForFieldName('arguments');
+                if (collArgs?.namedChildCount === 2 && receiverVar.collectionTaint) {
+                  const indexArg = collArgs.namedChild(0)!;
+                  const exprArg = collArgs.namedChild(1)!;
+                  if (indexArg.type === 'decimal_integer_literal') {
+                    const setIdx = parseInt(indexArg.text);
+                    const isStringLiteral = exprArg.type === 'string_literal';
+                    const argTainted = isStringLiteral ? false : extractTaintSources(exprArg, ctx).length > 0;
+                    if (setIdx >= 0 && setIdx < receiverVar.collectionTaint.length) {
+                      receiverVar.collectionTaint[setIdx] = { tainted: argTainted, producingNodeId: argTainted ? n.id : null };
+                    }
+                  }
+                }
+              }
+              // Whole-collection taint (fallback) — only mark if tainted args flow in
+              if (callHasTaintedArgs && !receiverVar.tainted) {
+                receiverVar.tainted = true;
+                receiverVar.producingNodeId = n.id;
+              }
             }
           }
         }
@@ -1896,6 +1973,81 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                 }
               }
               break;
+            }
+          }
+        }
+
+        // -- Per-index collection taint tracking --
+        // Tracks .add(), .remove(), .set() on local collection variables.
+        // When .add(expr) is called, records per-index taint state.
+        // When .remove(N) is called, splices the tracked entries.
+        // Resolution happens in extractTaintSources when .get(N) is seen.
+        if (aliasObj?.type === 'identifier' && aliasName) {
+          const collMethodName = aliasName.text;
+          const collVar = ctx.resolveVariable(aliasObj.text);
+          if (collVar) {
+            if (collMethodName === 'add') {
+              const collArgs = node.childForFieldName('arguments');
+              const argCount = collArgs?.namedChildCount ?? 0;
+              if (argCount === 1) {
+                // list.add(expr) — append
+                const arg = collArgs!.namedChild(0)!;
+                const isStringLiteral = arg.type === 'string_literal';
+                const taintSources = isStringLiteral ? [] : extractTaintSources(arg, ctx);
+                const argTainted = taintSources.length > 0;
+                const producingId = argTainted ? (taintSources[0]?.nodeId ?? null) : null;
+                if (!collVar.collectionTaint) collVar.collectionTaint = [];
+                collVar.collectionTaint.push({ tainted: argTainted, producingNodeId: producingId });
+                // Also maintain whole-collection taint for fallback
+                if (argTainted && !collVar.tainted) {
+                  collVar.tainted = true;
+                  collVar.producingNodeId = producingId;
+                }
+              } else if (argCount === 2) {
+                // list.add(index, expr) — insert at index
+                const indexArg = collArgs!.namedChild(0)!;
+                const exprArg = collArgs!.namedChild(1)!;
+                const insertIdx = indexArg.type === 'decimal_integer_literal' ? parseInt(indexArg.text) : -1;
+                const isStringLiteral = exprArg.type === 'string_literal';
+                const taintSources = isStringLiteral ? [] : extractTaintSources(exprArg, ctx);
+                const argTainted = taintSources.length > 0;
+                const producingId = argTainted ? (taintSources[0]?.nodeId ?? null) : null;
+                if (!collVar.collectionTaint) collVar.collectionTaint = [];
+                if (insertIdx >= 0 && insertIdx <= collVar.collectionTaint.length) {
+                  collVar.collectionTaint.splice(insertIdx, 0, { tainted: argTainted, producingNodeId: producingId });
+                } else {
+                  collVar.collectionTaint.push({ tainted: argTainted, producingNodeId: producingId });
+                }
+                if (argTainted && !collVar.tainted) {
+                  collVar.tainted = true;
+                  collVar.producingNodeId = producingId;
+                }
+              }
+            } else if (collMethodName === 'remove') {
+              const collArgs = node.childForFieldName('arguments');
+              const firstArg = collArgs?.namedChild(0);
+              if (firstArg?.type === 'decimal_integer_literal' && collVar.collectionTaint) {
+                const removeIdx = parseInt(firstArg.text);
+                if (removeIdx >= 0 && removeIdx < collVar.collectionTaint.length) {
+                  collVar.collectionTaint.splice(removeIdx, 1);
+                }
+              }
+            } else if (collMethodName === 'set') {
+              const collArgs = node.childForFieldName('arguments');
+              if (collArgs?.namedChildCount === 2 && collVar.collectionTaint) {
+                const indexArg = collArgs.namedChild(0)!;
+                const exprArg = collArgs.namedChild(1)!;
+                if (indexArg.type === 'decimal_integer_literal') {
+                  const setIdx = parseInt(indexArg.text);
+                  const isStringLiteral = exprArg.type === 'string_literal';
+                  const taintSources = isStringLiteral ? [] : extractTaintSources(exprArg, ctx);
+                  const argTainted = taintSources.length > 0;
+                  const producingId = argTainted ? (taintSources[0]?.nodeId ?? null) : null;
+                  if (setIdx >= 0 && setIdx < collVar.collectionTaint.length) {
+                    collVar.collectionTaint[setIdx] = { tainted: argTainted, producingNodeId: producingId };
+                  }
+                }
+              }
             }
           }
         }

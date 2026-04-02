@@ -39,6 +39,11 @@ export interface VariableInfo {
   /** If this variable holds a known numeric constant (e.g., int num = 106),
    *  store the value for constant propagation and dead branch elimination. */
   numericValue?: number;
+  /** Per-index taint tracking for collection variables (List, ArrayList, etc.).
+   *  When present, tracks the taint state of each element by index.
+   *  When undefined, falls back to whole-collection taint (receiverVar.tainted).
+   *  Populated by .add(), updated by .remove(), resolved by .get(). */
+  collectionTaint?: Array<{ tainted: boolean; producingNodeId: string | null }>;
   /** If this variable has been range-checked by a CONTROL node,
    *  stores the inferred numeric bounds. Used by integer/arithmetic
    *  verifiers to suppress findings on bounded variables. */

@@ -289,44 +289,6 @@ function evaluateConstantComparison(lhs: number, op: string, rhs: number): boole
 }
 
 /**
- * Detect ArrayList add/remove/get neutralization pattern in source code.
- * When items are added to a list, then remove(0) shifts indices, and
- * get(N) retrieves a safe value rather than the tainted one.
- *
- * Pattern:
- *   list.add("safe"); list.add(param); list.add("moresafe");
- *   list.remove(0);   // shifts: [param, "moresafe"]
- *   bar = list.get(1); // "moresafe" — NOT tainted
- *
- * Returns true when the retrieved index resolves to a safe (non-tainted) value.
- */
-function detectListOffsetNeutralization(sourceCode: string): boolean {
-  const src = stripComments(sourceCode);
-  // Find list.get(N) patterns
-  const getMatch = src.match(/(\w+)\.get\s*\(\s*(\d+)\s*\)/);
-  if (!getMatch) return false;
-  const listVar = getMatch[1]!;
-  const getIdx = parseInt(getMatch[2]!);
-
-  // Collect add() calls and remove() counts for this list
-  const addRe = new RegExp(escapeRegExp(listVar) + '\\.add\\s*\\(\\s*(?:"[^"]*"|(\\w+))\\s*\\)', 'g');
-  const removeRe = new RegExp(escapeRegExp(listVar) + '\\.remove\\s*\\(', 'g');
-  const items: { tainted: boolean }[] = [];
-  let removeCount = 0;
-  let am: RegExpExecArray | null;
-  while ((am = addRe.exec(src)) !== null) {
-    // If captured group 1 is a variable name, it might be tainted; if null, it's a string literal (safe)
-    items.push({ tainted: !!am[1] });
-  }
-  while (removeRe.exec(src) !== null) removeCount++;
-
-  const adjusted = items.slice(removeCount);
-  if (getIdx < adjusted.length && !adjusted[getIdx]!.tainted) return true;
-
-  return false;
-}
-
-/**
  * Per-method forward taint analysis that detects when a taint chain is abandoned
  * for a static literal. When a variable is assigned a string literal after receiving
  * tainted data, and the sink uses the now-safe variable, taint is neutralized.
@@ -1060,7 +1022,6 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch79 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasListOffset79 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
 
   // Interprocedural neutralization: inner-class/helper methods that kill taint via
   // static value replacement, HashMap safe-key retrieval, or taint abandonment.
@@ -1099,7 +1060,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       // Fallback 2: scope-based taint (Java Juliet patterns with incomplete DATA_FLOW edges)
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id) || scopeBasedTaintReaches(map, src.id, sink.id)) {
-        if (hasDeadBranch79 || hasListOffset79 || hasInterproceduralKill79 || hasMapKeySafeRetrieval79) continue;
+        if (hasDeadBranch79 || hasInterproceduralKill79 || hasMapKeySafeRetrieval79) continue;
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
@@ -1190,7 +1151,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
   // with @RestController), the return value IS the HTTP response body. If a
   // @RequestParam is concatenated into a StringBuilder or string that gets returned
   // (directly or via .output()), it's reflected XSS without encoding.
-  if (findings.length === 0 && map.source_code && !hasListOffset79) {
+  if (findings.length === 0 && map.source_code) {
     const sl79 = stripComments(map.source_code);
     const lines79 = sl79.split('\n');
 
@@ -1564,7 +1525,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // The mapper over-approximates these, so we suppress graph-based findings when
   // the source code proves the tainted branch is never taken.
   const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasListOffsetNeutralization22 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
+  // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
   const hasStaticValueNeutralization22 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   const hasInterproceduralNeutralization22 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
 
@@ -1610,7 +1571,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
         // safe-source, or map-key neutralization is detected.
         // The graph tracks taint through all branches, but constant ternary/switch patterns
         // guarantee the tainted branch is never taken.
-        if (hasDeadBranchNeutralization || hasListOffsetNeutralization22 || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasMapKeySafeRetrieval22) continue;
+        if (hasDeadBranchNeutralization || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasMapKeySafeRetrieval22) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -1636,7 +1597,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // (getParameter, getCookies, getHeaders) flows to File/FileInputStream/FileOutputStream
   // constructors via local variable assignment + string concatenation, even when
   // the mapper doesn't emit DATA_FLOW edges for the full chain.
-  if (findings.length === 0 && map.source_code && !hasListOffsetNeutralization22 && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
     const src = stripComments(map.source_code);
     // Normalize: collapse whitespace/newlines for multi-line statement parsing
     const normalized = src.replace(/\n\s*/g, ' ');
@@ -8752,8 +8713,8 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
   }
   // Source-line fallback for Java XPath injection: interprocedural taint tracking
   if (findings.length === 0 && map.source_code && !hasDeadBranch643 && !hasInterproceduralStatic643) {
-    const hasListOffset643 = detectListOffsetNeutralization(map.source_code);
-    if (!hasListOffset643) {
+    // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
+    {
       const sl643 = map.source_code.split('\n');
       const SRC643 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv)\s*\(/;
       const hasXPathContext643 = /\b(?:XPathFactory|javax\.xml\.xpath|XPath|XPathExpression|DOMXPath|SimpleXMLElement|etree\.XPath|tree\.xpath)\b/.test(map.source_code!);
@@ -10098,7 +10059,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch90 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasListOffset90 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
+  // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
   const hasStaticVal90 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   // Interprocedural neutralization: check if inner-class/helper method kills taint
   // by returning a static literal, retrieving a safe HashMap key, or abandoning the tainted chain.
@@ -10109,7 +10070,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
       if (src.id === sink.id) continue;
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
-        if (hasDeadBranch90 || hasListOffset90 || hasStaticVal90 || hasInterproceduralKill90) continue;
+        if (hasDeadBranch90 || hasStaticVal90 || hasInterproceduralKill90) continue;
         const sinkCode90 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!LDAP_SAFE90.test(sinkCode90)) {
           const usesFilterConcat90 = LDAP_FILTER_CONCAT90.test(sinkCode90);
@@ -10132,7 +10093,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
   }
 
   // Source-line fallback for Java LDAP injection: interprocedural taint tracking
-  if (findings.length === 0 && map.source_code && !hasDeadBranch90 && !hasListOffset90) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranch90) {
     const sl90 = map.source_code.split('\n');
     const SRC90 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv|getParameterMap)\s*\(/;
     const LDAP_SINK_RE90 = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search|idc\.search)\s*\(/;
