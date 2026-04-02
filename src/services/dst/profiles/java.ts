@@ -182,6 +182,142 @@ function tryFoldConstant(n: SyntaxNode): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Numeric constant folding: evaluate integer arithmetic at analysis time.
+// Used for dead-branch elimination on ternary/if conditions like:
+//   int num = 106; bar = (7 * 18) + num > 200 ? "safe" : param;
+// ---------------------------------------------------------------------------
+
+/**
+ * Try to fold an AST node into a numeric (integer) value.
+ * Handles: integer literals, hex literals, parenthesized expressions,
+ * binary arithmetic (+, -, *, /, %), identifier resolution via scope,
+ * cast expressions, and unary negation.
+ * Returns null if the expression cannot be folded to a constant integer.
+ */
+function tryFoldNumeric(n: SyntaxNode, ctx: MapperContextLike): number | null {
+  // Integer literals: 106, 200
+  if (n.type === 'decimal_integer_literal' || n.type === 'integer_literal') {
+    const val = parseInt(n.text, 10);
+    return isNaN(val) ? null : val;
+  }
+  // Hex integer literal: 0xFF
+  if (n.type === 'hex_integer_literal') {
+    const val = parseInt(n.text, 16);
+    return isNaN(val) ? null : val;
+  }
+  // Parenthesized: (7 * 18)
+  if (n.type === 'parenthesized_expression') {
+    const inner = n.namedChild(0);
+    return inner ? tryFoldNumeric(inner, ctx) : null;
+  }
+  // Binary expression: arithmetic or comparison (comparisons handled by tryEvalCondition)
+  if (n.type === 'binary_expression') {
+    const op = n.childForFieldName('operator')?.text;
+    const left = n.childForFieldName('left');
+    const right = n.childForFieldName('right');
+    if (!left || !right || !op) return null;
+    const lv = tryFoldNumeric(left, ctx);
+    const rv = tryFoldNumeric(right, ctx);
+    if (lv === null || rv === null) return null;
+    switch (op) {
+      case '+': return lv + rv;
+      case '-': return lv - rv;
+      case '*': return lv * rv;
+      case '/': return rv !== 0 ? Math.trunc(lv / rv) : null; // Java integer division
+      case '%': return rv !== 0 ? lv % rv : null;
+      default: return null;
+    }
+  }
+  // Identifier: resolve from scope
+  if (n.type === 'identifier') {
+    const v = ctx.resolveVariable(n.text);
+    if (v?.numericValue !== undefined) return v.numericValue;
+    return null;
+  }
+  // Cast expression: (int) x
+  if (n.type === 'cast_expression') {
+    const value = n.childForFieldName('value');
+    return value ? tryFoldNumeric(value, ctx) : null;
+  }
+  // Unary expression: -N
+  if (n.type === 'unary_expression') {
+    const op = n.child(0)?.text;
+    const operand = n.namedChild(0);
+    if (op === '-' && operand) {
+      const v = tryFoldNumeric(operand, ctx);
+      return v !== null ? -v : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to evaluate a condition AST node to a boolean result.
+ * Handles: binary comparisons (>, <, >=, <=, ==, !=) where both
+ * sides can be folded to numeric constants, and parenthesized conditions.
+ * Returns null if the condition cannot be statically evaluated.
+ */
+function tryEvalCondition(cond: SyntaxNode, ctx: MapperContextLike): boolean | null {
+  // Handle parenthesized_expression
+  if (cond.type === 'parenthesized_expression') {
+    const inner = cond.namedChild(0);
+    return inner ? tryEvalCondition(inner, ctx) : null;
+  }
+  // Handle binary comparison: expr > expr, expr < expr, etc.
+  if (cond.type === 'binary_expression') {
+    const op = cond.childForFieldName('operator')?.text;
+    const left = cond.childForFieldName('left');
+    const right = cond.childForFieldName('right');
+    if (!left || !right || !op) return null;
+    const lv = tryFoldNumeric(left, ctx);
+    const rv = tryFoldNumeric(right, ctx);
+    if (lv !== null && rv !== null) {
+      switch (op) {
+        case '>':  return lv > rv;
+        case '<':  return lv < rv;
+        case '>=': return lv >= rv;
+        case '<=': return lv <= rv;
+        case '==': return lv === rv;
+        case '!=': return lv !== rv;
+        default:   return null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to resolve a charAt() call on a constant string variable.
+ * Handles: guess.charAt(N) where guess is a constant string.
+ * Returns the single character as a string, or null if unresolvable.
+ */
+function tryResolveCharAt(n: SyntaxNode, ctx: MapperContextLike): string | null {
+  if (n.type !== 'method_invocation') return null;
+  const name = n.childForFieldName('name');
+  const obj = n.childForFieldName('object');
+  const args = n.childForFieldName('arguments');
+  if (name?.text !== 'charAt' || !obj || !args) return null;
+
+  // Resolve the receiver to a constant string
+  let strValue: string | null = null;
+  if (obj.type === 'identifier') {
+    const v = ctx.resolveVariable(obj.text);
+    if (v?.constantValue !== undefined) strValue = v.constantValue;
+  } else {
+    strValue = tryFoldConstant(obj);
+  }
+  if (strValue === null) return null;
+
+  // Resolve the index argument to a number
+  const idxArg = args.namedChild(0);
+  if (!idxArg) return null;
+  const idx = tryFoldNumeric(idxArg, ctx);
+  if (idx === null || idx < 0 || idx >= strValue.length) return null;
+
+  return strValue[idx]!;
+}
+
 /** Fold StringBuilder chain: .append("ev").append("al") → "eval" */
 function tryFoldStringBuilderChain(node: SyntaxNode): string | null {
   // Walk the chain from right to left collecting append arguments
@@ -924,10 +1060,23 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
     }
 
     // -- Ternary: condition ? a : b --
+    // Dead branch elimination: if the condition can be statically evaluated,
+    // only extract taint from the LIVE branch. This eliminates false positives
+    // from patterns like: bar = (7*18)+num > 200 ? "safe" : param;
     case 'ternary_expression': {
-      const sources: TaintSourceResult[] = [];
+      const condition = expr.childForFieldName('condition');
       const consequence = expr.childForFieldName('consequence');
       const alternative = expr.childForFieldName('alternative');
+      const condResult = condition ? tryEvalCondition(condition, ctx) : null;
+      if (condResult === true) {
+        // Condition always true -> only consequence is reachable
+        return consequence ? extractTaintSources(consequence, ctx) : [];
+      } else if (condResult === false) {
+        // Condition always false -> only alternative is reachable
+        return alternative ? extractTaintSources(alternative, ctx) : [];
+      }
+      // Unknown condition: both branches contribute taint (existing behavior)
+      const sources: TaintSourceResult[] = [];
       if (consequence) sources.push(...extractTaintSources(consequence, ctx));
       if (alternative) sources.push(...extractTaintSources(alternative, ctx));
       return sources;
@@ -1160,10 +1309,24 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
       }
 
       // Constant folding: String action = "quer" + "y" -> constantValue = "query"
+      // Also resolves: char c = guess.charAt(1) -> constantValue = "B"
       let constantValue: string | undefined;
       if (valueNode) {
         const folded = tryFoldConstant(valueNode);
-        if (folded !== null) constantValue = folded;
+        if (folded !== null) {
+          constantValue = folded;
+        } else {
+          // Try charAt resolution on constant strings: guess.charAt(1) -> "B"
+          const charAtResult = tryResolveCharAt(valueNode, ctx);
+          if (charAtResult !== null) constantValue = charAtResult;
+        }
+      }
+
+      // Numeric constant propagation: int num = 106 -> numericValue = 106
+      let numericValue: number | undefined;
+      if (valueNode) {
+        const foldedNum = tryFoldNumeric(valueNode, ctx);
+        if (foldedNum !== null) numericValue = foldedNum;
       }
 
       ctx.declareVariable(varName, kind, null, tainted, producingNodeId);
@@ -1172,6 +1335,7 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         if (aliasChain) v.aliasChain = aliasChain;
         if (genericTypeArgsList) v.genericTypeArgs = genericTypeArgsList;
         if (constantValue) v.constantValue = constantValue;
+        if (numericValue !== undefined) v.numericValue = numericValue;
       }
     }
     return;

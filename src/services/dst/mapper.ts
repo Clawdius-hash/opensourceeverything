@@ -36,6 +36,9 @@ export interface VariableInfo {
   /** Generic type arguments from the declaration, e.g., Map<String, Statement> → ['String', 'Statement'].
    *  Used to resolve method return types on generic containers (e.g., map.get() returns Statement). */
   genericTypeArgs?: string[];
+  /** If this variable holds a known numeric constant (e.g., int num = 106),
+   *  store the value for constant propagation and dead branch elimination. */
+  numericValue?: number;
   /** If this variable has been range-checked by a CONTROL node,
    *  stores the inferred numeric bounds. Used by integer/arithmetic
    *  verifiers to suppress findings on bounded variables. */
