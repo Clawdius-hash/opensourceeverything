@@ -9814,7 +9814,22 @@ function detectInterproceduralNeutralization90(sourceCode: string): boolean {
       const safeVarAlsoTainted = new RegExp('\\b' + escapeRegExp(safeVar) + '\\s*=\\s*param\\b').test(methodBody);
       if (!returnVarAlsoTainted && !safeVarAlsoTainted) {
         // Direct: safeVar is returned, or safeVar feeds into returnVar via method call
-        if (returnVar === safeVar) return true;
+        // BUT: if the variable is reassigned after the static literal (e.g., bar = "safe!"; ... bar = (String)map.get("keyB");)
+        // then the static literal is dead and doesn't reach the return.
+        if (returnVar === safeVar) {
+          // Count all assignments to safeVar — if there's more than the static literal one,
+          // the variable is reassigned and the static value may not reach return.
+          const allAssignments = [...methodBody.matchAll(new RegExp('\\b' + escapeRegExp(safeVar) + '\\s*=\\s*', 'g'))];
+          if (allAssignments.length <= 1) return true;
+          // Multiple assignments exist — check if the LAST assignment is the static literal.
+          // If it's not, something else overwrites it before return.
+          const lastAssignIdx = allAssignments[allAssignments.length - 1]!.index!;
+          const staticAssignIdx = staticLiteralAssign.index!;
+          // Also check the matched position within the method body — if the static assign
+          // is the last one, it dominates the return. Otherwise, it's overwritten.
+          if (lastAssignIdx === staticAssignIdx) return true;
+          // The static literal is overwritten — don't suppress, fall through.
+        }
         // Indirect: bar = something(safeVar); return bar;
         const derivedRe = new RegExp(escapeRegExp(returnVar) + '\\s*=\\s*(?:\\w+\\.)?\\w+\\s*\\(\\s*' + escapeRegExp(safeVar) + '\\s*\\)');
         if (derivedRe.test(methodBody)) return true;
