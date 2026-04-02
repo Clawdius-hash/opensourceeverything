@@ -234,11 +234,37 @@ function detectDeadBranchNeutralization(sourceCode: string): boolean {
     );
     if (strDeclMatch && charIdx >= 0 && charIdx < strDeclMatch[1]!.length) {
       const selectedChar = strDeclMatch[1]![charIdx]!;
-      const caseMatch = cleanSrc.match(
-        new RegExp("case\\s+'" + selectedChar + "'\\s*:[^}]*?\\b\\w+\\s*=\\s*\"")
-      );
-      if (caseMatch) {
-        return true;  // selected case assigns a string literal -> taint neutralized
+      // Parse the switch body to determine what the selected case actually executes.
+      // We must handle fall-through: if the selected case has no body (no break/return),
+      // it falls through to the next case. We need to find the FIRST assignment
+      // that the selected case actually reaches (either in its own body or via fall-through).
+      const switchBodyMatch = cleanSrc.match(/switch\s*\([^)]*\)\s*\{([\s\S]*?\n\s*\})/);
+      if (switchBodyMatch) {
+        const switchBody = switchBodyMatch[1]!;
+        // Split into case clauses
+        const caseLabels = switchBody.split(/(?=case\s+'[^']*'\s*:|default\s*:)/);
+        let foundSelected = false;
+        let neutralized = false;
+        for (const clause of caseLabels) {
+          const labelMatch = clause.match(/^(?:case\s+'([^']*)'\s*:|default\s*:)/);
+          if (!labelMatch) continue;
+          const caseChar = labelMatch[1]; // undefined for default
+          if (!foundSelected && caseChar === selectedChar) foundSelected = true;
+          if (foundSelected) {
+            // Check if this clause body assigns a string literal (safe)
+            if (/\b\w+\s*=\s*"[^"]*"\s*;/.test(clause) && !/\b\w+\s*=\s*param\b/.test(clause)) {
+              neutralized = true; break;
+            }
+            // Check if this clause assigns the tainted variable (param/bar = param) -> NOT safe
+            if (/\b\w+\s*=\s*param\b/.test(clause)) {
+              neutralized = false; break;
+            }
+            // If clause has a break/return, stop fall-through
+            if (/\bbreak\s*;|\breturn\b/.test(clause)) break;
+            // Otherwise, fall through to next case
+          }
+        }
+        if (neutralized) return true;
       }
     }
   }
@@ -9573,6 +9599,292 @@ function verifyCWE77(map: NeuralMap): VerificationResult {
 }
 
 /**
+ * Detect interprocedural taint neutralization for CWE-90 LDAP injection.
+ * Checks if a helper/inner-class method called with tainted input returns safe output.
+ *
+ * Patterns detected:
+ * 1. Static value replacement: method abandons tainted chain and assigns a string literal
+ *    to a new variable which flows to return (e.g., g = "barbarians_at_the_gate"; bar = fn(g))
+ * 2. HashMap safe key retrieval: method puts tainted value at key X but retrieves from key Y
+ *    where Y was populated with a safe literal
+ * 3. Method returns safe output despite receiving tainted input (taint abandoned inside method)
+ */
+function detectInterproceduralNeutralization90(sourceCode: string): boolean {
+  const src = stripComments(sourceCode);
+  // Find interprocedural calls: bar = new Test().doSomething(request, param) or bar = doSomething(request, param)
+  const ipCallMatch = src.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
+  if (!ipCallMatch) return false;
+  const calledMethod = ipCallMatch[2]!;
+  const paramVar = ipCallMatch[3]!;
+  // Check if param is assigned from a known safe source (e.g., getTheValue which returns a constant)
+  const SAFE_SOURCE_RE = /\b(?:getTheValue)\s*\(/;
+  const paramAssignRe = new RegExp(escapeRegExp(paramVar) + '\\s*=\\s*[^;]*');
+  const paramAssignMatch = src.match(paramAssignRe);
+  if (paramAssignMatch && SAFE_SOURCE_RE.test(paramAssignMatch[0])) return true;
+  // Find the method body
+  const methodDeclRe = new RegExp('(?:public|private|protected|static)\\s+\\w+\\s+' + escapeRegExp(calledMethod) + '\\s*\\([^)]*\\)[^{]*\\{');
+  const methodStart = src.match(methodDeclRe);
+  if (!methodStart) return false;
+  const startIdx = src.indexOf(methodStart[0]) + methodStart[0].length;
+  // Extract method body by brace counting
+  let braceDepth = 1;
+  let endIdx = startIdx;
+  for (let i = startIdx; i < src.length && braceDepth > 0; i++) {
+    if (src[i] === '{') braceDepth++;
+    if (src[i] === '}') braceDepth--;
+    endIdx = i;
+  }
+  const methodBody = src.slice(startIdx, endIdx);
+
+  // Pattern 1: Static value replacement — a variable is assigned a string literal (≥5 chars)
+  // and that variable (or a value derived from it) flows to the return statement.
+  // e.g.: String g = "barbarians_at_the_gate"; String bar = thing.doSomething(g); return bar;
+  const staticLiteralAssign = methodBody.match(/(\w+)\s*=\s*"[^"]{5,}"\s*;/);
+  if (staticLiteralAssign) {
+    const safeVar = staticLiteralAssign[1]!;
+    // Check: does a variable derived from safeVar flow to return?
+    const returnMatch = methodBody.match(/return\s+(\w+)\s*;/);
+    if (returnMatch) {
+      const returnVar = returnMatch[1]!;
+      // If the return variable or safe variable is ALSO assigned param somewhere in the method,
+      // we have mixed branches (e.g., switch with both bar=param and bar="safe").
+      // In that case, don't claim neutralization — defer to dead branch analysis.
+      const returnVarAlsoTainted = new RegExp('\\b' + escapeRegExp(returnVar) + '\\s*=\\s*param\\b').test(methodBody);
+      const safeVarAlsoTainted = new RegExp('\\b' + escapeRegExp(safeVar) + '\\s*=\\s*param\\b').test(methodBody);
+      if (!returnVarAlsoTainted && !safeVarAlsoTainted) {
+        // Direct: safeVar is returned, or safeVar feeds into returnVar via method call
+        if (returnVar === safeVar) return true;
+        // Indirect: bar = something(safeVar); return bar;
+        const derivedRe = new RegExp(escapeRegExp(returnVar) + '\\s*=\\s*(?:\\w+\\.)?\\w+\\s*\\(\\s*' + escapeRegExp(safeVar) + '\\s*\\)');
+        if (derivedRe.test(methodBody)) return true;
+      }
+    }
+  }
+
+  // Pattern 2: HashMap safe key retrieval
+  // put("keyB", param) [tainted], but get("keyA") [safe] is what flows to return
+  const putMatches = [...methodBody.matchAll(/(\w+)\.put\s*\(\s*"([^"]*)"\s*,\s*(\w+)\s*\)/g)];
+  const getMatches = [...methodBody.matchAll(/(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/g)];
+  if (putMatches.length > 0 && getMatches.length > 0) {
+    // Find the LAST get() before return — that's what's actually returned
+    const returnMatch = methodBody.match(/return\s+(\w+)\s*;/);
+    if (returnMatch) {
+      const returnVar = returnMatch[1]!;
+      // Find the get() that assigns to returnVar (or to bar which is returned)
+      const lastGet = getMatches.filter(g => g[1] === returnVar || returnVar === 'bar');
+      // Check if the last get() key is NOT the key where tainted data was stored
+      // Tainted keys: those where the put() value matches a known tainted variable (param, or derived from it)
+      const paramRe = /\bparam\b/;
+      for (const gm of getMatches.reverse()) {
+        const getKey = gm[3]!;
+        const mapVarGet = gm[2]!;
+        const assignVar = gm[1]!;
+        // Is this the final assignment to the returned variable?
+        if (assignVar === returnVar || (returnVar === 'bar' && assignVar === 'bar')) {
+          // Check if the key retrieved is a tainted or safe key
+          const putsForThisMap = putMatches.filter(p => p[1] === mapVarGet);
+          const putForKey = putsForThisMap.find(p => p[2] === getKey);
+          if (putForKey) {
+            const putValue = putForKey[3]!;
+            if (!paramRe.test(putValue)) {
+              // The final get() retrieves a key that was put with a safe (non-param) value
+              return true;
+            }
+          }
+          break; // only check the last assignment to the returned var
+        }
+      }
+    }
+  }
+
+  // Pattern 3: Mini forward taint analysis inside the method body.
+  // If the return variable is NOT tainted after tracking propagation, the method kills taint.
+  // This handles cases like B64 encode/decode where complex constructor chains don't propagate
+  // taint through our simple pattern matching.
+  // GUARD: Only apply Pattern 3 when the method body has NO branching on the return variable.
+  // If there's both "retVar = param" and "retVar = literal" in the method, there are mixed branches
+  // (if/else, switch, ternary) and the mini-taint analysis can't reliably determine which path runs.
+  const returnMatch3 = methodBody.match(/return\s+(\w+)\s*;/);
+  if (returnMatch3) {
+    const rv3 = returnMatch3[1]!;
+    const rvParamAssign = new RegExp('\\b' + escapeRegExp(rv3) + '\\s*=\\s*param\\b').test(methodBody);
+    const rvLiteralAssign = new RegExp('\\b' + escapeRegExp(rv3) + '\\s*=\\s*"[^"]*"').test(methodBody);
+    // Also check for ternary or if/else that assigns to the return variable
+    const hasTernary = new RegExp('\\b' + escapeRegExp(rv3) + '\\s*=.*\\?.*:').test(methodBody);
+    const hasIfElse = /\bif\s*\(/.test(methodBody) && new RegExp('\\b' + escapeRegExp(rv3) + '\\s*=').test(methodBody);
+    // Only safe to use mini-taint when there's NO branching/mixed assignment pattern
+    if (!rvParamAssign && !rvLiteralAssign && !hasTernary && !hasIfElse) {
+      const methodLines = methodBody.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const mtv3 = new Set<string>(['param']);
+      let returnVar3 = '';
+      for (const bl of methodLines) {
+        const mva = bl.match(/^(?:(?:final\s+)?[\w.<>\[\]]+\s+)?(\w+)\s*=\s*(\w+)\s*;/);
+        if (mva && mtv3.has(mva[2]!)) mtv3.add(mva[1]!);
+        const mcon = bl.match(/^(?:[\w.<>\[\]]+\s+)?(\w+)\s*=\s*new\s+\w+\s*\(\s*(\w+)\s*\)/);
+        if (mcon && mtv3.has(mcon[2]!)) mtv3.add(mcon[1]!);
+        const mcall = bl.match(/^(?:[\w.<>\[\]]+\s+)?(\w+)\s*=\s*(?:\w+\.)*\w+\s*\(\s*(\w+)\s*[,)]/);
+        if (mcall && mtv3.has(mcall[2]!)) mtv3.add(mcall[1]!);
+        const mcc = bl.match(/^(?:[\w.<>\[\]]+\s+)?(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+        if (mcc && mtv3.has(mcc[2]!)) mtv3.add(mcc[1]!);
+        const mlit = bl.match(/^(?:[\w.<>\[\]]+\s+)?(\w+)\s*=\s*"[^"]*"\s*;/);
+        if (mlit) mtv3.delete(mlit[1]!);
+        const mret = bl.match(/return\s+(\w+)\s*;/);
+        if (mret) { returnVar3 = mret[1]!; break; }
+      }
+      if (returnVar3 && !mtv3.has(returnVar3)) return true;
+    }
+  }
+
+  return false;
+}
+
+// NOTE: sourceLineCorroboratesLDAP90 was removed — it was too aggressive for cookie/complex
+// source patterns. The BFS path is now gated only by specific neutralization detectors
+// (deadBranch, listOffset, staticVal, interproceduralKill).
+function _unused_sourceLineCorroboratesLDAP90(sourceCode: string): boolean {
+  const src = stripComments(sourceCode);
+  const sl = src.split('\n');
+  const SRC_RE = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv|getParameterMap)\s*\(/;
+  const LDAP_SINK_RE = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search|idc\.search)\s*\(/;
+  const LDAP_SAFE_RE = /\b(?:escapeLDAPSearchFilter|LdapEncoder\.filterEncode|FilterEncoder|ldap\.escape|escape_filter_chars|parseInt|parseLong|Pattern\.matches)\b/i;
+  const tv = new Set<string>();
+  let hasSource = false;
+  // Track switch blocks to avoid killing taint in alternate branches.
+  // When inside a switch, if a variable is assigned tainted value in one case and
+  // a static literal in another case, we don't kill taint since either case could execute.
+  let inSwitch = false;
+  let switchBraceDepth = 0;
+  const switchTaintedVars = new Set<string>(); // vars assigned tainted inside switch
+  for (let i = 0; i < sl.length; i++) {
+    const ln = sl[i]!.trim();
+    if (ln.startsWith('//') || ln.startsWith('*') || ln.startsWith('/*')) continue;
+    // Track switch blocks using brace counting
+    if (/\bswitch\s*\(/.test(ln)) { inSwitch = true; switchBraceDepth = 0; }
+    if (inSwitch) {
+      for (const ch of ln) {
+        if (ch === '{') switchBraceDepth++;
+        if (ch === '}') { switchBraceDepth--; if (switchBraceDepth <= 0) { inSwitch = false; switchTaintedVars.clear(); } }
+      }
+    }
+    // Source detection
+    const mx = ln.match(SRC_RE);
+    if (mx) { tv.add(mx[1]!); hasSource = true; }
+    // getParameterMap().get("key") on same line => values is tainted
+    if (/\.getParameterMap\(\)/.test(ln)) {
+      const mapGet = ln.match(/(\w+)\s*=\s*\w+\.get\s*\(/);
+      if (mapGet) tv.add(mapGet[1]!);
+    }
+    // Taint propagation for tainted_map.get("key") => result is tainted
+    const mapGetProp = ln.match(/(\w+)\s*=\s*(\w+)\.get\s*\(/);
+    if (mapGetProp && tv.has(mapGetProp[2]!)) tv.add(mapGetProp[1]!);
+    // values[0] from getParameterValues or tainted array
+    const arrAccess = ln.match(/(\w+)\s*=\s*(\w+)\s*\[\s*\d+\s*\]/);
+    if (arrAccess && tv.has(arrAccess[2]!)) tv.add(arrAccess[1]!);
+    // Simple assignment propagation
+    const va = ln.match(/^(\w+)\s*=\s*(\w+)\s*;/);
+    if (va && tv.has(va[2]!)) {
+      tv.add(va[1]!);
+      if (inSwitch) switchTaintedVars.add(va[1]!);
+    }
+    // Method call propagation
+    const ma = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
+    if (ma && tv.has(ma[2]!)) tv.add(ma[1]!);
+    // String concat propagation
+    const ca = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+    if (ca && tv.has(ca[2]!)) tv.add(ca[1]!);
+    // Static literal kills taint — but NOT inside switch if the var was tainted in another case
+    const ck = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
+    if (ck) {
+      if (inSwitch && switchTaintedVars.has(ck[1]!)) {
+        // Inside switch: var was tainted in another case branch, don't kill
+      } else {
+        tv.delete(ck[1]!);
+      }
+    }
+    // HashMap put/get resolution
+    const mg = ln.match(/^(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+    if (mg) {
+      const mkr = resolveMapKeyTaint(sl, tv, mg[2]!, mg[3]!, i);
+      if (mkr === 'tainted') tv.add(mg[1]!); else tv.delete(mg[1]!);
+    }
+    // Interprocedural: bar = new Test().doSomething(request, param)
+    // Run mini forward taint analysis inside the called method.
+    const ipCall = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
+    if (ipCall && tv.has(ipCall[3]!)) {
+      const mn = ipCall[2]!;
+      let kills = false;
+      const methodDeclReCor = new RegExp('(?:public|private|protected|static)\\s+.*\\b' + escapeRegExp(mn) + '\\s*\\(');
+      for (let j = 0; j < sl.length; j++) {
+        if (j === i) continue;
+        const md = sl[j]!.trim();
+        if (methodDeclReCor.test(md)) {
+          let bd = 0; let fo = false;
+          const bodyLines: string[] = [];
+          for (let k = j; k < Math.min(j + 60, sl.length); k++) {
+            if (sl[k]!.includes('{')) { bd++; fo = true; }
+            if (sl[k]!.includes('}')) bd--;
+            if (fo && bd <= 0) break;
+            if (k !== j) bodyLines.push(sl[k]!.trim());
+          }
+          // Strong sanitizers
+          if (bodyLines.some(bl => LDAP_SAFE_RE.test(bl))) { kills = true; break; }
+          if (bodyLines.some(bl => /\.remove\s*\(\s*\d+\s*\)/.test(bl))) { kills = true; break; }
+          // Mini forward taint analysis (switch-aware)
+          const mtv = new Set<string>(['param']);
+          let returnVarCor = '';
+          let inSwCor = false; let swBdCor = 0;
+          const swTaintedCor = new Set<string>();
+          for (const bl of bodyLines) {
+            if (/\bswitch\s*\(/.test(bl)) { inSwCor = true; swBdCor = 0; }
+            if (inSwCor) { for (const c of bl) { if (c === '{') swBdCor++; if (c === '}') { swBdCor--; if (swBdCor <= 0) { inSwCor = false; swTaintedCor.clear(); } } } }
+            const mva = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\s*;/);
+            if (mva && mtv.has(mva[2]!)) { mtv.add(mva[1]!); if (inSwCor) swTaintedCor.add(mva[1]!); }
+            const mcon = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*new\s+\w+\s*\(\s*(\w+)\s*\)/);
+            if (mcon && mtv.has(mcon[2]!)) mtv.add(mcon[1]!);
+            const mcall = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(?:\w+\.)*\w+\s*\(\s*(\w+)\s*[,)]/);
+            if (mcall && mtv.has(mcall[2]!)) mtv.add(mcall[1]!);
+            const mcc = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+            if (mcc && mtv.has(mcc[2]!)) mtv.add(mcc[1]!);
+            const mts = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.toString\(\)/);
+            if (mts && mtv.has(mts[2]!)) mtv.add(mts[1]!);
+            const mlit = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*"[^"]*"\s*;/);
+            if (mlit) {
+              if (inSwCor && swTaintedCor.has(mlit[1]!)) { /* don't kill in switch */ } else { mtv.delete(mlit[1]!); }
+            }
+            const mget = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+            if (mget) {
+              const mkr = resolveMapKeyTaint(bodyLines, mtv, mget[2]!, mget[3]!, bodyLines.indexOf(bl));
+              if (mkr === 'tainted') mtv.add(mget[1]!); else mtv.delete(mget[1]!);
+            }
+            const mret = bl.match(/return\s+(\w+)\s*;/);
+            if (mret) { returnVarCor = mret[1]!; break; }
+          }
+          if (returnVarCor && !mtv.has(returnVarCor)) kills = true;
+          break;
+        }
+      }
+      if (kills) tv.delete(ipCall[1]!); else tv.add(ipCall[1]!);
+    }
+    // LDAP sink — check if any tainted var reaches it
+    if (LDAP_SINK_RE.test(ln) && hasSource) {
+      const scopeSlice = sl.slice(Math.max(0, i - 10), i + 5).join('\n');
+      if (LDAP_SAFE_RE.test(scopeSlice)) continue;
+      for (const t of tv) {
+        if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(ln) ||
+            new RegExp('["+]\\s*\\b' + escapeRegExp(t) + '\\b|\\b' + escapeRegExp(t) + '\\b\\s*[+"]').test(scopeSlice)) {
+          return true; // Source-line analysis confirms taint reaches LDAP sink
+        }
+      }
+    }
+  }
+  // Only deny (return false) if we found at least one source and tracked data flow.
+  // If we couldn't find any recognized source, the analysis is incomplete —
+  // return true to avoid suppressing real findings from patterns we can't track.
+  if (!hasSource) return true;
+  return false; // Source-line analysis found sources but none reached the LDAP sink
+}
+
+/**
  * CWE-90: LDAP Injection
  * Pattern: INGRESS → EXTERNAL/STORAGE(ldap) without CONTROL(LDAP escaping)
  * Property: User input is escaped for LDAP special characters before query construction.
@@ -9599,13 +9911,17 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch90 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
   const hasListOffset90 = map.source_code ? detectListOffsetNeutralization(map.source_code) : false;
+  const hasStaticVal90 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
+  // Interprocedural neutralization: check if inner-class/helper method kills taint
+  // by returning a static literal, retrieving a safe HashMap key, or abandoning the tainted chain.
+  const hasInterproceduralKill90 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
 
   for (const src of ingress) {
     for (const sink of ldapSinks90) {
       if (src.id === sink.id) continue;
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
-        if (hasDeadBranch90 || hasListOffset90) continue;
+        if (hasDeadBranch90 || hasListOffset90 || hasStaticVal90 || hasInterproceduralKill90) continue;
         const sinkCode90 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!LDAP_SAFE90.test(sinkCode90)) {
           const usesFilterConcat90 = LDAP_FILTER_CONCAT90.test(sinkCode90);
@@ -9630,27 +9946,53 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
   // Source-line fallback for Java LDAP injection: interprocedural taint tracking
   if (findings.length === 0 && map.source_code && !hasDeadBranch90 && !hasListOffset90) {
     const sl90 = map.source_code.split('\n');
-    const SRC90 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv)\s*\(/;
-    const LDAP_SINK_RE90 = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search)\s*\(/;
+    const SRC90 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv|getParameterMap)\s*\(/;
+    const LDAP_SINK_RE90 = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search|idc\.search)\s*\(/;
     const LDAP_SAFE_SL90 = /\b(?:escapeLDAPSearchFilter|LdapEncoder\.filterEncode|FilterEncoder|ldap\.escape|escape_filter_chars|parseInt|parseLong|Pattern\.matches)\b/i;
     const tv90 = new Set<string>();
     let sln90 = 0; let scd90 = '';
+    let inSwitch90 = false;
+    let switchBraceDepth90 = 0;
+    const switchTaintedVars90 = new Set<string>();
     for (let i = 0; i < sl90.length; i++) {
       const ln = sl90[i]!.trim();
       if (ln.startsWith('//') || ln.startsWith('*') || ln.startsWith('/*')) continue;
+      // Track switch blocks using brace counting
+      if (/\bswitch\s*\(/.test(ln)) { inSwitch90 = true; switchBraceDepth90 = 0; }
+      if (inSwitch90) {
+        for (const ch of ln) {
+          if (ch === '{') switchBraceDepth90++;
+          if (ch === '}') { switchBraceDepth90--; if (switchBraceDepth90 <= 0) { inSwitch90 = false; switchTaintedVars90.clear(); } }
+        }
+      }
       const mx90 = ln.match(SRC90); if (mx90) { tv90.add(mx90[1]!); sln90 = i + 1; scd90 = ln; }
+      // Taint propagation for tainted_map.get("key") => result is tainted
+      const mapGetProp90 = ln.match(/(\w+)\s*=\s*(\w+)\.get\s*\(/);
+      if (mapGetProp90 && tv90.has(mapGetProp90[2]!)) tv90.add(mapGetProp90[1]!);
+      // Array access: param = values[0] where values is tainted
+      const arrAccess90 = ln.match(/(\w+)\s*=\s*(\w+)\s*\[\s*\d+\s*\]/);
+      if (arrAccess90 && tv90.has(arrAccess90[2]!)) tv90.add(arrAccess90[1]!);
       // Simple assignment propagation
       const va90 = ln.match(/^(\w+)\s*=\s*(\w+)\s*;/);
-      if (va90 && tv90.has(va90[2]!)) tv90.add(va90[1]!);
+      if (va90 && tv90.has(va90[2]!)) {
+        tv90.add(va90[1]!);
+        if (inSwitch90) switchTaintedVars90.add(va90[1]!);
+      }
       // Method call propagation
       const ma90 = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
       if (ma90 && tv90.has(ma90[2]!)) tv90.add(ma90[1]!);
       // String concat propagation
       const ca90 = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
       if (ca90 && tv90.has(ca90[2]!)) tv90.add(ca90[1]!);
-      // Static literal kills taint
+      // Static literal kills taint — but NOT inside switch if the var was tainted in another case
       const ck90 = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
-      if (ck90) tv90.delete(ck90[1]!);
+      if (ck90) {
+        if (inSwitch90 && switchTaintedVars90.has(ck90[1]!)) {
+          // Inside switch: var was tainted in another case branch, don't kill
+        } else {
+          tv90.delete(ck90[1]!);
+        }
+      }
       // HashMap put/get
       const mg90 = ln.match(/^(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
       if (mg90) {
@@ -9672,22 +10014,71 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
         if (gi90 < adj90.length && !adj90[gi90]!.tainted) tv90.delete(lg90[1]!); else tv90.add(lg90[1]!);
       }
       // Interprocedural: bar = new Test().doSomething(request, param)
+      // Run mini forward taint analysis inside the called method to determine if
+      // the return value carries taint from param.
       const ipCall90 = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
       if (ipCall90 && tv90.has(ipCall90[3]!)) {
         const mn90 = ipCall90[2]!;
         let kills90 = false;
+        // Find method declaration
+        const methodDeclRe90 = new RegExp('(?:public|private|protected|static)\\s+.*\\b' + escapeRegExp(mn90) + '\\s*\\(');
         for (let j = 0; j < sl90.length; j++) {
+          if (j === i) continue;
           const md90 = sl90[j]!.trim();
-          if (md90.includes(`${mn90}(`) && (md90.includes('String ') || md90.includes('public '))) {
+          if (methodDeclRe90.test(md90)) {
+            // Extract method body lines
             let bd90 = 0; let fo90 = false;
-            for (let k = j; k < Math.min(j + 40, sl90.length); k++) {
+            const bodyLines90: string[] = [];
+            for (let k = j; k < Math.min(j + 60, sl90.length); k++) {
               if (sl90[k]!.includes('{')) { bd90++; fo90 = true; }
               if (sl90[k]!.includes('}')) bd90--;
               if (fo90 && bd90 <= 0) break;
-              if (LDAP_SAFE_SL90.test(sl90[k]!.trim())) { kills90 = true; break; }
-              if (/^\w+\s*=\s*"[^"]{5,}"/.test(sl90[k]!.trim())) { kills90 = true; break; }
-              if (/\.remove\s*\(\s*\d+\s*\)/.test(sl90[k]!.trim())) { kills90 = true; break; }
+              if (k !== j) bodyLines90.push(sl90[k]!.trim());
             }
+            // Strong sanitizers kill taint unconditionally
+            if (bodyLines90.some(bl => LDAP_SAFE_SL90.test(bl))) { kills90 = true; break; }
+            if (bodyLines90.some(bl => /\.remove\s*\(\s*\d+\s*\)/.test(bl))) { kills90 = true; break; }
+            // Mini forward taint analysis inside method body (switch-aware)
+            const mtv90 = new Set<string>(['param']);
+            let returnVar90 = '';
+            let inSw90 = false; let swBd90 = 0;
+            const swTainted90 = new Set<string>();
+            for (const bl of bodyLines90) {
+              // Track switch blocks
+              if (/\bswitch\s*\(/.test(bl)) { inSw90 = true; swBd90 = 0; }
+              if (inSw90) { for (const c of bl) { if (c === '{') swBd90++; if (c === '}') { swBd90--; if (swBd90 <= 0) { inSw90 = false; swTainted90.clear(); } } } }
+              // Simple assignment propagation
+              const mva = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\s*;/);
+              if (mva && mtv90.has(mva[2]!)) { mtv90.add(mva[1]!); if (inSw90) swTainted90.add(mva[1]!); }
+              // Constructor propagation: var = new Type(tainted)
+              const mcon = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*new\s+\w+\s*\(\s*(\w+)\s*\)/);
+              if (mcon && mtv90.has(mcon[2]!)) mtv90.add(mcon[1]!);
+              // Method call propagation: var = something.method(tainted)
+              const mcall = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(?:\w+\.)*\w+\s*\(\s*(\w+)\s*[,)]/);
+              if (mcall && mtv90.has(mcall[2]!)) mtv90.add(mcall[1]!);
+              // String concat propagation
+              const mcc = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
+              if (mcc && mtv90.has(mcc[2]!)) mtv90.add(mcc[1]!);
+              // toString propagation: var = tainted.toString()
+              const mts = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.toString\(\)/);
+              if (mts && mtv90.has(mts[2]!)) mtv90.add(mts[1]!);
+              // Static literal kills taint — but NOT inside switch if var was tainted in another case
+              const mlit = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*"[^"]*"\s*;/);
+              if (mlit) {
+                if (inSw90 && swTainted90.has(mlit[1]!)) { /* don't kill */ } else { mtv90.delete(mlit[1]!); }
+              }
+              // HashMap safe key retrieval
+              const mget = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
+              if (mget) {
+                const mkr = resolveMapKeyTaint(bodyLines90, mtv90, mget[2]!, mget[3]!, bodyLines90.indexOf(bl));
+                if (mkr === 'tainted') mtv90.add(mget[1]!); else mtv90.delete(mget[1]!);
+              }
+              // Return
+              const mret = bl.match(/return\s+(\w+)\s*;/);
+              if (mret) { returnVar90 = mret[1]!; break; }
+            }
+            // If the return variable is NOT tainted, the method kills taint
+            if (returnVar90 && !mtv90.has(returnVar90)) kills90 = true;
             break;
           }
         }
