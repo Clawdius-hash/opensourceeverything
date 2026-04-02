@@ -437,20 +437,29 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
 
   // -- LDAP (CWE-90: LDAP Injection) --
   // Juliet CWE-90 uses DirContext.search(name, filter, controls) where filter is user-controlled.
+  // OWASP BenchmarkJava uses both ctx.search() (ctx declared as DirContext) and idc.search()
+  // (idc declared as InitialDirContext). InitialContext also has search() via JNDI.
   'DirContext.search':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'InitialDirContext.search':     { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'InitialContext.search':        { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'LdapContext.search':           { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'InitialLdapContext.search':    { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'dirContext.search':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'ldapContext.search':           { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'DirContext.bind':              { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'InitialDirContext.bind':       { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'InitialContext.bind':          { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'DirContext.lookup':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'InitialContext.lookup':        { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
 
   // -- XPath (CWE-643: XPath Injection) --
   // Juliet CWE-643 uses XPath.evaluate(expression, context) where expression is user-controlled.
+  // OWASP BenchmarkJava also uses xp.compile(expression).evaluate(doc, ...) — a chained call
+  // where the compile() call takes the tainted expression. Both compile and evaluate are sinks.
   'XPath.evaluate':               { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
   'xpath.evaluate':               { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
+  'XPath.compile':                { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
+  'xpath.compile':                { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
   'XPathExpression.evaluate':     { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
   'xpathExpression.evaluate':     { nodeType: 'STORAGE', subtype: 'xpath_query', tainted: false },
 
@@ -489,11 +498,14 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Random.nextGaussian':          { nodeType: 'TRANSFORM', subtype: 'prng_weak', tainted: false },
 
   // -- Encoding --
-  'Base64.getEncoder':            { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
-  'Base64.getDecoder':            { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
-  'URLEncoder.encode':            { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
-  'URLDecoder.decode':            { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
-  'StandardCharsets.UTF_8':       { nodeType: 'TRANSFORM', subtype: 'encode',   tainted: false },
+  // NOTE: URL/Base64 encoding and decoding are NOT sanitizers — they transform data encoding
+  // but do NOT neutralize dangerous characters. Taint MUST propagate through these.
+  // Using subtype 'codec' (not 'encode') so extractTaintSources doesn't stop taint.
+  'Base64.getEncoder':            { nodeType: 'TRANSFORM', subtype: 'codec',    tainted: false },
+  'Base64.getDecoder':            { nodeType: 'TRANSFORM', subtype: 'codec',    tainted: false },
+  'URLEncoder.encode':            { nodeType: 'TRANSFORM', subtype: 'codec',    tainted: false },
+  'URLDecoder.decode':            { nodeType: 'TRANSFORM', subtype: 'codec',    tainted: false },
+  'StandardCharsets.UTF_8':       { nodeType: 'TRANSFORM', subtype: 'codec',    tainted: false },
 
   // -- Type conversion --
   'Integer.parseInt':             { nodeType: 'TRANSFORM', subtype: 'format',   tainted: false },
@@ -740,10 +752,13 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   'jmsTemplate': 'JmsTemplate',
   'redisTemplate': 'RedisTemplate',
   // JNDI / LDAP
-  'initialContext': 'InitialContext', 'ctx': 'InitialContext',
+  // NOTE: 'ctx' maps to DirContext (not InitialContext) because in OWASP BenchmarkJava
+  // and most real code, `ctx` is declared as DirContext and used for ctx.search().
+  // InitialContext doesn't have .search() — DirContext does.
+  'initialContext': 'InitialContext', 'ctx': 'DirContext',
   'directoryContext': 'DirContext', 'dirContext': 'DirContext', 'dirCtx': 'DirContext',
   'ldapContext': 'LdapContext', 'ldapCtx': 'LdapContext',
-  'initialDirContext': 'InitialDirContext',
+  'initialDirContext': 'InitialDirContext', 'idc': 'InitialDirContext',
   // Process
   'runtime': 'Runtime',
   'processBuilder': 'ProcessBuilder', 'pb': 'ProcessBuilder',
@@ -781,6 +796,10 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   'transformerFactory': 'TransformerFactory',
   'transformer': 'Transformer',
   'unmarshaller': 'Unmarshaller',
+  // XPath (CWE-643)
+  'xpf': 'XPathFactory', 'xPathFactory': 'XPathFactory', 'xpathFactory': 'XPathFactory',
+  'xp': 'XPath', 'xpath': 'XPath', 'xPath': 'XPath',
+  'xpathExpression': 'XPathExpression', 'xpe': 'XPathExpression',
   // Script engines
   'scriptEngine': 'ScriptEngine', 'engine': 'ScriptEngine',
   'scriptEngineManager': 'ScriptEngineManager',

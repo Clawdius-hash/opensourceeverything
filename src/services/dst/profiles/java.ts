@@ -1055,9 +1055,12 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
           if (arg) sources.push(...extractTaintSources(arg, ctx));
         }
       }
-      // Check receiver (object)
+      // Check receiver (object) — but skip for safe_source methods, whose output
+      // is a constant independent of receiver state (e.g., SeparateClassRequest.getTheValue()
+      // always returns "bar" regardless of what the request object contains).
+      const isSafeSourceETS = callResolution && callResolution.subtype === 'safe_source';
       const obj = expr.childForFieldName('object');
-      if (obj) sources.push(...extractTaintSources(obj, ctx));
+      if (obj && !isSafeSourceETS) sources.push(...extractTaintSources(obj, ctx));
       // Check: existing node with tainted data_out
       if (sources.length === 0) {
         const callLine = expr.startPosition.row + 1;
@@ -1830,9 +1833,34 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
 
         // Receiver taint: method calls on tainted objects
         // Skip for safe_source methods — their output is a constant, independent of receiver state.
+        // Skip for collection .get(N) when per-index tracking resolves the index to a safe element.
         const calleeObj = node.childForFieldName('object');
         const isSafeSource = resolution.subtype === 'safe_source';
-        if (calleeObj && !isSafeSource) {
+        let isCollectionSafeGet = false;
+        if (calleeObj?.type === 'identifier') {
+          const methodName = node.childForFieldName('name')?.text;
+          if (methodName === 'get') {
+            const getVar = ctx.resolveVariable(calleeObj.text);
+            if (getVar?.collectionTaint) {
+              const getArgs = node.childForFieldName('arguments');
+              const firstArg = getArgs?.namedChild(0);
+              let resolvedIdx: number | undefined;
+              if (firstArg?.type === 'decimal_integer_literal') {
+                resolvedIdx = parseInt(firstArg.text);
+              } else if (firstArg?.type === 'identifier') {
+                const idxVar = ctx.resolveVariable(firstArg.text);
+                if (idxVar?.numericValue !== undefined) resolvedIdx = idxVar.numericValue;
+              }
+              if (resolvedIdx !== undefined && resolvedIdx >= 0 && resolvedIdx < getVar.collectionTaint.length) {
+                if (!getVar.collectionTaint[resolvedIdx]!.tainted) {
+                  isCollectionSafeGet = true;
+                  (ctx.neuralMap as any).collectionTaintNeutralized = true;
+                }
+              }
+            }
+          }
+        }
+        if (calleeObj && !isSafeSource && !isCollectionSafeGet) {
           const receiverTaint = extractTaintSources(calleeObj, ctx);
           for (const source of receiverTaint) {
             if (!callHasTaintedArgs) callHasTaintedArgs = true;
@@ -1861,10 +1889,28 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             'setAttribute', 'setProperty', 'addElement',
           ]);
           const methodName = node.childForFieldName('name')?.text;
+
+          // Per-index collection tracking for .remove(N) — runs regardless of MUTATING_METHODS
+          // because 'remove' is resolved as STORAGE/db_write by resolveCallee but still
+          // needs to splice the per-index taint array for accurate collection tracking.
+          if (methodName === 'remove') {
+            const receiverVar = ctx.resolveVariable(calleeObj.text);
+            if (receiverVar?.collectionTaint) {
+              const collArgs = node.childForFieldName('arguments');
+              const firstArg = collArgs?.namedChild(0);
+              if (firstArg?.type === 'decimal_integer_literal') {
+                const removeIdx = parseInt(firstArg.text);
+                if (removeIdx >= 0 && removeIdx < receiverVar.collectionTaint.length) {
+                  receiverVar.collectionTaint.splice(removeIdx, 1);
+                }
+              }
+            }
+          }
+
           if (methodName && MUTATING_METHODS.has(methodName)) {
             const receiverVar = ctx.resolveVariable(calleeObj.text);
             if (receiverVar) {
-              // Per-index tracking for add/remove/set
+              // Per-index tracking for add/set
               if (methodName === 'add') {
                 const collArgs = node.childForFieldName('arguments');
                 const argCount = collArgs?.namedChildCount ?? 0;
@@ -1874,15 +1920,6 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                   const argTainted = isStringLiteral ? false : extractTaintSources(arg, ctx).length > 0;
                   if (!receiverVar.collectionTaint) receiverVar.collectionTaint = [];
                   receiverVar.collectionTaint.push({ tainted: argTainted, producingNodeId: argTainted ? n.id : null });
-                }
-              } else if (methodName === 'remove') {
-                const collArgs = node.childForFieldName('arguments');
-                const firstArg = collArgs?.namedChild(0);
-                if (firstArg?.type === 'decimal_integer_literal' && receiverVar.collectionTaint) {
-                  const removeIdx = parseInt(firstArg.text);
-                  if (removeIdx >= 0 && removeIdx < receiverVar.collectionTaint.length) {
-                    receiverVar.collectionTaint.splice(removeIdx, 1);
-                  }
                 }
               } else if (methodName === 'set') {
                 const collArgs = node.childForFieldName('arguments');
@@ -2171,7 +2208,35 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
               if (arg) unresolvedTaint.push(...extractTaintSources(arg, ctx));
             }
           }
-          if (unresolvedObj) {
+          // Per-index collection resolution: if this is a .get(N) on a collection
+          // with per-index tracking and the index resolves to a safe element,
+          // skip receiver taint propagation entirely.
+          let unresolvedCollSafeGet = false;
+          const unresolvedMethodName = node.childForFieldName('name');
+          if (unresolvedObj?.type === 'identifier' && unresolvedMethodName?.text === 'get') {
+            const collGetVar = ctx.resolveVariable(unresolvedObj.text);
+            if (collGetVar?.collectionTaint) {
+              const collGetArgs = node.childForFieldName('arguments');
+              const collFirstArg = collGetArgs?.namedChild(0);
+              let collResolvedIdx: number | undefined;
+              if (collFirstArg?.type === 'decimal_integer_literal') {
+                collResolvedIdx = parseInt(collFirstArg.text);
+              } else if (collFirstArg?.type === 'identifier') {
+                const idxVar = ctx.resolveVariable(collFirstArg.text);
+                if (idxVar?.numericValue !== undefined) collResolvedIdx = idxVar.numericValue;
+              }
+              if (collResolvedIdx !== undefined && collResolvedIdx >= 0 && collResolvedIdx < collGetVar.collectionTaint.length) {
+                if (!collGetVar.collectionTaint[collResolvedIdx]!.tainted) {
+                  unresolvedCollSafeGet = true;
+                  // Annotate the neural map: collection per-index tracking neutralized taint.
+                  // This prevents scopeBasedTaintReaches from producing false positives
+                  // when tainted data exists in scope but is neutralized before the sink.
+                  (ctx.neuralMap as any).collectionTaintNeutralized = true;
+                }
+              }
+            }
+          }
+          if (unresolvedObj && !unresolvedCollSafeGet) {
             unresolvedTaint.push(...extractTaintSources(unresolvedObj, ctx));
           }
           if (unresolvedTaint.length > 0) {
@@ -2798,6 +2863,9 @@ export const javaProfile: LanguageProfile = {
   postVisitFunction,
   preVisitIteration,
   postVisitIteration,
+
+  // Dead-branch elimination: evaluate if conditions for constant folding
+  tryEvalCondition: (condNode: any, ctx: any) => tryEvalCondition(condNode, ctx),
 
   // Utility predicates
   isValueFirstDeclaration: (nodeType: string) =>

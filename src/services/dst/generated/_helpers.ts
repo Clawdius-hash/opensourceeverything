@@ -896,6 +896,12 @@ export function scopeBasedTaintReaches(
 ): boolean {
   if (!sharesFunctionScope(map, sourceId, sinkId)) return false;
 
+  // If the mapper has already determined that collection per-index neutralization
+  // killed taint in this scope (via collectionTaintNeutralized annotation),
+  // do not use the scope-based fallback. The mapper's per-index tracking
+  // produces accurate DATA_FLOW edges, so the fallback would be a false positive.
+  if ((map as any).collectionTaintNeutralized) return false;
+
   // Check if any TRANSFORM node in the same scope has tainted data_in
   // (meaning the INGRESS data was assigned to a variable in scope)
   const hasTaintedTransform = map.nodes.some(n =>
