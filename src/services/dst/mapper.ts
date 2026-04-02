@@ -590,6 +590,73 @@ export class MapperContext {
     containedMap: Map<string, NeuralMapNode[]>,
   ): void {
     const nodeById = this.nodeById;
+
+    // PASS 2a: For local calls and passthrough nodes that were conservatively tainted
+    // during the walk (because tainted args were passed), check if the function is now
+    // known to NOT return tainted data. If so, remove the conservative taint.
+    // This handles the case where a function receives a tainted argument
+    // (e.g., HttpServletRequest) but does not propagate that taint through its return.
+    // NOTE: passthrough nodes are created for forward-referenced functions that weren't
+    // yet in functionRegistry during the walk. They need the same treatment as local_calls.
+    const untaintedCallIds = new Set<string>();
+    const taintedCallsAndPassthroughs = this.neuralMap.nodes.filter(n =>
+      (n.node_subtype === 'local_call' || n.node_subtype === 'passthrough') &&
+      n.data_out.some(d => d.tainted)
+    );
+    for (const lc of taintedCallsAndPassthroughs) {
+      for (const [funcName, funcNodeId] of this.functionRegistry) {
+        // Skip overloaded variants (name:count) to avoid double-processing
+        if (funcName.includes(':')) continue;
+        const escaped = funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if ((lc.analysis_snapshot || lc.code_snapshot).match(
+          new RegExp('\\b' + escaped + '\\s*\\(')
+        ) !== null) {
+          // If the function was visited AND it does NOT return tainted data, remove
+          // the conservative taint from the call/passthrough node.
+          if (this.functionReturnTaint.has(funcNodeId) === false) {
+            lc.data_out = lc.data_out.filter(d => !d.tainted);
+            untaintedCallIds.add(lc.id);
+          }
+          break;
+        }
+      }
+    }
+
+    // PASS 2a cleanup: propagate un-tainting to downstream nodes.
+    // When a local call's taint is removed:
+    // 1. Un-taint data_in entries sourced from the local call
+    // 2. Remove DATA_FLOW edges from the local call to downstream nodes
+    // 3. Remove DATA_FLOW edges from the global edges list
+    if (untaintedCallIds.size > 0) {
+      for (const node of this.neuralMap.nodes) {
+        // Clean data_in entries sourced from un-tainted local calls
+        node.data_in = node.data_in.map(d => {
+          if (d.tainted && d.source && untaintedCallIds.has(d.source)) {
+            return { ...d, tainted: false };
+          }
+          return d;
+        });
+        // Clean data_out entries sourced from un-tainted local calls
+        node.data_out = node.data_out.map(d => {
+          if (d.tainted && d.source && untaintedCallIds.has(d.source)) {
+            return { ...d, tainted: false };
+          }
+          return d;
+        });
+        // Remove outgoing DATA_FLOW edges from un-tainted local calls
+        // (these edges represent incorrect taint propagation paths)
+        if (untaintedCallIds.has(node.id)) {
+          node.edges = node.edges.filter(e => e.edge_type !== 'DATA_FLOW');
+        }
+      }
+      // Also clean the global edges list
+      this.neuralMap.edges = this.neuralMap.edges.filter(e =>
+        !(e.edge_type === 'DATA_FLOW' && e.source && untaintedCallIds.has(e.source))
+      );
+    }
+
+    // PASS 2b: For local calls that are NOT yet tainted, add taint if the function
+    // is now known to return tainted data (forward-referenced functions).
     for (const lc of allLocalCalls) {
       if (lc.data_out.some(d => d.tainted)) continue;
       for (const [funcName, funcNodeId] of this.functionRegistry) {

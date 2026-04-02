@@ -535,6 +535,11 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'Jsoup.clean':                  { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
   'ESAPI.encoder':                { nodeType: 'TRANSFORM', subtype: 'sanitize', tainted: false },
 
+  // -- Safe sources (methods that return hardcoded/constant values) --
+  // SeparateClassRequest.getTheValue() always returns a hardcoded string ("bar").
+  // The return value is NOT derived from the request — it is a constant regardless of input.
+  'SeparateClassRequest.getTheValue': { nodeType: 'TRANSFORM', subtype: 'safe_source', tainted: false },
+
   // -- XML parsers (CWE-611: XXE) --
   // DOM parsing
   'DocumentBuilderFactory.newInstance': { nodeType: 'TRANSFORM', subtype: 'xml_parse', tainted: false },
@@ -788,6 +793,8 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   // SSL/TLS
   'sslContext': 'SSLContext',
   'trustManagerFactory': 'TrustManagerFactory', 'tmf': 'TrustManagerFactory',
+  // BenchmarkJava helper classes
+  'scr': 'SeparateClassRequest', 'separateClassRequest': 'SeparateClassRequest',
 };
 
 // Helper: try to resolve a key across MEMBER_CALLS + EXPANSION_ENTRIES

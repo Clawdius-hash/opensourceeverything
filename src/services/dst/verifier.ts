@@ -851,19 +851,11 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch89 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
 
-  // getTheValue() safe source: SeparateClassRequest.getTheValue() always returns a hardcoded
-  // constant ("bar"). When the ONLY source of taint is getTheValue() with no other real
-  // servlet input methods, the data reaching the SQL sink is provably static.
-  const hasGetTheValueSafe89 = map.source_code
-    ? /\.getTheValue\s*\(/.test(stripComments(map.source_code)) &&
-      !/\b(?:request|req)\s*\.\s*(?:getParameter|getParameterValues|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(/.test(stripComments(map.source_code))
-    : false;
-
   for (const src of ingress) {
     for (const sink of storage) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
-        if (hasDeadBranch89 || hasGetTheValueSafe89) continue;
+        if (hasDeadBranch89) continue;
         // Check if the sink or containing scope uses parameterized queries
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -897,7 +889,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   // Source-line fallback for Java: detect SQL injection inside anonymous inner classes
   // where taint crosses class boundaries (e.g., JWT header.get("kid") → executeQuery).
   // The mapper doesn't trace taint across inner class boundaries, so BFS misses these.
-  if (findings.length === 0 && map.source_code && !hasDeadBranch89 && !hasGetTheValueSafe89) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranch89) {
     const sl89 = stripComments(map.source_code);
     const lines89 = sl89.split('\n');
 
@@ -1087,7 +1079,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
       const getKey79 = lastGet79[2]!;
       const taintedVars79 = new Set<string>();
       for (const ln of lines79h) {
-        const srcM = ln.match(/(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getInputStream|getReader|getQueryString|getTheValue|nextElement)\s*\(/);
+        const srcM = ln.match(/(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getInputStream|getReader|getQueryString|nextElement)\s*\(/);
         if (srcM) taintedVars79.add(srcM[1]!);
         const decM = ln.match(/(\w+)\s*=\s*.*(?:URLDecoder\.decode)\s*\(/);
         if (decM) taintedVars79.add(decM[1]!);
@@ -1576,13 +1568,6 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   const hasStaticValueNeutralization22 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   const hasInterproceduralNeutralization22 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
 
-  // Detect getTheValue() safe source: SeparateClassRequest.getTheValue() always returns "bar"
-  // When the ONLY source of param is getTheValue(), no user input reaches the sink.
-  const hasGetTheValueSafeSource = map.source_code
-    ? /\.getTheValue\s*\(/.test(stripComments(map.source_code)) &&
-      !/\b(?:request|req)\s*\.\s*(?:getParameter|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(/.test(stripComments(map.source_code))
-    : false;
-
   // Detect HashMap safe-key retrieval: tainted value is stored under one key but
   // a different (safe) key is retrieved. Checks interprocedural doSomething methods.
   let hasMapKeySafeRetrieval22 = false;
@@ -1625,7 +1610,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
         // safe-source, or map-key neutralization is detected.
         // The graph tracks taint through all branches, but constant ternary/switch patterns
         // guarantee the tainted branch is never taken.
-        if (hasDeadBranchNeutralization || hasListOffsetNeutralization22 || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasGetTheValueSafeSource || hasMapKeySafeRetrieval22) continue;
+        if (hasDeadBranchNeutralization || hasListOffsetNeutralization22 || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasMapKeySafeRetrieval22) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -1651,7 +1636,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // (getParameter, getCookies, getHeaders) flows to File/FileInputStream/FileOutputStream
   // constructors via local variable assignment + string concatenation, even when
   // the mapper doesn't emit DATA_FLOW edges for the full chain.
-  if (findings.length === 0 && map.source_code && !hasListOffsetNeutralization22 && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasGetTheValueSafeSource && !hasMapKeySafeRetrieval22) {
+  if (findings.length === 0 && map.source_code && !hasListOffsetNeutralization22 && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
     const src = stripComments(map.source_code);
     // Normalize: collapse whitespace/newlines for multi-line statement parsing
     const normalized = src.replace(/\n\s*/g, ' ');
@@ -1764,7 +1749,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // and uses it in new File(directory, paramName) without canonicalization checks.
   // This catches cross-method taint where a controller passes user input to a helper.
   // Skip when dead-branch neutralization proves taint never reaches the sink.
-  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasGetTheValueSafeSource && !hasMapKeySafeRetrieval22) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
     const sl22m = stripComments(map.source_code);
     const lines22m = sl22m.split('\n');
 
@@ -8722,14 +8707,6 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
   const hasDeadBranch643 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
 
-  // getTheValue() safe source: SeparateClassRequest.getTheValue() always returns a hardcoded
-  // constant. When the ONLY source of taint is getTheValue() with no real servlet input,
-  // the data reaching the XPath sink is provably static.
-  const hasGetTheValueSafe643 = map.source_code
-    ? /\.getTheValue\s*\(/.test(stripComments(map.source_code)) &&
-      !/\b(?:request|req)\s*\.\s*(?:getParameter|getParameterValues|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(/.test(stripComments(map.source_code))
-    : false;
-
   // Interprocedural static neutralization: the called method (e.g., doSomething) abandons
   // the tainted parameter and returns a value derived from a static literal instead.
   const hasInterproceduralStatic643 = map.source_code
@@ -8740,7 +8717,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
     for (const sink of xpSinks643) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (hasDeadBranch643 || hasGetTheValueSafe643 || hasInterproceduralStatic643) continue;
+        if (hasDeadBranch643 || hasInterproceduralStatic643) continue;
         if (!SAFE643.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE643.test(stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot))) {
           const concat = XP_CAT643.test(sink.analysis_snapshot || sink.code_snapshot);
           findings.push({
@@ -8756,7 +8733,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
       }
     }
   }
-  if (findings.length === 0 && ingress643.length > 0 && !hasDeadBranch643 && !hasGetTheValueSafe643 && !hasInterproceduralStatic643) {
+  if (findings.length === 0 && ingress643.length > 0 && !hasDeadBranch643 && !hasInterproceduralStatic643) {
     const xpScope643 = map.nodes.filter(n => n.node_type !== 'META' && n.node_type !== 'STRUCTURAL' && XP_CAT643.test(n.analysis_snapshot || n.code_snapshot));
     for (const src of ingress643) {
       for (const sink of xpScope643) {
@@ -8774,7 +8751,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
     }
   }
   // Source-line fallback for Java XPath injection: interprocedural taint tracking
-  if (findings.length === 0 && map.source_code && !hasDeadBranch643 && !hasGetTheValueSafe643 && !hasInterproceduralStatic643) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranch643 && !hasInterproceduralStatic643) {
     const hasListOffset643 = detectListOffsetNeutralization(map.source_code);
     if (!hasListOffset643) {
       const sl643 = map.source_code.split('\n');
@@ -9823,11 +9800,6 @@ function detectInterproceduralNeutralization90(sourceCode: string): boolean {
   if (!ipCallMatch) return false;
   const calledMethod = ipCallMatch[2]!;
   const paramVar = ipCallMatch[3]!;
-  // Check if param is assigned from a known safe source (e.g., getTheValue which returns a constant)
-  const SAFE_SOURCE_RE = /\b(?:getTheValue)\s*\(/;
-  const paramAssignRe = new RegExp(escapeRegExp(paramVar) + '\\s*=\\s*[^;]*');
-  const paramAssignMatch = src.match(paramAssignRe);
-  if (paramAssignMatch && SAFE_SOURCE_RE.test(paramAssignMatch[0])) return true;
   // Find the method body
   const methodDeclRe = new RegExp('(?:public|private|protected|static)\\s+\\w+\\s+' + escapeRegExp(calledMethod) + '\\s*\\([^)]*\\)[^{]*\\{');
   const methodStart = src.match(methodDeclRe);
@@ -10357,19 +10329,10 @@ function verifyCWE91(map: NeuralMap): VerificationResult {
 
   const SAFE_XML91 = /\b(createTextNode|escapeXml|xmlEncode|xmlEscape|encodeXml|he\.encode|entities\.encode|XPathEvaluator|xpath.*variable|bindVariable|xml2js\.Builder|xmlbuilder|js2xml|sanitize.*xml|xmlSanitize|defusedxml|escapeXPath)\b/i;
 
-  // getTheValue() safe source: SeparateClassRequest.getTheValue() returns a hardcoded constant.
-  // When the ONLY taint source is getTheValue() with no real servlet input, data at the
-  // XML/XPath sink is provably static — no injection possible.
-  const hasGetTheValueSafe91 = map.source_code
-    ? /\.getTheValue\s*\(/.test(stripComments(map.source_code)) &&
-      !/\b(?:request|req)\s*\.\s*(?:getParameter|getParameterValues|getCookies|getHeader|getHeaders|getQueryString|getInputStream|getReader)\s*\(/.test(stripComments(map.source_code))
-    : false;
-
   for (const src of ingress) {
     for (const sink of xmlSinks91) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (hasGetTheValueSafe91) continue;
         const sinkCode91 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!SAFE_XML91.test(sinkCode91)) {
           const isXpath91 = /\bxpath\b|\bselectNodes\b|\bevaluate\b|\bselectSingleNode\b|\b\/\/\w+\[/i.test(sinkCode91);

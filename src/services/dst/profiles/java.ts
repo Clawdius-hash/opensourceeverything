@@ -1627,8 +1627,10 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
 
         // Receiver taint: method calls on tainted objects
+        // Skip for safe_source methods — their output is a constant, independent of receiver state.
         const calleeObj = node.childForFieldName('object');
-        if (calleeObj) {
+        const isSafeSource = resolution.subtype === 'safe_source';
+        if (calleeObj && !isSafeSource) {
           const receiverTaint = extractTaintSources(calleeObj, ctx);
           for (const source of receiverTaint) {
             if (!callHasTaintedArgs) callHasTaintedArgs = true;
@@ -1637,7 +1639,8 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
 
         // Taint-through: if ANY tainted data flows in, mark output tainted
-        if (callHasTaintedArgs && !n.data_out.some((d: any) => d.tainted)) {
+        // Skip for safe_source methods — they return hardcoded values regardless of input.
+        if (callHasTaintedArgs && !isSafeSource && !n.data_out.some((d: any) => d.tainted)) {
           n.data_out.push({
             name: 'result',
             source: n.id,
