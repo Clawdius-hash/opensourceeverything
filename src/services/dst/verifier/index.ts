@@ -48,45 +48,8 @@ export { stripLiterals, stripRegexLiterals, stripComments };
 // Satisfy TS — these are used throughout the 509 verifyCWE functions below
 void FLOW_EDGE_TYPES;
 
-// ---------------------------------------------------------------------------
-// LEGACY: The function definitions below have been extracted to source-analysis.ts
-// and graph-helpers.ts. This marker replaces ~750 lines of duplicated code.
-// ---------------------------------------------------------------------------
-
-/* REMOVED: stripLiterals — now in source-analysis.ts */
-/* REMOVED: stripRegexLiterals — now in source-analysis.ts */
-/* REMOVED: stripComments — now in source-analysis.ts */
-/* REMOVED: escapeRegExp — now in source-analysis.ts */
-/* REMOVED: detectDeadBranchNeutralization — now in source-analysis.ts */
-/* REMOVED: evaluateConstantComparison — now in source-analysis.ts */
-/* REMOVED: detectStaticValueNeutralization — now in source-analysis.ts */
-/* REMOVED: resolveMapKeyTaint — now in source-analysis.ts */
-/* REMOVED: wholeWord — now in source-analysis.ts */
-
-/*
- * REMOVED: VerificationResult, Finding, NodeRef interfaces
- * Now in types.ts, re-exported above
- */
-
-/* REMOVED: FLOW_EDGE_TYPES — now in graph-helpers.ts */
-/* REMOVED: nodeRef — now in graph-helpers.ts */
-/* REMOVED: nodesOfType — now in graph-helpers.ts */
-/* REMOVED: nodesOfSubtype — now in graph-helpers.ts */
-/* REMOVED: nodesWithSurface — now in graph-helpers.ts */
-/* REMOVED: inferMapLanguage — now in graph-helpers.ts */
-/* REMOVED: isLibraryCode — now in graph-helpers.ts */
-/* REMOVED: hasWebFrameworkContext — now in graph-helpers.ts */
-/* REMOVED: hasTaintedPathWithoutControl — now in graph-helpers.ts */
-/* REMOVED: sinkReceivesTaintedData — now in graph-helpers.ts */
-/* REMOVED: hasTaintedPathWithoutAuth — now in graph-helpers.ts */
-/* REMOVED: hasPathWithoutControl — now in graph-helpers.ts */
-/* REMOVED: findContainingFunction — now in graph-helpers.ts */
-/* REMOVED: sharesFunctionScope — now in graph-helpers.ts */
-
-// ---------------------------------------------------------------------------
-// CWE Verification Paths (line ~770 in original)
-// These remain here until Phase 1+ domain extraction
-// ---------------------------------------------------------------------------
+// Utilities extracted to source-analysis.ts and graph-helpers.ts
+// Types extracted to types.ts
 
 // ---------------------------------------------------------------------------
 // CWE Verification Paths
@@ -1644,12 +1607,6 @@ function verifyCWE918(map: NeuralMap): VerificationResult {
   };
 }
 
-/* REMOVED: verifyCWE798 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE306 -- now in auth.ts */
-
-/* REMOVED: verifyCWE200 — now in sensitive-data.ts */
-
 /**
  * CWE-78: OS Command Injection
  * Pattern: INGRESS → EXTERNAL(shell/exec) without CONTROL(input sanitization)
@@ -2353,8 +2310,6 @@ function verifyCWE94(map: NeuralMap): VerificationResult {
   };
 }
 
-/* REMOVED: verifyCWE352 -- now in auth.ts */
-
 /**
  * CWE-1321: Prototype Pollution (Improperly Controlled Modification of Object Prototype Attributes)
  * Pattern: INGRESS → TRANSFORM(mass_assignment) without CONTROL
@@ -2515,10 +2470,6 @@ function verifyCWE158(map: NeuralMap): VerificationResult {
     findings,
   };
 }
-/* REMOVED: verifyCWE 400, 404, 770, 1333 -- now in resource.ts */
-
-/* REMOVED: verifyCWE328 -- now in crypto.ts */
-
 
 // ---------------------------------------------------------------------------
 // CWE-117: Improper Output Neutralization for Logs (broadened — cross-language)
@@ -2845,49 +2796,9 @@ function verifyCWE601(map: NeuralMap): VerificationResult {
 // Sensitive Data Exposure CWEs (CWE-256 through CWE-319)
 // ---------------------------------------------------------------------------
 
-/* REMOVED: verifyCWE256 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE257 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE260 — now in sensitive-data.ts */
-/* REMOVED: verifyCWE261 -- now in crypto.ts */
-
-
-/* REMOVED: verifyCWE312 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE313 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE314 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE315 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE316 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE319 — now in sensitive-data.ts */
-
 // ---------------------------------------------------------------------------
 // AUTHENTICATION & CREDENTIAL CWE Verification Paths
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE287 -- now in auth.ts */
-
-/* REMOVED: verifyCWE288 -- now in auth.ts */
-
-/* REMOVED: verifyCWE290 -- now in auth.ts */
-
-/* REMOVED: verifyCWE294 -- now in auth.ts */
-
-/* REMOVED: verifyCWE295 -- now in auth.ts */
-
-/* REMOVED: verifyCWE296 -- now in auth.ts */
-
-/* REMOVED: verifyCWE297 -- now in auth.ts */
-
-/* REMOVED: verifyCWE521 -- now in auth.ts */
-
-/* REMOVED: verifyCWE522 -- now in auth.ts */
-
-/* REMOVED: verifyCWE620 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // Memory Safety & Arithmetic CWE Verification Paths
@@ -3766,68 +3677,12 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
   }
   return { cwe: 'CWE-476', name: 'NULL Pointer Dereference', holds: findings.length === 0, findings };
 }
-/* REMOVED: verifyCWE327 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE330 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE331 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE338 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE347 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE354 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE757 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE759 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE760 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE916 -- now in crypto.ts */
 
 // ---------------------------------------------------------------------------
-
-/**
- * @deprecated Use `shouldSkipCWE()` from `./cwe-filter.ts` instead.
- *
- * This set is kept for backward compatibility but is no longer used by verifyAll().
- * The old approach of filtering ALL platform CWEs for ALL "web languages" was broken:
- * it incorrectly filtered J2EE CWEs from Java, .NET CWEs from C#, and Android CWEs
- * from Kotlin. The new filter uses per-language platform overlap from MITRE CWE data.
- *
- * See: cwe-filter.ts, state/platform_cwe_mapping.md, state/platform_filter_edge_cases.md
- */
-export const PLATFORM_SPECIFIC_CWES: ReadonlySet<string> = new Set([
-  // --- Windows ---
-  'CWE-422', 'CWE-782', 'CWE-781', 'CWE-40', 'CWE-39', 'CWE-58', 'CWE-64', 'CWE-65', 'CWE-67', 'CWE-69',
-  // --- Android ---
-  'CWE-925', 'CWE-926',
-  // --- .NET / ASP.NET ---
-  'CWE-11', 'CWE-12', 'CWE-13', 'CWE-520', 'CWE-554', 'CWE-556',
-  // --- J2EE / Struts / EJB ---
-  'CWE-5', 'CWE-6', 'CWE-7', 'CWE-8', 'CWE-9',
-  'CWE-102', 'CWE-103', 'CWE-104', 'CWE-105', 'CWE-106', 'CWE-107', 'CWE-108', 'CWE-109', 'CWE-110',
-  'CWE-111', 'CWE-245', 'CWE-246', 'CWE-382', 'CWE-383', 'CWE-555',
-  'CWE-574', 'CWE-575', 'CWE-576', 'CWE-577', 'CWE-578', 'CWE-579', 'CWE-594', 'CWE-600', 'CWE-608',
-  // --- ActiveX / COM ---
-  'CWE-618', 'CWE-623',
-  // --- Servlet ---
-  'CWE-536',
-]);
-
 
 // ---------------------------------------------------------------------------
 // ACCESS CONTROL, INJECTION & FILE HANDLING CWEs
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE434 -- now in auth.ts */
-
-/* REMOVED: verifyCWE436 -- now in auth.ts */
-
-/* REMOVED: verifyCWE470 -- now in auth.ts */
-
-/* REMOVED: verifyCWE501 -- now in auth.ts */
 
 /** CWE-610: Externally Controlled Reference to a Resource in Another Sphere */
 function verifyCWE610(map: NeuralMap): VerificationResult {
@@ -4104,7 +3959,6 @@ function verifyCWE776(map: NeuralMap): VerificationResult {
   }
   return { cwe: 'CWE-776', name: 'Improper Restriction of Recursive Entity References in DTDs (Billion Laughs)', holds: findings.length === 0, findings };
 }
-/* REMOVED: verifyCWE 362, 366, 367, 377, 378, 379, 426, 427, 428, 668 -- now in resource.ts */
 
 function verifyCWE20(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
@@ -4394,152 +4248,6 @@ function detectInterproceduralNeutralization90(sourceCode: string): boolean {
   }
 
   return false;
-}
-
-// NOTE: sourceLineCorroboratesLDAP90 was removed — it was too aggressive for cookie/complex
-// source patterns. The BFS path is now gated only by specific neutralization detectors
-// (deadBranch, listOffset, staticVal, interproceduralKill).
-function _unused_sourceLineCorroboratesLDAP90(sourceCode: string): boolean {
-  const src = stripComments(sourceCode);
-  const sl = src.split('\n');
-  const SRC_RE = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv|getParameterMap)\s*\(/;
-  const LDAP_SINK_RE = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search|idc\.search)\s*\(/;
-  const LDAP_SAFE_RE = /\b(?:escapeLDAPSearchFilter|LdapEncoder\.filterEncode|FilterEncoder|ldap\.escape|escape_filter_chars|parseInt|parseLong|Pattern\.matches)\b/i;
-  const tv = new Set<string>();
-  let hasSource = false;
-  // Track switch blocks to avoid killing taint in alternate branches.
-  // When inside a switch, if a variable is assigned tainted value in one case and
-  // a static literal in another case, we don't kill taint since either case could execute.
-  let inSwitch = false;
-  let switchBraceDepth = 0;
-  const switchTaintedVars = new Set<string>(); // vars assigned tainted inside switch
-  for (let i = 0; i < sl.length; i++) {
-    const ln = sl[i]!.trim();
-    if (ln.startsWith('//') || ln.startsWith('*') || ln.startsWith('/*')) continue;
-    // Track switch blocks using brace counting
-    if (/\bswitch\s*\(/.test(ln)) { inSwitch = true; switchBraceDepth = 0; }
-    if (inSwitch) {
-      for (const ch of ln) {
-        if (ch === '{') switchBraceDepth++;
-        if (ch === '}') { switchBraceDepth--; if (switchBraceDepth <= 0) { inSwitch = false; switchTaintedVars.clear(); } }
-      }
-    }
-    // Source detection
-    const mx = ln.match(SRC_RE);
-    if (mx) { tv.add(mx[1]!); hasSource = true; }
-    // getParameterMap().get("key") on same line => values is tainted
-    if (/\.getParameterMap\(\)/.test(ln)) {
-      const mapGet = ln.match(/(\w+)\s*=\s*\w+\.get\s*\(/);
-      if (mapGet) tv.add(mapGet[1]!);
-    }
-    // Taint propagation for tainted_map.get("key") => result is tainted
-    const mapGetProp = ln.match(/(\w+)\s*=\s*(\w+)\.get\s*\(/);
-    if (mapGetProp && tv.has(mapGetProp[2]!)) tv.add(mapGetProp[1]!);
-    // values[0] from getParameterValues or tainted array
-    const arrAccess = ln.match(/(\w+)\s*=\s*(\w+)\s*\[\s*\d+\s*\]/);
-    if (arrAccess && tv.has(arrAccess[2]!)) tv.add(arrAccess[1]!);
-    // Simple assignment propagation
-    const va = ln.match(/^(\w+)\s*=\s*(\w+)\s*;/);
-    if (va && tv.has(va[2]!)) {
-      tv.add(va[1]!);
-      if (inSwitch) switchTaintedVars.add(va[1]!);
-    }
-    // Method call propagation
-    const ma = ln.match(/^(\w+)\s*=\s*\w+(?:\.\w+)*\s*\(\s*(\w+)\s*\)/);
-    if (ma && tv.has(ma[2]!)) tv.add(ma[1]!);
-    // String concat propagation
-    const ca = ln.match(/^(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
-    if (ca && tv.has(ca[2]!)) tv.add(ca[1]!);
-    // Static literal kills taint — but NOT inside switch if the var was tainted in another case
-    const ck = ln.match(/^(\w+)\s*=\s*"[^"]*"\s*;/);
-    if (ck) {
-      if (inSwitch && switchTaintedVars.has(ck[1]!)) {
-        // Inside switch: var was tainted in another case branch, don't kill
-      } else {
-        tv.delete(ck[1]!);
-      }
-    }
-    // HashMap put/get resolution
-    const mg = ln.match(/^(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
-    if (mg) {
-      const mkr = resolveMapKeyTaint(sl, tv, mg[2]!, mg[3]!, i);
-      if (mkr === 'tainted') tv.add(mg[1]!); else tv.delete(mg[1]!);
-    }
-    // Interprocedural: bar = new Test().doSomething(request, param)
-    // Run mini forward taint analysis inside the called method.
-    const ipCall = ln.match(/(\w+)\s*=\s*(?:new\s+\w+\(\)\s*\.\s*)?(\w+)\s*\(\s*(?:request\s*,\s*)?(\w+)\s*\)/);
-    if (ipCall && tv.has(ipCall[3]!)) {
-      const mn = ipCall[2]!;
-      let kills = false;
-      const methodDeclReCor = new RegExp('(?:public|private|protected|static)\\s+.*\\b' + escapeRegExp(mn) + '\\s*\\(');
-      for (let j = 0; j < sl.length; j++) {
-        if (j === i) continue;
-        const md = sl[j]!.trim();
-        if (methodDeclReCor.test(md)) {
-          let bd = 0; let fo = false;
-          const bodyLines: string[] = [];
-          for (let k = j; k < Math.min(j + 60, sl.length); k++) {
-            if (sl[k]!.includes('{')) { bd++; fo = true; }
-            if (sl[k]!.includes('}')) bd--;
-            if (fo && bd <= 0) break;
-            if (k !== j) bodyLines.push(sl[k]!.trim());
-          }
-          // Strong sanitizers
-          if (bodyLines.some(bl => LDAP_SAFE_RE.test(bl))) { kills = true; break; }
-          if (bodyLines.some(bl => /\.remove\s*\(\s*\d+\s*\)/.test(bl))) { kills = true; break; }
-          // Mini forward taint analysis (switch-aware)
-          const mtv = new Set<string>(['param']);
-          let returnVarCor = '';
-          let inSwCor = false; let swBdCor = 0;
-          const swTaintedCor = new Set<string>();
-          for (const bl of bodyLines) {
-            if (/\bswitch\s*\(/.test(bl)) { inSwCor = true; swBdCor = 0; }
-            if (inSwCor) { for (const c of bl) { if (c === '{') swBdCor++; if (c === '}') { swBdCor--; if (swBdCor <= 0) { inSwCor = false; swTaintedCor.clear(); } } } }
-            const mva = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\s*;/);
-            if (mva && mtv.has(mva[2]!)) { mtv.add(mva[1]!); if (inSwCor) swTaintedCor.add(mva[1]!); }
-            const mcon = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*new\s+\w+\s*\(\s*(\w+)\s*\)/);
-            if (mcon && mtv.has(mcon[2]!)) mtv.add(mcon[1]!);
-            const mcall = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(?:\w+\.)*\w+\s*\(\s*(\w+)\s*[,)]/);
-            if (mcall && mtv.has(mcall[2]!)) mtv.add(mcall[1]!);
-            const mcc = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*.*\b(\w+)\b.*\+/);
-            if (mcc && mtv.has(mcc[2]!)) mtv.add(mcc[1]!);
-            const mts = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*(\w+)\.toString\(\)/);
-            if (mts && mtv.has(mts[2]!)) mtv.add(mts[1]!);
-            const mlit = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*"[^"]*"\s*;/);
-            if (mlit) {
-              if (inSwCor && swTaintedCor.has(mlit[1]!)) { /* don't kill in switch */ } else { mtv.delete(mlit[1]!); }
-            }
-            const mget = bl.match(/^(?:\w+\s+)?(\w+)\s*=\s*\(\w+\)\s*(\w+)\.get\s*\(\s*"([^"]*)"\s*\)/);
-            if (mget) {
-              const mkr = resolveMapKeyTaint(bodyLines, mtv, mget[2]!, mget[3]!, bodyLines.indexOf(bl));
-              if (mkr === 'tainted') mtv.add(mget[1]!); else mtv.delete(mget[1]!);
-            }
-            const mret = bl.match(/return\s+(\w+)\s*;/);
-            if (mret) { returnVarCor = mret[1]!; break; }
-          }
-          if (returnVarCor && !mtv.has(returnVarCor)) kills = true;
-          break;
-        }
-      }
-      if (kills) tv.delete(ipCall[1]!); else tv.add(ipCall[1]!);
-    }
-    // LDAP sink — check if any tainted var reaches it
-    if (LDAP_SINK_RE.test(ln) && hasSource) {
-      const scopeSlice = sl.slice(Math.max(0, i - 10), i + 5).join('\n');
-      if (LDAP_SAFE_RE.test(scopeSlice)) continue;
-      for (const t of tv) {
-        if (new RegExp('\\b' + escapeRegExp(t) + '\\b').test(ln) ||
-            new RegExp('["+]\\s*\\b' + escapeRegExp(t) + '\\b|\\b' + escapeRegExp(t) + '\\b\\s*[+"]').test(scopeSlice)) {
-          return true; // Source-line analysis confirms taint reaches LDAP sink
-        }
-      }
-    }
-  }
-  // Only deny (return false) if we found at least one source and tracked data flow.
-  // If we couldn't find any recognized source, the analysis is incomplete —
-  // return true to avoid suppressing real findings from patterns we can't track.
-  if (!hasSource) return true;
-  return false; // Source-line analysis found sources but none reached the LDAP sink
 }
 
 /**
@@ -5103,52 +4811,10 @@ function verifyCWE99(map: NeuralMap): VerificationResult {
 
   return { cwe: 'CWE-99', name: 'Resource Injection', holds: findings.length === 0, findings };
 }
-/* REMOVED: verifyCWE 382, 383, 410, 662, 667, 672, 674, 676, 694, 764, 765, 771, 772, 832, 833 -- now in resource.ts */
-
-/* REMOVED: verifyCWE209 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE215 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE497 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE532 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE538 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE540 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE548 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE550 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE598 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE615 — now in sensitive-data.ts */
-
 
 // ---------------------------------------------------------------------------
 // Privilege & Permission CWEs (CWE-250 through CWE-279)
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE250 -- now in auth.ts */
-
-/* REMOVED: verifyCWE269 -- now in auth.ts */
-
-/* REMOVED: verifyCWE270 -- now in auth.ts */
-
-/* REMOVED: verifyCWE271 -- now in auth.ts */
-
-/* REMOVED: verifyCWE272 -- now in auth.ts */
-
-/* REMOVED: verifyCWE273 -- now in auth.ts */
-
-/* REMOVED: verifyCWE274 -- now in auth.ts */
-
-/* REMOVED: verifyCWE276 -- now in auth.ts */
-
-/* REMOVED: verifyCWE277 -- now in auth.ts */
-
-/* REMOVED: verifyCWE279 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // Encoding, neutralization, and validation ordering CWEs
@@ -5836,7 +5502,6 @@ function verifyCWE183(map: NeuralMap): VerificationResult {
 
   return { cwe: 'CWE-183', name: 'Permissive List of Allowed Inputs', holds: findings.length === 0, findings };
 }
-/* REMOVED: verifyCWE 405, 406, 407, 409, 459, 460, 462, 463, 464 -- now in resource.ts */
 
 function verifyCWE494(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
@@ -6491,41 +6156,9 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
 // Data authenticity & privacy CWEs
 // ---------------------------------------------------------------------------
 
-/* REMOVED: verifyCWE345 -- now in auth.ts */
-
-/* REMOVED: verifyCWE346 -- now in auth.ts */
-
-/* REMOVED: verifyCWE348 -- now in auth.ts */
-
-/* REMOVED: verifyCWE349 -- now in auth.ts */
-
-/* REMOVED: verifyCWE350 -- now in auth.ts */
-
-/* REMOVED: verifyCWE353 -- now in auth.ts */
-
-/* REMOVED: verifyCWE356 -- now in auth.ts */
-
-/* REMOVED: verifyCWE359 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE402 — now in sensitive-data.ts */
-
 // ---------------------------------------------------------------------------
 // Cache, Cookie, Session, and Access Control CWEs
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE524 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE525 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE526 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE528 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE552 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE565 -- now in auth.ts */
-
-/* REMOVED: verifyCWE566 -- now in auth.ts */
 
 /**
  * CWE-579: J2EE Bad Practices: Non-serializable Object Stored in Session
@@ -6632,31 +6265,9 @@ function verifyCWE580(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-580', name: 'clone() Method Without super.clone()', holds: findings.length === 0, findings };
 }
 
-/* REMOVED: verifyCWE614 -- now in auth.ts */
-
 // ---------------------------------------------------------------------------
 // Trust boundary & authorization bypass CWEs
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE602 -- now in auth.ts */
-
-/* REMOVED: verifyCWE603 -- now in auth.ts */
-
-/* REMOVED: verifyCWE639 -- now in auth.ts */
-
-/* REMOVED: verifyCWE640 -- now in auth.ts */
-
-/* REMOVED: verifyCWE645 -- now in auth.ts */
-
-/* REMOVED: verifyCWE646 -- now in auth.ts */
-
-/* REMOVED: verifyCWE649 -- now in auth.ts */
-
-/* REMOVED: verifyCWE650 -- now in auth.ts */
-
-/* REMOVED: verifyCWE653 -- now in auth.ts */
-
-/* REMOVED: verifyCWE654 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // Memory corruption & code quality CWEs
@@ -7398,7 +7009,6 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
 
-
   const LOOP_CONDITION = /\b(for|while|do)\b\s*\(/i;
   const USER_IN_LOOP = /\b(for|while)\s*\([^)]*\b(req\.|params\.|query\.|body\.|input\.|user\.|args\.|argv|request\.|form\[|GET\[|POST\[|params\[|data\[)/i;
   const BOUNDS_SAFE = /\b(Math\.min|Math\.max|clamp|MAX_|LIMIT|MAX_ITER|MAX_COUNT|MAX_ITEMS|MAX_LOOP|parseInt.*Math\.min|Number.*Math\.min|limit\s*=|maxItems|maxCount|maxIterations|\.slice\(0,\s*\d|\.substring\(0,\s*\d|if\s*\([^)]*>\s*\d+\s*\)|if\s*\([^)]*<\s*\d+\s*\))\b/i;
@@ -7959,15 +7569,11 @@ function verifyCWE921(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-921', name: 'Storage of Sensitive Data in a Mechanism Without Access Control', holds: findings.length === 0, findings };
 }
 
-/* REMOVED: Architecture CWE verifiers 1070-1082 — now in architecture.ts */
-
 // ---------------------------------------------------------------------------
 // CWE-1022: Use of Web Link to Untrusted Target Without rel noopener
 // Links with target="_blank" without rel="noopener noreferrer" let the opened
 // page access window.opener, enabling reverse-tabnabbing attacks.
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE1022 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-1023: Incomplete Comparison with Missing Factors
@@ -7975,15 +7581,11 @@ function verifyCWE921(map: NeuralMap): VerificationResult {
 // username without domain, or using startsWith instead of exact match for auth.
 // ---------------------------------------------------------------------------
 
-/* REMOVED: verifyCWE1023 -- now in auth.ts */
-
 // ---------------------------------------------------------------------------
 // CWE-1024: Comparison of Incompatible Types
 // Comparing values of fundamentally different types where the language
 // silently coerces, producing incorrect results (e.g., string vs number).
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE1024 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-1025: Comparison Using Wrong Factors
@@ -7991,17 +7593,11 @@ function verifyCWE921(map: NeuralMap): VerificationResult {
 // the wrong fields, variables, or expressions (e.g., x == x instead of x == y).
 // ---------------------------------------------------------------------------
 
-/* REMOVED: verifyCWE1025 -- now in auth.ts */
-
 // ---------------------------------------------------------------------------
 // CWE-1036: Class Based on Externally-Controlled Resource Name
 // Dynamically instantiating classes or loading modules based on user input
 // without validation — enables arbitrary class instantiation / module loading.
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE1036 -- now in auth.ts */
-
-/* REMOVED: Architecture CWE verifiers 1044-1069 — now in architecture.ts */
 
 // ---------------------------------------------------------------------------
 
@@ -8086,45 +7682,34 @@ function verifyCWE924(map: NeuralMap): VerificationResult {
 // ---------------------------------------------------------------------------
 // CWE-939: Improper Authorization in Handler for Custom URL Scheme
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE939 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-940: Improper Verification of Source of a Communication Channel
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE940 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-941: Incorrectly Specified Destination in a Communication Channel
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE941 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-942: Permissive Cross-domain Policy with Untrusted Domains
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE942 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-943: Improper Neutralization of Special Elements in Data Query Logic
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE943 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-1004: Sensitive Cookie Without HttpOnly Flag
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE1004 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-1007: Insufficient Visual Distinction of Homoglyphs
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE1007 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-1021: Improper Restriction of Rendered UI Layers (Clickjacking)
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE1021 -- now in auth.ts */
-/* REMOVED: Architecture CWE verifiers 1083-1094 — now in architecture.ts */
-
-/* REMOVED: Architecture CWE verifiers 1095-1117 — now in architecture.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-185: Incorrect Regular Expression
@@ -8944,8 +8529,6 @@ function verifyCWE198(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-198', name: 'Use of Incorrect Byte Ordering', holds: findings.length === 0, findings };
 }
 
-/* REMOVED: Architecture CWE verifiers 1118-1127 — now in architecture.ts */
-
 // ---------------------------------------------------------------------------
 // Side Channel, Error Handling & Information Exposure CWEs (207, 208, 210, 211, 212, 213, 214, 222, 223, 224)
 // ---------------------------------------------------------------------------
@@ -9093,74 +8676,18 @@ function verifyCWE208(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-208', name: 'Observable Timing Discrepancy', holds: findings.length === 0, findings };
 }
 
-/* REMOVED: verifyCWE210 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE211 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE212 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE213 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE214 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE222 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE223 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE224 — now in sensitive-data.ts */
-
 // ---------------------------------------------------------------------------
 // Auth mechanisms & encryption CWEs (CWE-305, 307, 308, 309, 311, 317, 318, 321, 322)
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE305 -- now in auth.ts */
-
-/* REMOVED: verifyCWE307 -- now in auth.ts */
-
-/* REMOVED: verifyCWE308 -- now in auth.ts */
-
-/* REMOVED: verifyCWE309 -- now in auth.ts */
-/* REMOVED: verifyCWE311 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE317 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE318 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE321 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE322 -- now in crypto.ts */
-
 
 // ---------------------------------------------------------------------------
 // Access Control & Authentication CWEs (280, 282, 283, 284, 285, 286, 289, 291, 302, 304)
 // ---------------------------------------------------------------------------
 
-/* REMOVED: verifyCWE280 -- now in auth.ts */
-
-/* REMOVED: verifyCWE282 -- now in auth.ts */
-
-/* REMOVED: verifyCWE283 -- now in auth.ts */
-
-/* REMOVED: verifyCWE284 -- now in auth.ts */
-
-/* REMOVED: verifyCWE285 -- now in auth.ts */
-
-/* REMOVED: verifyCWE286 -- now in auth.ts */
-
-/* REMOVED: verifyCWE289 -- now in auth.ts */
-
-/* REMOVED: verifyCWE291 -- now in auth.ts */
-
-/* REMOVED: verifyCWE302 -- now in auth.ts */
-
-/* REMOVED: verifyCWE304 -- now in auth.ts */
-
 // ---------------------------------------------------------------------------
 // Resource cleanup, return values, privilege CWEs (226, 243, 244, 245, 246,
 // 248, 252, 253, 266, 268) — real CWE-specific verification
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE226 — now in sensitive-data.ts */
 
 /**
  * CWE-243: Creation of chroot Jail Without Changing Working Directory
@@ -9525,10 +9052,6 @@ function verifyCWE253(map: NeuralMap): VerificationResult {
   return { cwe: 'CWE-253', name: 'Incorrect Check of Function Return Value', holds: findings.length === 0, findings };
 }
 
-/* REMOVED: verifyCWE266 -- now in auth.ts */
-
-/* REMOVED: verifyCWE268 -- now in auth.ts */
-
 // ---------------------------------------------------------------------------
 // Predictability, UI security, trust boundary CWEs (341–360)
 // ---------------------------------------------------------------------------
@@ -9687,52 +9210,10 @@ function verifyCWE344(map: NeuralMap): VerificationResult {
   }
   return { cwe: 'CWE-344', name: 'Use of Invariant Value in Dynamically Changing Context', holds: findings.length === 0, findings };
 }
-/* REMOVED: verifyCWE 363, 364, 365, 368, 370, 372, 374, 375, 385, 386 -- now in resource.ts */
-
-/* REMOVED: verifyCWE323 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE324 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE325 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE326 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE329 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE335 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE336 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE337 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE339 -- now in crypto.ts */
-
-/* REMOVED: verifyCWE340 -- now in crypto.ts */
-
 
 // ---------------------------------------------------------------------------
 // Channel security & deployment CWEs (419–439)
 // ---------------------------------------------------------------------------
-
-/* REMOVED: verifyCWE419 -- now in auth.ts */
-
-/* REMOVED: verifyCWE420 -- now in auth.ts */
-
-/* REMOVED: verifyCWE421 -- now in auth.ts */
-
-/* REMOVED: verifyCWE424 -- now in auth.ts */
-
-/* REMOVED: verifyCWE425 -- now in auth.ts */
-
-/* REMOVED: verifyCWE430 -- now in auth.ts */
-
-/* REMOVED: verifyCWE431 -- now in auth.ts */
-
-/* REMOVED: verifyCWE432 -- now in auth.ts */
-
-/* REMOVED: verifyCWE433 -- now in auth.ts */
-
-/* REMOVED: verifyCWE439 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-390: Detection of Error Condition Without Action
@@ -10094,27 +9575,6 @@ function verifyCWE397(map: NeuralMap): VerificationResult {
   }
   return { cwe: 'CWE-397', name: 'Declaration of Throws for Generic Exception', holds: findings.length === 0, findings };
 }
-/* REMOVED: verifyCWE 401, 403 -- now in resource.ts */
-
-/* REMOVED: verifyCWE440 -- now in auth.ts */
-
-/* REMOVED: verifyCWE441 -- now in auth.ts */
-
-/* REMOVED: verifyCWE444 -- now in auth.ts */
-
-/* REMOVED: verifyCWE446 -- now in auth.ts */
-
-/* REMOVED: verifyCWE449 -- now in auth.ts */
-
-/* REMOVED: verifyCWE450 -- now in auth.ts */
-
-/* REMOVED: verifyCWE451 -- now in auth.ts */
-
-/* REMOVED: verifyCWE453 -- now in auth.ts */
-
-/* REMOVED: verifyCWE454 -- now in auth.ts */
-
-/* REMOVED: verifyCWE455 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-551: Incorrect Behavior Order: Authorization Before Parsing and Canonicalization
@@ -10122,7 +9582,6 @@ function verifyCWE397(map: NeuralMap): VerificationResult {
 // can be bypassed with encoded payloads (e.g., %2e%2e/ bypasses path auth
 // checks, then gets decoded to ../ after auth succeeds).
 // ---------------------------------------------------------------------------
-/* REMOVED: verifyCWE551 -- now in auth.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-558: Use of getlogin() in Multithreaded Application
@@ -10487,24 +9946,6 @@ function verifyCWE573(map: NeuralMap): VerificationResult {
 
   return { cwe: 'CWE-573', name: 'Improper Following of Specification by Caller', holds: findings.length === 0, findings };
 }
-
-/* REMOVED: verifyCWE 775 -- now in resource.ts */
-
-/* REMOVED: verifyCWE536 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE537 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE600 — now in sensitive-data.ts */
-
-/* REMOVED: _hasTryBlockCWE600 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE539 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE541 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE543 — now in sensitive-data.ts */
-
-/* REMOVED: verifyCWE544 — now in sensitive-data.ts */
 
 // CWE-545: DEPRECATED — SKIP
 
@@ -11444,8 +10885,6 @@ function verifyCWE477(map: NeuralMap): VerificationResult {
 
   return { cwe: 'CWE-477', name: 'Use of Obsolete Function', holds: findings.length === 0, findings };
 }
-
-/* REMOVED: verifyCWE549 — now in sensitive-data.ts */
 
 // ---------------------------------------------------------------------------
 // CWE-111: Direct Use of Unsafe JNI
