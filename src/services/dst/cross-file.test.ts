@@ -11,6 +11,8 @@ import {
   mergeNeuralMaps,
   buildDependencyGraph,
   analyzeCrossFile,
+  extractJavaPackage,
+  buildJavaSamePackageEdges,
 } from './cross-file';
 import { createNode, createNeuralMap, resetSequence } from './types';
 import type { NeuralMap } from './types';
@@ -623,5 +625,382 @@ describe('analyzeCrossFile', () => {
     expect(mergedMap).toBeDefined();
     expect(mergedMap.source_file).toBe('[merged]');
     expect(mergedMap.parser_version).toContain('crossfile');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Java cross-file support tests
+// ---------------------------------------------------------------------------
+
+describe('extractJavaPackage', () => {
+  it('extracts a standard package declaration', () => {
+    const source = `package testcases.CWE89_SQL_Injection.s01;\nimport java.sql.*;\npublic class Foo {}`;
+    expect(extractJavaPackage(source)).toBe('testcases.CWE89_SQL_Injection.s01');
+  });
+
+  it('extracts package with leading whitespace', () => {
+    const source = `  package com.example.app;\npublic class Bar {}`;
+    expect(extractJavaPackage(source)).toBe('com.example.app');
+  });
+
+  it('returns null for files without package declaration', () => {
+    const source = `public class DefaultPackage { }`;
+    expect(extractJavaPackage(source)).toBeNull();
+  });
+
+  it('ignores package in comments', () => {
+    // The regex matches the first occurrence with /m — a commented one won't
+    // match because of the leading // or *
+    const source = `// package fake.package;\npackage real.package;\npublic class X {}`;
+    expect(extractJavaPackage(source)).toBe('real.package');
+  });
+
+  it('handles single-segment package', () => {
+    const source = `package testcases;\npublic class Y {}`;
+    expect(extractJavaPackage(source)).toBe('testcases');
+  });
+});
+
+describe('buildJavaSamePackageEdges', () => {
+  it('creates edges between files in the same package', () => {
+    resetSequence();
+
+    const source66a = `package testcases.CWE89.s01;
+public class CWE89_66a {
+    public void bad() {
+        String data = "tainted";
+        (new CWE89_66b()).badSink(data);
+    }
+}`;
+    const source66b = `package testcases.CWE89.s01;
+public class CWE89_66b {
+    public void badSink(String data) {
+        db.query("SELECT * FROM users WHERE id=" + data);
+    }
+}`;
+
+    const map66a = createNeuralMap('/project/CWE89_66a.java', source66a);
+    const map66b = createNeuralMap('/project/CWE89_66b.java', source66b);
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/CWE89_66a.java', map66a);
+    fileMaps.set('/project/CWE89_66b.java', map66b);
+
+    const files = ['/project/CWE89_66a.java', '/project/CWE89_66b.java'];
+    const edges = buildJavaSamePackageEdges(files, fileMaps);
+
+    // 66a references 66b (new CWE89_66b()), so there should be an edge from a -> b
+    expect(edges.length).toBeGreaterThanOrEqual(1);
+    const aToB = edges.find(e => e.from.includes('66a') && e.to.includes('66b'));
+    expect(aToB).toBeDefined();
+    expect(aToB!.importInfo.specifier).toBe('CWE89_66b');
+  });
+
+  it('does not create self-referencing edges', () => {
+    resetSequence();
+
+    const source = `package com.example;
+public class Foo {
+    public void test() {
+        new Foo().other();
+    }
+    public void other() {}
+}`;
+
+    const map = createNeuralMap('/project/Foo.java', source);
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/Foo.java', map);
+
+    const edges = buildJavaSamePackageEdges(['/project/Foo.java'], fileMaps);
+    expect(edges).toHaveLength(0); // single file, no edges
+  });
+
+  it('does not create edges between different packages', () => {
+    resetSequence();
+
+    const sourceA = `package com.example.a;
+public class ServiceA {
+    public void call() { new ServiceB().run(); }
+}`;
+    const sourceB = `package com.example.b;
+public class ServiceB {
+    public void run() {}
+}`;
+
+    const mapA = createNeuralMap('/project/a/ServiceA.java', sourceA);
+    const mapB = createNeuralMap('/project/b/ServiceB.java', sourceB);
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/a/ServiceA.java', mapA);
+    fileMaps.set('/project/b/ServiceB.java', mapB);
+
+    const files = ['/project/a/ServiceA.java', '/project/b/ServiceB.java'];
+    const edges = buildJavaSamePackageEdges(files, fileMaps);
+    expect(edges).toHaveLength(0); // different packages
+  });
+
+  it('handles static field references (ClassName.field)', () => {
+    resetSequence();
+
+    const sourceA = `package testcases.CWE89;
+public class Vuln68a {
+    public static String data;
+    public void bad() {
+        data = taintedInput;
+    }
+}`;
+    const sourceB = `package testcases.CWE89;
+public class Vuln68b {
+    public void badSink() {
+        String data = Vuln68a.data;
+        db.query(data);
+    }
+}`;
+
+    const mapA = createNeuralMap('/project/Vuln68a.java', sourceA);
+    const mapB = createNeuralMap('/project/Vuln68b.java', sourceB);
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/Vuln68a.java', mapA);
+    fileMaps.set('/project/Vuln68b.java', mapB);
+
+    const files = ['/project/Vuln68a.java', '/project/Vuln68b.java'];
+    const edges = buildJavaSamePackageEdges(files, fileMaps);
+
+    // 68b references Vuln68a.data, so there should be an edge from b -> a
+    const bToA = edges.find(e => e.from.includes('68b') && e.to.includes('68a'));
+    expect(bToA).toBeDefined();
+  });
+});
+
+describe('Java cross-file merge integration', () => {
+  function makeJavaMap(file: string, sourceCode: string, nodeSpecs: Array<{
+    id: string;
+    type: 'INGRESS' | 'EGRESS' | 'STORAGE' | 'EXTERNAL' | 'STRUCTURAL' | 'TRANSFORM';
+    label: string;
+    code: string;
+    taintedIn?: boolean;
+    taintedOut?: boolean;
+    edges?: Array<{ target: string; type: 'CALLS' | 'DATA_FLOW' }>;
+    attackSurface?: string[];
+  }>): NeuralMap {
+    resetSequence();
+    const map = createNeuralMap(file, sourceCode);
+    for (const spec of nodeSpecs) {
+      map.nodes.push(createNode({
+        id: spec.id,
+        node_type: spec.type,
+        label: spec.label,
+        code_snapshot: spec.code,
+        file: file,
+        language: 'java',
+        data_in: spec.taintedIn ? [{ name: 'input', source: 'EXTERNAL', data_type: 'string', tainted: true, sensitivity: 'NONE' as const }] : [],
+        data_out: spec.taintedOut ? [{ name: 'output', source: spec.id, data_type: 'string', tainted: true, sensitivity: 'NONE' as const }] : [],
+        edges: (spec.edges ?? []).map(e => ({ target: e.target, edge_type: e.type, conditional: false, async: false })),
+        attack_surface: spec.attackSurface ?? [],
+      }));
+    }
+    return map;
+  }
+
+  it('creates cross-file CALLS edges for Juliet 66a/66b pattern', () => {
+    // Simulate the 66a/66b pattern: 66a creates new 66b() and calls badSink
+    const source66a = `package testcases.CWE89_SQL_Injection.s01;
+public class CWE89_SQL_Injection__connect_tcp_executeBatch_66a extends AbstractTestCase {
+    public void bad() throws Throwable {
+        String data = readerBuffered.readLine();
+        String[] dataArray = new String[5];
+        dataArray[2] = data;
+        (new CWE89_SQL_Injection__connect_tcp_executeBatch_66b()).badSink(dataArray);
+    }
+}`;
+
+    const source66b = `package testcases.CWE89_SQL_Injection.s01;
+public class CWE89_SQL_Injection__connect_tcp_executeBatch_66b {
+    public void badSink(String dataArray[]) throws Throwable {
+        String data = dataArray[2];
+        sqlStatement.addBatch("update users set hitcount=hitcount+1 where name='" + data + "'");
+    }
+}`;
+
+    const map66a = makeJavaMap(
+      '/project/s01/CWE89_SQL_Injection__connect_tcp_executeBatch_66a.java',
+      source66a,
+      [
+        {
+          id: 'ingress_tcp',
+          type: 'INGRESS',
+          label: 'readerBuffered.readLine()',
+          code: 'data = readerBuffered.readLine()',
+          taintedOut: true,
+          edges: [{ target: 'call_66b', type: 'DATA_FLOW' }],
+          attackSurface: ['user_input'],
+        },
+        {
+          id: 'call_66b',
+          type: 'STRUCTURAL',
+          label: 'CWE89_SQL_Injection__connect_tcp_executeBatch_66b.badSink',
+          code: '(new CWE89_SQL_Injection__connect_tcp_executeBatch_66b()).badSink(dataArray)',
+          taintedIn: true,
+        },
+      ],
+    );
+
+    const map66b = makeJavaMap(
+      '/project/s01/CWE89_SQL_Injection__connect_tcp_executeBatch_66b.java',
+      source66b,
+      [
+        {
+          id: 'func_badSink',
+          type: 'STRUCTURAL',
+          label: 'badSink',
+          code: 'public void badSink(String dataArray[]) throws Throwable',
+          edges: [{ target: 'sql_sink', type: 'CONTAINS' }],
+        },
+        {
+          id: 'sql_sink',
+          type: 'STORAGE',
+          label: 'sqlStatement.addBatch()',
+          code: "sqlStatement.addBatch(\"update users set hitcount=hitcount+1 where name='\" + data + \"'\")",
+          attackSurface: ['sql_sink'],
+          taintedIn: true,
+        },
+      ],
+    );
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/s01/CWE89_SQL_Injection__connect_tcp_executeBatch_66a.java', map66a);
+    fileMaps.set('/project/s01/CWE89_SQL_Injection__connect_tcp_executeBatch_66b.java', map66b);
+
+    const files = [
+      '/project/s01/CWE89_SQL_Injection__connect_tcp_executeBatch_66a.java',
+      '/project/s01/CWE89_SQL_Injection__connect_tcp_executeBatch_66b.java',
+    ];
+
+    // Build Java same-package edges
+    const javaEdges = buildJavaSamePackageEdges(files, fileMaps);
+    expect(javaEdges.length).toBeGreaterThanOrEqual(1);
+
+    // Build dependency graph and merge edges
+    const depGraph = {
+      files,
+      edges: [...javaEdges],
+      importsOf: new Map<string, string[]>(),
+      importedBy: new Map<string, string[]>(),
+    };
+    for (const file of files) {
+      depGraph.importsOf.set(file, []);
+      depGraph.importedBy.set(file, []);
+    }
+    for (const edge of javaEdges) {
+      depGraph.importsOf.get(edge.from)!.push(edge.to);
+      depGraph.importedBy.get(edge.to)!.push(edge.from);
+    }
+
+    const { mergedMap, crossFileEdges } = mergeNeuralMaps(fileMaps, depGraph);
+
+    // Should have cross-file CALLS edges
+    expect(crossFileEdges).toBeGreaterThan(0);
+
+    // The call_66b node in 66a should have CALLS edge(s) to nodes in 66b
+    const callNode = mergedMap.nodes.find(n => n.id.includes('call_66b'));
+    expect(callNode).toBeDefined();
+    const callEdges = callNode!.edges.filter(e => e.edge_type === 'CALLS');
+    expect(callEdges.length).toBeGreaterThan(0);
+
+    // At least one CALLS edge should target a node in 66b
+    const targets66b = callEdges.filter(e => e.target.includes('66b'));
+    expect(targets66b.length).toBeGreaterThan(0);
+  });
+
+  it('propagates taint across Java cross-file boundary', () => {
+    // Same as above but verify taint flows through
+    const source66a = `package testcases.CWE89.s01;
+public class Vuln66a {
+    public void bad() {
+        String data = socket.readLine();
+        (new Vuln66b()).badSink(data);
+    }
+}`;
+    const source66b = `package testcases.CWE89.s01;
+public class Vuln66b {
+    public void badSink(String data) {
+        db.query("SELECT * FROM t WHERE id=" + data);
+    }
+}`;
+
+    const map66a = makeJavaMap(
+      '/project/s01/Vuln66a.java',
+      source66a,
+      [
+        {
+          id: 'ingress',
+          type: 'INGRESS',
+          label: 'socket.readLine()',
+          code: 'data = socket.readLine()',
+          taintedOut: true,
+          edges: [{ target: 'call_b', type: 'DATA_FLOW' }],
+          attackSurface: ['user_input'],
+        },
+        {
+          id: 'call_b',
+          type: 'STRUCTURAL',
+          label: 'Vuln66b.badSink',
+          code: '(new Vuln66b()).badSink(data)',
+          taintedIn: true,
+        },
+      ],
+    );
+
+    const map66b = makeJavaMap(
+      '/project/s01/Vuln66b.java',
+      source66b,
+      [
+        {
+          id: 'func_badSink',
+          type: 'STRUCTURAL',
+          label: 'badSink',
+          code: 'public void badSink(String data)',
+        },
+        {
+          id: 'sql_sink',
+          type: 'STORAGE',
+          label: 'db.query()',
+          code: 'db.query("SELECT * FROM t WHERE id=" + data)',
+          attackSurface: ['sql_sink'],
+        },
+      ],
+    );
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/s01/Vuln66a.java', map66a);
+    fileMaps.set('/project/s01/Vuln66b.java', map66b);
+
+    const files = ['/project/s01/Vuln66a.java', '/project/s01/Vuln66b.java'];
+    const javaEdges = buildJavaSamePackageEdges(files, fileMaps);
+
+    const depGraph = {
+      files,
+      edges: [...javaEdges],
+      importsOf: new Map<string, string[]>(),
+      importedBy: new Map<string, string[]>(),
+    };
+    for (const file of files) {
+      depGraph.importsOf.set(file, []);
+      depGraph.importedBy.set(file, []);
+    }
+    for (const edge of javaEdges) {
+      depGraph.importsOf.get(edge.from)!.push(edge.to);
+      depGraph.importedBy.get(edge.to)!.push(edge.from);
+    }
+
+    const { mergedMap, crossFileEdges } = mergeNeuralMaps(fileMaps, depGraph);
+    expect(crossFileEdges).toBeGreaterThan(0);
+
+    // After taint propagation, the structural node in 66b (badSink) should be tainted
+    const badSinkNode = mergedMap.nodes.find(n => n.id.includes('func_badSink'));
+    expect(badSinkNode).toBeDefined();
+    // Taint should have propagated via the CALLS edge
+    expect(badSinkNode!.data_in.some(d => d.tainted)).toBe(true);
   });
 });

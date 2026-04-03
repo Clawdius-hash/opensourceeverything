@@ -445,6 +445,12 @@ export function mergeNeuralMaps(
     }
   }
 
+  // Perf: build a lookup map for O(1) node access by ID (replaces O(N) .find() calls)
+  const allNodesById = new Map<string, NeuralMapNode>();
+  for (const node of allNodes) {
+    allNodesById.set(node.id, node);
+  }
+
   // Step 2: Build export registry
   // For each file, find which nodes are exported functions
   const exportRegistry = new Map<string, Map<string, string[]>>();
@@ -512,7 +518,7 @@ export function mergeNeuralMaps(
             // Create CALLS edge from the usage site to the exported function
             for (const exportNodeId of exportNodeIds) {
               const remappedFromId = `${fromPrefix}::${fromNode.id}`;
-              const fromNodeInMerged = allNodes.find(n => n.id === remappedFromId);
+              const fromNodeInMerged = allNodesById.get(remappedFromId);
               if (fromNodeInMerged) {
                 fromNodeInMerged.edges.push({
                   target: exportNodeId,
@@ -541,7 +547,7 @@ export function mergeNeuralMaps(
           if (fromNode.code_snapshot.includes(name) || fromNode.label.includes(name)) {
             for (const exportNodeId of exportNodeIds) {
               const remappedFromId = `${fromPrefix}::${fromNode.id}`;
-              const fromNodeInMerged = allNodes.find(n => n.id === remappedFromId);
+              const fromNodeInMerged = allNodesById.get(remappedFromId);
               if (fromNodeInMerged) {
                 fromNodeInMerged.edges.push({
                   target: exportNodeId,
@@ -564,6 +570,27 @@ export function mergeNeuralMaps(
         to: edge.to,
         symbols: [...new Set(symbols)],
       });
+    }
+  }
+
+  // Step 3b: Create cross-file edges for Java same-package references
+  // Java edges bypass the JS export registry — they use class name matching
+  for (const edge of depGraph.edges) {
+    if (edge.to.endsWith('.java')) {
+      const javaEdgeCount = createJavaCrossFileEdges(
+        edge,
+        fileMaps,
+        allNodesById,
+      );
+      if (javaEdgeCount > 0) {
+        crossFileEdgeCount += javaEdgeCount;
+        const targetClassName = edge.importInfo.specifier;
+        resolvedImports.push({
+          from: edge.from,
+          to: edge.to,
+          symbols: [targetClassName],
+        });
+      }
     }
   }
 
@@ -677,6 +704,181 @@ function makeFilePrefix(filePath: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Java cross-file support — same-package resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the Java package declaration from source code.
+ * Returns null for files without a package statement (default package).
+ */
+export function extractJavaPackage(source: string): string | null {
+  const match = source.match(/^\s*package\s+([\w.]+)\s*;/m);
+  return match ? match[1] : null;
+}
+
+/**
+ * Escape special regex characters in a string so it can be used as a literal
+ * pattern inside a RegExp constructor.
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Build dependency edges between Java files in the same package.
+ *
+ * In Java, files in the same package can reference each other's classes
+ * without import statements. This function discovers those references
+ * by scanning source code for patterns like:
+ *   - `new ClassName(`
+ *   - `ClassName.fieldName`
+ *   - `ClassName.methodName(`
+ *
+ * @param files Normalized file paths (forward slashes)
+ * @param fileMaps Pre-parsed NeuralMaps keyed by file path
+ * @returns DependencyEdge[] for same-package cross-file references
+ */
+export function buildJavaSamePackageEdges(
+  files: string[],
+  fileMaps: Map<string, NeuralMap>,
+): DependencyEdge[] {
+  const edges: DependencyEdge[] = [];
+  const javaFiles = files.filter(f => f.endsWith('.java'));
+  if (javaFiles.length < 2) return edges;
+
+  // Extract package + class name for each Java file
+  const fileInfo: Array<{
+    filePath: string;
+    pkg: string | null;
+    className: string;
+    source: string;
+  }> = [];
+
+  for (const fp of javaFiles) {
+    const map = fileMaps.get(fp);
+    if (!map) continue;
+    const source = map.source_code;
+    const pkg = extractJavaPackage(source);
+    // Java class name = filename without extension
+    const normalized = fp.replace(/\\/g, '/');
+    const className = normalized.split('/').pop()!.replace(/\.java$/, '');
+    fileInfo.push({ filePath: fp, pkg, className, source });
+  }
+
+  // Group files by package
+  const byPackage = new Map<string, typeof fileInfo>();
+  for (const fi of fileInfo) {
+    const key = fi.pkg ?? '<default>';
+    let group = byPackage.get(key);
+    if (!group) {
+      group = [];
+      byPackage.set(key, group);
+    }
+    group.push(fi);
+  }
+
+  // For each package group, scan for cross-file references
+  for (const [, group] of byPackage) {
+    if (group.length < 2) continue;
+
+    for (const fromFile of group) {
+      for (const toFile of group) {
+        if (fromFile.filePath === toFile.filePath) continue; // skip self
+
+        // Check if fromFile's source references toFile's class name
+        const escaped = escapeRegex(toFile.className);
+        // Match: new ClassName(  |  ClassName.something  |  ClassName<
+        const pattern = new RegExp(
+          `(?:new\\s+${escaped}\\s*\\(|${escaped}\\.\\w+|${escaped}<)`,
+        );
+
+        if (pattern.test(fromFile.source)) {
+          edges.push({
+            from: fromFile.filePath,
+            to: toFile.filePath,
+            importInfo: {
+              specifier: toFile.className,
+              resolvedPath: toFile.filePath,
+              importedNames: ['*'],
+              localName: toFile.className,
+              line: 0,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  return edges;
+}
+
+/**
+ * Create cross-file CALLS edges for Java same-package references.
+ *
+ * Unlike JS (which uses an export registry), Java edges are resolved by
+ * scanning the FROM file's nodes for code_snapshot references to the
+ * target class, and matching them to STRUCTURAL nodes in the TO file.
+ */
+function createJavaCrossFileEdges(
+  edge: DependencyEdge,
+  fileMaps: Map<string, NeuralMap>,
+  allNodesById: Map<string, NeuralMapNode>,
+): number {
+  let count = 0;
+
+  const fromMap = fileMaps.get(edge.from);
+  const toMap = fileMaps.get(edge.to);
+  if (!fromMap || !toMap) return 0;
+
+  const fromPrefix = makeFilePrefix(edge.from);
+  const toPrefix = makeFilePrefix(edge.to);
+
+  // Extract target class name from the edge specifier (= filename sans .java)
+  const targetClassName = edge.importInfo.specifier;
+  const escapedClassName = escapeRegex(targetClassName);
+
+  // Find STRUCTURAL nodes in the TO file (methods that could be call targets)
+  const targetMethodNodes: NeuralMapNode[] = [];
+  for (const node of toMap.nodes) {
+    if (node.node_type === 'STRUCTURAL') {
+      targetMethodNodes.push(node);
+    }
+  }
+
+  // Scan FROM file nodes for references to the target class
+  for (const fromNode of fromMap.nodes) {
+    const snapshot = fromNode.code_snapshot + ' ' + fromNode.label;
+
+    // Check if this node references the target class
+    const refPattern = new RegExp(
+      `(?:new\\s+${escapedClassName}\\s*\\(|${escapedClassName}\\.\\w+)`,
+    );
+    if (!refPattern.test(snapshot)) continue;
+
+    const remappedFromId = `${fromPrefix}::${fromNode.id}`;
+    const fromNodeInMerged = allNodesById.get(remappedFromId);
+    if (!fromNodeInMerged) continue;
+
+    // Create CALLS edges to target structural nodes
+    for (const toNode of targetMethodNodes) {
+      const remappedToId = `${toPrefix}::${toNode.id}`;
+      // Only connect if the target node exists in merged map
+      if (!allNodesById.has(remappedToId)) continue;
+
+      fromNodeInMerged.edges.push({
+        target: remappedToId,
+        edge_type: 'CALLS',
+        conditional: false,
+        async: false,
+      });
+      count++;
+    }
+  }
+
+  return count;
+}
+
+// ---------------------------------------------------------------------------
 // Public API for CLI integration
 // ---------------------------------------------------------------------------
 
@@ -702,8 +904,20 @@ export function analyzeCrossFile(
   fileMaps: Map<string, NeuralMap>,
   files: string[],
 ): CrossFileResult {
-  // Build dependency graph
+  // Build dependency graph (JS import/require resolution)
   const depGraph = buildDependencyGraph(files);
+
+  // Add Java same-package edges (does NOT modify buildDependencyGraph's signature)
+  const normalizedFiles = files.map(f => f.replace(/\\/g, '/'));
+  const javaEdges = buildJavaSamePackageEdges(normalizedFiles, fileMaps);
+  for (const edge of javaEdges) {
+    depGraph.edges.push(edge);
+    // Update quick-lookup maps
+    if (!depGraph.importsOf.has(edge.from)) depGraph.importsOf.set(edge.from, []);
+    if (!depGraph.importedBy.has(edge.to)) depGraph.importedBy.set(edge.to, []);
+    depGraph.importsOf.get(edge.from)!.push(edge.to);
+    depGraph.importedBy.get(edge.to)!.push(edge.from);
+  }
 
   // Merge maps
   const { mergedMap, crossFileEdges, resolvedImports } = mergeNeuralMaps(fileMaps, depGraph);
