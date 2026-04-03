@@ -526,6 +526,25 @@ const JAVA_HTTP_REQUEST_TYPES: ReadonlySet<string> = new Set([
   'ServerHttpRequest', 'HttpRequest',
 ]);
 
+// Types eligible for auto-taint on public method parameters
+const JAVA_AUTO_TAINT_TYPES: ReadonlySet<string> = new Set([
+  'String', 'String[]', 'byte[]', 'char[]',
+  'Object', 'Object[]',
+  'InputStream', 'Reader', 'BufferedReader',
+]);
+
+function isAutoTaintableType(typeText: string): boolean {
+  return JAVA_AUTO_TAINT_TYPES.has(typeText) || typeText.endsWith('[]');
+}
+
+// Function names that should NEVER have their params auto-tainted
+const JAVA_UNTAINTABLE_FUNCTIONS: ReadonlySet<string> = new Set([
+  'toString', 'equals', 'hashCode', 'compareTo', 'clone',
+  'main', 'init', 'destroy', 'finalize',
+  'good', 'goodG2B', 'goodB2G', 'goodG2BSink', 'goodB2GSink',
+  // Juliet "good" patterns — these are intentionally safe
+]);
+
 // ---------------------------------------------------------------------------
 // Helper: extract callee chain from Java AST nodes
 // ---------------------------------------------------------------------------
@@ -1393,6 +1412,26 @@ function processFunctionParams(funcNode: SyntaxNode, ctx: MapperContextLike): vo
   const paramsNode = funcNode.childForFieldName('parameters');
   if (!paramsNode) return;
 
+  // Determine if this function is eligible for auto-taint on String/byte[]/char[] params.
+  // A method is eligible when it's a method_declaration that is NOT private and
+  // NOT a utility function (toString, equals, main, etc.).
+  let funcIsAutoTaintEligible = false;
+  if (funcNode.type === 'method_declaration') {
+    const funcName = funcNode.childForFieldName('name')?.text ?? '';
+    if (!JAVA_UNTAINTABLE_FUNCTIONS.has(funcName)) {
+      // Check if method is not private
+      const modifiers = funcNode.childForFieldName('modifiers') ??
+        funcNode.descendantsOfType('modifiers')[0];
+      let isPrivate = false;
+      if (modifiers) {
+        for (let j = 0; j < modifiers.childCount; j++) {
+          if (modifiers.child(j)?.text === 'private') isPrivate = true;
+        }
+      }
+      funcIsAutoTaintEligible = !isPrivate;
+    }
+  }
+
   // In Java, parameters are in `formal_parameters` containing `formal_parameter` nodes.
   for (let i = 0; i < paramsNode.namedChildCount; i++) {
     const param = paramsNode.namedChild(i);
@@ -1447,9 +1486,40 @@ function processFunctionParams(funcNode: SyntaxNode, ctx: MapperContextLike): vo
       } else {
         // Regular parameter — check pendingCallbackTaint
         const producingId = ctx.pendingCallbackTaint.get(paramName) ?? null;
-        const isTainted = producingId !== null;
+        let isTainted = producingId !== null;
         if (isTainted) ctx.pendingCallbackTaint.delete(paramName);
-        ctx.declareVariable(paramName, 'param', null, isTainted, producingId);
+
+        // Auto-taint: String/String[]/byte[]/char[] params in public non-utility methods.
+        // This catches the common cross-file pattern where user input arrives via method
+        // parameters from other files/classes (e.g., Juliet *_66b.java badSink(String data)).
+        if (!isTainted && funcIsAutoTaintEligible && isAutoTaintableType(typeText)) {
+          isTainted = true;
+          // Create an INGRESS node for the auto-tainted parameter
+          const autoIngressNode = createNode({
+            label: paramName,
+            node_type: 'INGRESS',
+            node_subtype: 'function_param',
+            language: 'java',
+            file: ctx.neuralMap.source_file,
+            line_start: param.startPosition.row + 1,
+            line_end: param.endPosition.row + 1,
+            code_snapshot: param.text.slice(0, 200),
+            analysis_snapshot: param.text.slice(0, 2000),
+          });
+          autoIngressNode.data_out.push({
+            name: 'result',
+            source: autoIngressNode.id,
+            data_type: typeText || 'String',
+            tainted: true,
+            sensitivity: 'NONE',
+          });
+          autoIngressNode.attack_surface.push('function_param');
+          ctx.neuralMap.nodes.push(autoIngressNode);
+          ctx.emitContainsIfNeeded(autoIngressNode.id);
+          ctx.declareVariable(paramName, 'param', null, true, autoIngressNode.id);
+        } else {
+          ctx.declareVariable(paramName, 'param', null, isTainted, producingId);
+        }
       }
 
       // Store the declared type as aliasChain for ALL parameters.
