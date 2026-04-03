@@ -172,6 +172,14 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'TextMessage.getText':        { nodeType: 'INGRESS', subtype: 'jms_receive',  tainted: true },
   'JMSConsumer.receive':        { nodeType: 'INGRESS', subtype: 'jms_receive',  tainted: true },
 
+  // -- Log message content (Log4Shell attack surface) --
+  // LogEvent carries user-controlled data from log.info("User: " + untrustedInput).
+  // getMessage() / getFormattedMessage() extract that user-controlled content.
+  'LogEvent.getMessage':              { nodeType: 'INGRESS', subtype: 'log_message', tainted: true },
+  'LogEvent.getFormattedMessage':     { nodeType: 'INGRESS', subtype: 'log_message', tainted: true },
+  'Message.getFormattedMessage':      { nodeType: 'INGRESS', subtype: 'log_message', tainted: true },
+  'Message.getFormat':                { nodeType: 'INGRESS', subtype: 'log_message', tainted: true },
+
   // =========================================================================
   // EGRESS
   // =========================================================================
@@ -336,6 +344,12 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'GroovyShell.evaluate':        { nodeType: 'EXTERNAL', subtype: 'script_eval',  tainted: false },
   'GroovyShell.parse':           { nodeType: 'EXTERNAL', subtype: 'script_eval',  tainted: false },
   'GroovyClassLoader.parseClass': { nodeType: 'EXTERNAL', subtype: 'script_eval', tainted: false },
+
+  // -- Log4j StrSubstitutor (CVE-2021-44228 internal expression engine) --
+  // NOTE: This is Log4j's INTERNAL StrSubstitutor (org.apache.logging.log4j.core.lookup.StrSubstitutor),
+  // NOT Apache Commons Text StringSubstitutor. They are different classes.
+  'StrSubstitutor.replace':           { nodeType: 'EXTERNAL', subtype: 'expression_eval', tainted: true },
+  'StrSubstitutor.substitute':        { nodeType: 'EXTERNAL', subtype: 'expression_eval', tainted: true },
 
   // -- Template engines (SSTI) --
   // FreeMarker
@@ -905,6 +919,15 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
       const pascal2Key = `${pascal2}.${methodName}`;
       const pascal2Match = lookupInAllDicts(pascal2Key);
       if (pascal2Match) return { ...pascal2Match };
+    }
+    // Getter-to-class inference: getStrSubstitutor() -> class StrSubstitutor
+    // Java getters follow get<ClassName>() convention. Strip 'get' to infer the class.
+    if (secondToLast.length > 4 && secondToLast.startsWith('get') &&
+        secondToLast[3] === secondToLast[3].toUpperCase()) {
+      const inferredClass = secondToLast.slice(3);
+      const inferredKey = `${inferredClass}.${methodName}`;
+      const inferredMatch = lookupInAllDicts(inferredKey);
+      if (inferredMatch) return { ...inferredMatch };
     }
   }
 
