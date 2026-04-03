@@ -21,7 +21,7 @@
 import { describe, it, expect } from 'vitest';
 import { createNode, createNeuralMap, resetSequence } from './types.js';
 import type { NeuralMap } from './types.js';
-import { verify } from './verifier.js';
+import { verify } from './verifier';
 
 // ---------------------------------------------------------------------------
 // Helper

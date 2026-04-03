@@ -16,7 +16,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildNeuralMap } from './mapper.js';
 import { kotlinProfile } from './profiles/kotlin.js';
-import { verifyAll } from './verifier.js';
+import { verifyAll } from './verifier';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

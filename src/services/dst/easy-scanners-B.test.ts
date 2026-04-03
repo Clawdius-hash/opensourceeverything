@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { createNode, createNeuralMap, resetSequence } from './types.js';
 import type { NeuralMap } from './types.js';
-import { verify } from './verifier.js';
+import { verify } from './verifier';
 import { Parser, Language } from 'web-tree-sitter';
 import { buildNeuralMap } from './mapper.js';
 import * as fs from 'fs';

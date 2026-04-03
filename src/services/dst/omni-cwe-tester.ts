@@ -19,7 +19,7 @@
 
 import { createNode, createNeuralMap, resetSequence } from './types.js';
 import type { NeuralMap, NeuralMapNode, Edge, NodeType } from './types.js';
-import { verifyAll } from './verifier.js';
+import { verifyAll } from './verifier';
 import { GENERATED_REGISTRY } from './generated/index.js';
 
 // ─── Types ─────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildNeuralMap } from './mapper.js';
 import { javaProfile } from './profiles/java.js';
-import { verifyAll } from './verifier.js';
+import { verifyAll } from './verifier';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

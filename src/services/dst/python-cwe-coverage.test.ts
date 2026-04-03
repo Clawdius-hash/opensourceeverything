@@ -23,7 +23,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildNeuralMap } from './mapper.js';
 import { pythonProfile } from './profiles/python.js';
-import { verify, registeredCWEs } from './verifier.js';
+import { verify, registeredCWEs } from './verifier';
 import type { NeuralMap } from './types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

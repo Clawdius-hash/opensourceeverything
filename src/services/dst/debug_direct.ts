@@ -1,6 +1,6 @@
 import { Parser, Language } from 'web-tree-sitter';
 import { buildNeuralMap } from './mapper.js';
-import { verifyAll } from './verifier.js';
+import { verifyAll } from './verifier';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';

@@ -9,12 +9,12 @@
  * The CWE→assertion mapping is just an index into which path to run.
  */
 
-import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from './types';
-import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate, scopeBasedTaintReaches, findNearestNode } from './generated/_helpers.js';
-import { GENERATED_REGISTRY } from './generated/index.js';
-import { verifyCWE336_B2, verifyCWE614_B2, verifyCWE759_B2, verifyCWE760_B2 } from './generated/batch_crypto_B2.js';
-import { deduplicateResults, familyDedup } from './dedup.js';
-import { filterCWEsForLanguage } from './cwe-filter.js';
+import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from '../types';
+import { evaluateControlEffectiveness, getContainingScopeSnapshots, sinkHasTaintedDataIn, hasPathWithoutGate, scopeBasedTaintReaches, findNearestNode } from '../generated/_helpers.js';
+import { GENERATED_REGISTRY } from '../generated/index.js';
+import { verifyCWE336_B2, verifyCWE614_B2, verifyCWE759_B2, verifyCWE760_B2 } from '../generated/batch_crypto_B2.js';
+import { deduplicateResults, familyDedup } from '../dedup.js';
+import { filterCWEsForLanguage } from '../cwe-filter.js';
 
 // ---------------------------------------------------------------------------
 // Comment stripping — prevents comments from defeating safe-pattern detection

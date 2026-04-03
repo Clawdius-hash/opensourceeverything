@@ -17,7 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildNeuralMap } from './mapper.js';
-import { verify, verifyAll, registeredCWEs } from './verifier.js';
+import { verify, verifyAll, registeredCWEs } from './verifier';
 import { lookupCallee } from './calleePatterns.js';
 import { createNode, createNeuralMap, resetSequence } from './types.js';
 import type { NeuralMap, NeuralMapNode, NodeType } from './types.js';

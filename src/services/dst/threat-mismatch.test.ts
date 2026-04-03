@@ -23,7 +23,7 @@ import {
   evaluateControlEffectiveness,
   controlThreatMismatch,
 } from './generated/_helpers.js';
-import { verifyAll } from './verifier.js';
+import { verifyAll } from './verifier';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
