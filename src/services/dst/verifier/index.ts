@@ -35,6 +35,9 @@ import { AUTH_REGISTRY } from './auth.ts';
 // Extracted resource management & concurrency CWE verifiers (362-386, 400-410, 426-428, 459-464, 662-694, 764-775, 832-833, 1333)
 import { RESOURCE_REGISTRY } from './resource.ts';
 
+// Extracted code quality & structural CWE verifiers (456-912, 64 functions)
+import { CODE_QUALITY_REGISTRY } from './code-quality.ts';
+
 // Import types used by remaining verifiers + re-export public types
 import type { VerificationResult, Finding } from './types.ts';
 export type { VerificationResult, Finding, NodeRef } from './types.ts';
@@ -16543,6 +16546,8 @@ function verifyCWE129(map: NeuralMap): VerificationResult {
 const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
   // Generated-only verifiers (hand-written overlaps already filtered out in generated/index.ts)
   ...GENERATED_REGISTRY,
+  // Code quality domain (64 CWEs) — overridden by any explicit entries below
+  ...CODE_QUALITY_REGISTRY,
   // Hand-written verifiers — these are the authoritative versions for their CWEs
   'CWE-89': verifyCWE89,
   'CWE-79': verifyCWE79,
