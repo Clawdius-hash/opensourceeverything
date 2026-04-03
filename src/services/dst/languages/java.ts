@@ -465,6 +465,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'InitialContext.bind':          { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'DirContext.lookup':            { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
   'InitialContext.lookup':        { nodeType: 'STORAGE', subtype: 'ldap_query',  tainted: false },
+  'Context.lookup':               { nodeType: 'EXTERNAL', subtype: 'jndi_lookup', tainted: true },
 
   // -- XPath (CWE-643: XPath Injection) --
   // Juliet CWE-643 uses XPath.evaluate(expression, context) where expression is user-controlled.
