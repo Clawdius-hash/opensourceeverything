@@ -812,6 +812,288 @@ export function buildJavaSamePackageEdges(
   return edges;
 }
 
+// ---------------------------------------------------------------------------
+// Java cross-file support — cross-package import resolution
+// ---------------------------------------------------------------------------
+
+/** Standard library prefixes that will never resolve to scanned files. */
+const JAVA_STDLIB_PREFIXES = ['java.', 'javax.', 'sun.', 'com.sun.'];
+
+/**
+ * Extract Java import statements from source code.
+ * Handles: explicit class imports, wildcard imports, static imports.
+ * Skips standard library imports (java.*, javax.*, sun.*, com.sun.*).
+ *
+ * CRITICAL: specifier is set to the SIMPLE CLASS NAME (last dot-segment),
+ * not the FQCN, because createJavaCrossFileEdges matches specifier against
+ * code_snapshot content.
+ */
+export function extractJavaImports(source: string, filePath: string): ImportInfo[] {
+  const imports: ImportInfo[] = [];
+  const lines = source.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+
+    // import static com.example.Utils.method;
+    const staticExplicit = line.match(/^\s*import\s+static\s+([\w.]+)\.([\w*]+)\s*;/);
+    if (staticExplicit) {
+      const fqcn = staticExplicit[1] + '.' + staticExplicit[2];
+      if (JAVA_STDLIB_PREFIXES.some(p => fqcn.startsWith(p))) continue;
+      const member = staticExplicit[2]; // method name or '*'
+      // The class is the part before the member
+      const classFqcn = staticExplicit[1];
+      const simpleName = classFqcn.split('.').pop()!;
+      imports.push({
+        specifier: simpleName,
+        resolvedPath: null,
+        importedNames: [member],
+        localName: member === '*' ? null : member,
+        line: lineNum,
+      });
+      continue;
+    }
+
+    // import com.example.*;  (wildcard package import)
+    const wildcardImport = line.match(/^\s*import\s+([\w.]+)\.\*\s*;/);
+    if (wildcardImport) {
+      const pkg = wildcardImport[1];
+      if (JAVA_STDLIB_PREFIXES.some(p => pkg.startsWith(p))) continue;
+      imports.push({
+        specifier: pkg, // package name for wildcard resolution
+        resolvedPath: null,
+        importedNames: ['*'],
+        localName: null,
+        line: lineNum,
+      });
+      continue;
+    }
+
+    // import com.example.Class;  (explicit class import)
+    const explicitImport = line.match(/^\s*import\s+([\w.]+)\s*;/);
+    if (explicitImport) {
+      const fqcn = explicitImport[1];
+      if (JAVA_STDLIB_PREFIXES.some(p => fqcn.startsWith(p))) continue;
+      const simpleName = fqcn.split('.').pop()!;
+      imports.push({
+        specifier: simpleName,
+        resolvedPath: null,
+        importedNames: [simpleName],
+        localName: simpleName,
+        line: lineNum,
+      });
+      continue;
+    }
+  }
+
+  return imports;
+}
+
+/**
+ * Detect Java source roots from file paths.
+ * Looks for standard Maven/Gradle patterns: src/main/java/, src/test/java/
+ * Fallback: src/testcases/ for NIST Juliet test suite.
+ */
+export function detectJavaSourceRoots(files: string[]): string[] {
+  const roots = new Set<string>();
+  const patterns = ['src/main/java/', 'src/test/java/', 'src/testcases/'];
+
+  for (const file of files) {
+    const normalized = file.replace(/\\/g, '/');
+    for (const pattern of patterns) {
+      const idx = normalized.indexOf(pattern);
+      if (idx !== -1) {
+        roots.add(normalized.substring(0, idx + pattern.length));
+      }
+    }
+  }
+
+  return [...roots];
+}
+
+/**
+ * Resolve a fully-qualified Java class name to a file path.
+ * Converts dots to path separators, tries each source root.
+ * Handles inner classes by stripping trailing segments.
+ */
+export function resolveJavaImportPath(
+  fqcn: string,
+  sourceRoots: string[],
+  fileSet: Set<string>,
+): string | null {
+  const relPath = fqcn.replace(/\./g, '/') + '.java';
+
+  for (const root of sourceRoots) {
+    const candidate = root + relPath;
+    if (fileSet.has(candidate)) return candidate;
+  }
+
+  // Inner class fallback: try stripping trailing segments
+  // e.g., com.example.Outer.Inner -> com/example/Outer.java
+  const parts = fqcn.split('.');
+  for (let drop = 1; drop < parts.length - 1; drop++) {
+    const outerFqcn = parts.slice(0, parts.length - drop).join('/') + '.java';
+    for (const root of sourceRoots) {
+      const candidate = root + outerFqcn;
+      if (fileSet.has(candidate)) return candidate;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a wildcard import (import pkg.*) to actual files.
+ * Returns file paths that are direct children of the package directory.
+ */
+export function resolveJavaWildcardImport(
+  packageName: string,
+  sourceRoots: string[],
+  allFiles: string[],
+): string[] {
+  const pkgDir = packageName.replace(/\./g, '/') + '/';
+  const results: string[] = [];
+
+  for (const root of sourceRoots) {
+    const prefix = root + pkgDir;
+    for (const file of allFiles) {
+      // Direct child only: after prefix, no more slashes
+      if (file.startsWith(prefix) && file.endsWith('.java')) {
+        const remainder = file.substring(prefix.length);
+        if (!remainder.includes('/')) {
+          results.push(file);
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Build dependency edges from Java import statements (cross-package).
+ *
+ * This handles imports like `import org.apache.logging.log4j.core.net.JndiManager;`
+ * which are NOT in the same package (those are handled by buildJavaSamePackageEdges).
+ *
+ * Also scans for FQCN string literals like `new org.example.ClassName(` which
+ * BenchmarkJava uses directly.
+ *
+ * Wildcard imports are throttled: edges are only created if the importing
+ * file actually references the target class name in its source code.
+ */
+export function buildJavaImportEdges(
+  files: string[],
+  fileMaps: Map<string, NeuralMap>,
+): DependencyEdge[] {
+  const edges: DependencyEdge[] = [];
+  const javaFiles = files.filter(f => f.endsWith('.java'));
+  if (javaFiles.length < 2) return edges;
+
+  const normalizedFiles = javaFiles.map(f => f.replace(/\\/g, '/'));
+  const fileSet = new Set(normalizedFiles);
+  const sourceRoots = detectJavaSourceRoots(normalizedFiles);
+  if (sourceRoots.length === 0) return edges;
+
+  for (const fp of normalizedFiles) {
+    const map = fileMaps.get(fp);
+    if (!map) continue;
+    const source = map.source_code;
+
+    const javaImports = extractJavaImports(source, fp);
+
+    for (const imp of javaImports) {
+      if (imp.importedNames.includes('*') && imp.localName === null) {
+        // Wildcard import: resolve package, throttle by reference check
+        const matchedFiles = resolveJavaWildcardImport(imp.specifier, sourceRoots, normalizedFiles);
+        for (const targetFile of matchedFiles) {
+          if (targetFile === fp) continue; // skip self
+          const targetClassName = targetFile.split('/').pop()!.replace(/\.java$/, '');
+          // Throttle: only create edge if source actually references the class name
+          const escaped = escapeRegex(targetClassName);
+          const refPattern = new RegExp(
+            `(?:new\\s+${escaped}\\s*[(<]|${escaped}\\.\\w+|${escaped}<|extends\\s+${escaped}|implements\\s+[\\w,\\s]*${escaped})`,
+          );
+          if (refPattern.test(source)) {
+            imp.resolvedPath = targetFile;
+            edges.push({
+              from: fp,
+              to: targetFile,
+              importInfo: {
+                specifier: targetClassName,
+                resolvedPath: targetFile,
+                importedNames: ['*'],
+                localName: targetClassName,
+                line: imp.line,
+              },
+            });
+          }
+        }
+      } else {
+        // Explicit import: resolve directly
+        // Reconstruct FQCN for path resolution from the original import line
+        // The specifier is the simple class name; we need the full line to get FQCN
+        // Re-parse the line to get the FQCN
+        const importLine = source.split('\n')[imp.line - 1] || '';
+        let fqcn: string | null = null;
+
+        const staticMatch = importLine.match(/^\s*import\s+static\s+([\w.]+)\.\w+\s*;/);
+        if (staticMatch) {
+          fqcn = staticMatch[1];
+        } else {
+          const classMatch = importLine.match(/^\s*import\s+([\w.]+)\s*;/);
+          if (classMatch) {
+            fqcn = classMatch[1];
+          }
+        }
+
+        if (fqcn) {
+          const resolved = resolveJavaImportPath(fqcn, sourceRoots, fileSet);
+          if (resolved && resolved !== fp) {
+            imp.resolvedPath = resolved;
+            edges.push({
+              from: fp,
+              to: resolved,
+              importInfo: {
+                specifier: imp.specifier,
+                resolvedPath: resolved,
+                importedNames: imp.importedNames,
+                localName: imp.localName,
+                line: imp.line,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // Also scan for FQCN usage: new org.example.ClassName(
+    const fqcnUsage = source.matchAll(/new\s+([\w.]+\.([A-Z]\w*))\s*\(/g);
+    for (const match of fqcnUsage) {
+      const fullFqcn = match[1];
+      const simpleName = match[2];
+      if (JAVA_STDLIB_PREFIXES.some(p => fullFqcn.startsWith(p))) continue;
+      const resolved = resolveJavaImportPath(fullFqcn, sourceRoots, fileSet);
+      if (resolved && resolved !== fp) {
+        edges.push({
+          from: fp,
+          to: resolved,
+          importInfo: {
+            specifier: simpleName,
+            resolvedPath: resolved,
+            importedNames: [simpleName],
+            localName: simpleName,
+            line: 0,
+          },
+        });
+      }
+    }
+  }
+
+  return edges;
+}
+
 /**
  * Create cross-file CALLS edges for Java same-package references.
  *
@@ -913,6 +1195,20 @@ export function analyzeCrossFile(
   for (const edge of javaEdges) {
     depGraph.edges.push(edge);
     // Update quick-lookup maps
+    if (!depGraph.importsOf.has(edge.from)) depGraph.importsOf.set(edge.from, []);
+    if (!depGraph.importedBy.has(edge.to)) depGraph.importedBy.set(edge.to, []);
+    depGraph.importsOf.get(edge.from)!.push(edge.to);
+    depGraph.importedBy.get(edge.to)!.push(edge.from);
+  }
+
+  // Add Java cross-package import edges (deduplicated against same-package edges)
+  const existingEdgeKeys = new Set(depGraph.edges.map(e => `${e.from}->${e.to}`));
+  const importEdges = buildJavaImportEdges(normalizedFiles, fileMaps);
+  for (const edge of importEdges) {
+    const key = `${edge.from}->${edge.to}`;
+    if (existingEdgeKeys.has(key)) continue; // skip duplicates with same-package
+    existingEdgeKeys.add(key);
+    depGraph.edges.push(edge);
     if (!depGraph.importsOf.has(edge.from)) depGraph.importsOf.set(edge.from, []);
     if (!depGraph.importedBy.has(edge.to)) depGraph.importedBy.set(edge.to, []);
     depGraph.importsOf.get(edge.from)!.push(edge.to);

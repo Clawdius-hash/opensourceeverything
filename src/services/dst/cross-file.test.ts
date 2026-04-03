@@ -13,6 +13,11 @@ import {
   analyzeCrossFile,
   extractJavaPackage,
   buildJavaSamePackageEdges,
+  extractJavaImports,
+  detectJavaSourceRoots,
+  resolveJavaImportPath,
+  resolveJavaWildcardImport,
+  buildJavaImportEdges,
 } from './cross-file';
 import { createNode, createNeuralMap, resetSequence } from './types';
 import type { NeuralMap } from './types';
@@ -1002,5 +1007,321 @@ public class Vuln66b {
     expect(badSinkNode).toBeDefined();
     // Taint should have propagated via the CALLS edge
     expect(badSinkNode!.data_in.some(d => d.tainted)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Java cross-package import resolution tests
+// ---------------------------------------------------------------------------
+
+describe('extractJavaImports', () => {
+  it('extracts explicit class import with simple name specifier', () => {
+    const source = `package com.example.app;
+import org.apache.logging.log4j.core.net.JndiManager;
+public class Foo {}`;
+    const imports = extractJavaImports(source, '/project/Foo.java');
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toMatchObject({
+      specifier: 'JndiManager',
+      importedNames: ['JndiManager'],
+      localName: 'JndiManager',
+    });
+  });
+
+  it('extracts wildcard package import', () => {
+    const source = `package testcases.CWE89;
+import testcasesupport.*;
+public class Foo {}`;
+    const imports = extractJavaImports(source, '/project/Foo.java');
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toMatchObject({
+      specifier: 'testcasesupport',
+      importedNames: ['*'],
+      localName: null,
+    });
+  });
+
+  it('extracts static method import', () => {
+    const source = `import static org.example.Utils.escape;
+public class Bar {}`;
+    const imports = extractJavaImports(source, '/project/Bar.java');
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toMatchObject({
+      specifier: 'Utils',
+      importedNames: ['escape'],
+      localName: 'escape',
+    });
+  });
+
+  it('extracts static wildcard import', () => {
+    const source = `import static org.example.Constants.*;
+public class Baz {}`;
+    const imports = extractJavaImports(source, '/project/Baz.java');
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toMatchObject({
+      specifier: 'Constants',
+      importedNames: ['*'],
+      localName: null,
+    });
+  });
+
+  it('skips java.* and javax.* stdlib imports', () => {
+    const source = `import java.sql.Connection;
+import javax.servlet.http.HttpServletRequest;
+import sun.misc.Unsafe;
+import com.sun.net.httpserver.HttpServer;
+import org.example.MyClass;
+public class Test {}`;
+    const imports = extractJavaImports(source, '/project/Test.java');
+    expect(imports).toHaveLength(1);
+    expect(imports[0].specifier).toBe('MyClass');
+  });
+
+  it('captures line numbers', () => {
+    const source = `package com.example;
+import org.foo.Bar;
+import org.baz.Qux;`;
+    const imports = extractJavaImports(source, '/project/Test.java');
+    expect(imports[0].line).toBe(2);
+    expect(imports[1].line).toBe(3);
+  });
+
+  it('handles multiple imports', () => {
+    const source = `package com.example;
+import org.foo.Bar;
+import org.baz.*;
+import static org.util.Helper.compute;
+public class Multi {}`;
+    const imports = extractJavaImports(source, '/project/Multi.java');
+    expect(imports).toHaveLength(3);
+  });
+});
+
+describe('detectJavaSourceRoots', () => {
+  it('detects src/main/java/', () => {
+    const files = [
+      '/project/src/main/java/com/example/App.java',
+      '/project/src/main/java/com/example/Util.java',
+    ];
+    const roots = detectJavaSourceRoots(files);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toBe('/project/src/main/java/');
+  });
+
+  it('detects src/test/java/', () => {
+    const files = ['/project/src/test/java/com/example/AppTest.java'];
+    const roots = detectJavaSourceRoots(files);
+    expect(roots).toContain('/project/src/test/java/');
+  });
+
+  it('detects Juliet src/testcases/ fallback', () => {
+    const files = ['/juliet/src/testcases/CWE89/Foo.java'];
+    const roots = detectJavaSourceRoots(files);
+    expect(roots).toContain('/juliet/src/testcases/');
+  });
+
+  it('deduplicates roots', () => {
+    const files = [
+      '/project/src/main/java/com/a/A.java',
+      '/project/src/main/java/com/b/B.java',
+    ];
+    const roots = detectJavaSourceRoots(files);
+    expect(roots).toHaveLength(1);
+  });
+});
+
+describe('resolveJavaImportPath', () => {
+  const sourceRoots = ['/project/src/main/java/'];
+  const fileSet = new Set([
+    '/project/src/main/java/com/example/Foo.java',
+    '/project/src/main/java/com/example/Bar.java',
+    '/project/src/main/java/org/util/Helper.java',
+  ]);
+
+  it('resolves a FQCN to a file path', () => {
+    const result = resolveJavaImportPath('com.example.Foo', sourceRoots, fileSet);
+    expect(result).toBe('/project/src/main/java/com/example/Foo.java');
+  });
+
+  it('returns null for unresolvable class', () => {
+    const result = resolveJavaImportPath('com.example.Missing', sourceRoots, fileSet);
+    expect(result).toBeNull();
+  });
+
+  it('resolves inner class fallback', () => {
+    // com.example.Foo.Inner -> com/example/Foo.java
+    const result = resolveJavaImportPath('com.example.Foo.Inner', sourceRoots, fileSet);
+    expect(result).toBe('/project/src/main/java/com/example/Foo.java');
+  });
+});
+
+describe('resolveJavaWildcardImport', () => {
+  const sourceRoots = ['/project/src/main/java/'];
+  const allFiles = [
+    '/project/src/main/java/com/example/Foo.java',
+    '/project/src/main/java/com/example/Bar.java',
+    '/project/src/main/java/com/example/sub/Nested.java',
+    '/project/src/main/java/org/other/Baz.java',
+  ];
+
+  it('returns direct children of the package', () => {
+    const result = resolveJavaWildcardImport('com.example', sourceRoots, allFiles);
+    expect(result).toHaveLength(2);
+    expect(result).toContain('/project/src/main/java/com/example/Foo.java');
+    expect(result).toContain('/project/src/main/java/com/example/Bar.java');
+  });
+
+  it('excludes nested packages', () => {
+    const result = resolveJavaWildcardImport('com.example', sourceRoots, allFiles);
+    expect(result).not.toContain('/project/src/main/java/com/example/sub/Nested.java');
+  });
+
+  it('returns empty for unmatched package', () => {
+    const result = resolveJavaWildcardImport('com.missing', sourceRoots, allFiles);
+    expect(result).toHaveLength(0);
+  });
+});
+
+describe('buildJavaImportEdges', () => {
+  it('creates edge for explicit cross-package import', () => {
+    resetSequence();
+
+    const sourceA = `package com.example.app;
+import com.example.util.Helper;
+public class Service {
+    public void run() { new Helper().doWork(); }
+}`;
+    const sourceB = `package com.example.util;
+public class Helper {
+    public void doWork() {}
+}`;
+
+    const mapA = createNeuralMap(
+      '/project/src/main/java/com/example/app/Service.java',
+      sourceA,
+    );
+    const mapB = createNeuralMap(
+      '/project/src/main/java/com/example/util/Helper.java',
+      sourceB,
+    );
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/src/main/java/com/example/app/Service.java', mapA);
+    fileMaps.set('/project/src/main/java/com/example/util/Helper.java', mapB);
+
+    const files = [
+      '/project/src/main/java/com/example/app/Service.java',
+      '/project/src/main/java/com/example/util/Helper.java',
+    ];
+
+    const edges = buildJavaImportEdges(files, fileMaps);
+    expect(edges.length).toBeGreaterThanOrEqual(1);
+    const aToB = edges.find(e =>
+      e.from.includes('Service') && e.to.includes('Helper'),
+    );
+    expect(aToB).toBeDefined();
+    expect(aToB!.importInfo.specifier).toBe('Helper');
+  });
+
+  it('throttles wildcard import fanout by reference check', () => {
+    resetSequence();
+
+    const sourceA = `package testcases.CWE89;
+import testcasesupport.*;
+public class Vuln {
+    public void bad() { new AbstractTestCase(); }
+}`;
+    const sourceSupport = `package testcasesupport;
+public class AbstractTestCase {}`;
+    const sourceIO = `package testcasesupport;
+public class IO {}`;
+
+    const mapA = createNeuralMap(
+      '/project/src/testcases/testcases/CWE89/Vuln.java',
+      sourceA,
+    );
+    const mapSupport = createNeuralMap(
+      '/project/src/testcases/testcasesupport/AbstractTestCase.java',
+      sourceSupport,
+    );
+    const mapIO = createNeuralMap(
+      '/project/src/testcases/testcasesupport/IO.java',
+      sourceIO,
+    );
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/src/testcases/testcases/CWE89/Vuln.java', mapA);
+    fileMaps.set('/project/src/testcases/testcasesupport/AbstractTestCase.java', mapSupport);
+    fileMaps.set('/project/src/testcases/testcasesupport/IO.java', mapIO);
+
+    const files = [
+      '/project/src/testcases/testcases/CWE89/Vuln.java',
+      '/project/src/testcases/testcasesupport/AbstractTestCase.java',
+      '/project/src/testcases/testcasesupport/IO.java',
+    ];
+
+    const edges = buildJavaImportEdges(files, fileMaps);
+    // Should create edge to AbstractTestCase (referenced) but NOT to IO (not referenced)
+    const toAbstract = edges.find(e => e.to.includes('AbstractTestCase'));
+    expect(toAbstract).toBeDefined();
+    const toIO = edges.find(e => e.to.includes('IO.java'));
+    expect(toIO).toBeUndefined();
+  });
+
+  it('detects FQCN usage (new org.example.ClassName())', () => {
+    resetSequence();
+
+    const sourceA = `package com.example.app;
+public class Runner {
+    public void run() { new com.example.util.Worker(); }
+}`;
+    const sourceB = `package com.example.util;
+public class Worker {}`;
+
+    const mapA = createNeuralMap(
+      '/project/src/main/java/com/example/app/Runner.java',
+      sourceA,
+    );
+    const mapB = createNeuralMap(
+      '/project/src/main/java/com/example/util/Worker.java',
+      sourceB,
+    );
+
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/src/main/java/com/example/app/Runner.java', mapA);
+    fileMaps.set('/project/src/main/java/com/example/util/Worker.java', mapB);
+
+    const files = [
+      '/project/src/main/java/com/example/app/Runner.java',
+      '/project/src/main/java/com/example/util/Worker.java',
+    ];
+
+    const edges = buildJavaImportEdges(files, fileMaps);
+    const fqcnEdge = edges.find(e =>
+      e.from.includes('Runner') && e.to.includes('Worker'),
+    );
+    expect(fqcnEdge).toBeDefined();
+    expect(fqcnEdge!.importInfo.specifier).toBe('Worker');
+  });
+
+  it('skips self-referencing edges', () => {
+    resetSequence();
+
+    const source = `package com.example;
+import com.example.Foo;
+public class Foo { void test() { new Foo(); } }`;
+
+    const map = createNeuralMap(
+      '/project/src/main/java/com/example/Foo.java',
+      source,
+    );
+    const fileMaps = new Map<string, NeuralMap>();
+    fileMaps.set('/project/src/main/java/com/example/Foo.java', map);
+
+    const edges = buildJavaImportEdges(
+      ['/project/src/main/java/com/example/Foo.java'],
+      fileMaps,
+    );
+    expect(edges).toHaveLength(0);
   });
 });
