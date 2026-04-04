@@ -314,6 +314,30 @@ export function checkMapInvariants(map: NeuralMap): InvariantViolation[] {
     }
   }
 
+  // INV-12: STORAGE_SEMANTIC_VALIDATION -- check that STORAGE nodes don't
+  // have receiver names that look like collections. A valuesList.remove()
+  // classified as STORAGE/db_write is a misclassification. This is the
+  // semantic layer -- checking not just graph shape but graph MEANING.
+  const COLLECTION_SUFFIXES = ['List', 'Set', 'Map', 'Queue', 'Stack', 'Collection', 'Array', 'Vector', 'Deque'];
+  const COLLECTION_NAMES = /^(values|entries|elements|keys|names|params|args|headers|cookies|parts|items|results|records|rows|columns|fields)$/i;
+  for (const node of map.nodes) {
+    if (node.node_type !== 'STORAGE') continue;
+    // Extract the receiver name from the node label (e.g., "valuesList.remove(0)" → "valuesList")
+    const labelMatch = node.label.match(/^(?:[\w.]*\.)?(\w+)\.\w+\(/);
+    if (!labelMatch) continue;
+    const receiver = labelMatch[1]!;
+    const looksLikeCollection = COLLECTION_SUFFIXES.some(s => receiver.endsWith(s))
+      || COLLECTION_NAMES.test(receiver);
+    if (looksLikeCollection) {
+      violations.push({
+        code: 'STORAGE_COLLECTION_MISCLASS',
+        severity: 'error',
+        message: `STORAGE/${node.node_subtype} node "${node.id}" has collection-like receiver "${receiver}" in label "${node.label}" -- likely misclassified collection operation, not a database call`,
+        nodeIds: [node.id],
+      });
+    }
+  }
+
   return violations;
 }
 
