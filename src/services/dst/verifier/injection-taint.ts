@@ -100,7 +100,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   // Source-line fallback for Java: detect SQL injection inside anonymous inner classes
   // where taint crosses class boundaries (e.g., JWT header.get("kid") → executeQuery).
   // The mapper doesn't trace taint across inner class boundaries, so BFS misses these.
-  if (findings.length === 0 && map.source_code && !hasDeadBranch89) {
+  if (findings.length === 0 && map.source_code && !hasDeadBranch89 && !(map as any).collectionTaintNeutralized) {
     const sl89 = stripComments(map.source_code);
     const lines89 = sl89.split('\n');
 
