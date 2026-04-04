@@ -13,6 +13,21 @@ import { javascriptProfile } from './profiles/javascript.js';
 // lacks post-visit hooks needed for scope pop.
 
 // ---------------------------------------------------------------------------
+// Call node types across all supported languages (tree-sitter grammar names).
+// Used by walkWithScopes to track unmapped call expressions in diagnostics.
+// ---------------------------------------------------------------------------
+
+const CALL_NODE_TYPES = new Set([
+  'call_expression',          // JS, Go, Kotlin, Swift, Rust
+  'call',                     // Python, Ruby
+  'method_invocation',        // Java
+  'invocation_expression',    // C#
+  'function_call_expression', // PHP
+  'member_call_expression',   // PHP
+  'scoped_call_expression',   // PHP
+]);
+
+// ---------------------------------------------------------------------------
 // Scope infrastructure
 // ---------------------------------------------------------------------------
 
@@ -118,6 +133,15 @@ export class MapperContext {
   /** O(1) edge dedup: tracks "source:target:edgeType" strings to avoid
    *  scanning node.edges[] on every addEdge call. */
   readonly edgeSet = new Set<string>();
+
+  /** Diagnostic counters — tracks silent failures for post-mapping visibility.
+   *  Accessible on the returned context after buildNeuralMap completes. */
+  diagnostics = {
+    unmappedCalls: 0,
+    droppedFlows: 0,
+    droppedEdges: 0,
+    totalCalls: 0,
+  };
 
   /** The language profile driving this mapping session */
   readonly profile: LanguageProfile;
@@ -231,7 +255,10 @@ export class MapperContext {
   ): void {
     const fromNode = this.nodeById.get(fromNodeId) ?? this.neuralMap.nodes.find(n => n.id === fromNodeId);
     const toNode = this.nodeById.get(toNodeId) ?? this.neuralMap.nodes.find(n => n.id === toNodeId);
-    if (!fromNode || !toNode) return;
+    if (!fromNode || !toNode) {
+      this.diagnostics.droppedFlows++;
+      return;
+    }
     // Cache lookups for future calls
     if (!this.nodeById.has(fromNodeId)) this.nodeById.set(fromNodeId, fromNode);
     if (!this.nodeById.has(toNodeId)) this.nodeById.set(toNodeId, toNode);
@@ -298,7 +325,10 @@ export class MapperContext {
   ): boolean {
     const src = sourceNode ?? this.nodeById.get(sourceNodeId)
               ?? this.neuralMap.nodes.find(n => n.id === sourceNodeId);
-    if (!src) return false;
+    if (!src) {
+      this.diagnostics.droppedEdges++;
+      return false;
+    }
 
     // Dedup: O(1) Set lookup instead of O(edges) .some() scan
     const edgeKey = `${sourceNodeId}:${targetNodeId}:${edgeType}`;
@@ -1174,7 +1204,18 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
   }
 
   // ── Node classification — delegated to the language profile ──
+  // Track call expression classification for diagnostics
+  const isCallNode = CALL_NODE_TYPES.has(node.type);
+  const prevNodeId = isCallNode ? ctx.lastCreatedNodeId : null;
+  if (isCallNode) ctx.diagnostics.totalCalls++;
+
   profile.classifyNode(node, ctx);
+
+  // If this was a call node and classifyNode didn't produce a new typed node,
+  // it means the callee couldn't be resolved — count it as unmapped.
+  if (isCallNode && ctx.lastCreatedNodeId === prevNodeId) {
+    ctx.diagnostics.unmappedCalls++;
+  }
 
   // ── Dead-branch elimination for if_statement / if_expression ──
   // When the profile provides tryEvalCondition and the node is an if-statement,

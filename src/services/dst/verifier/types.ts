@@ -119,6 +119,49 @@ export interface ProofCertificate {
   variants: ProofPayload[];
   delivery: DeliverySpec;
   oracle: OracleDefinition;
-  proof_strength: 'conclusive' | 'strong' | 'indicative';
+  proof_strength: 'conclusive' | 'strong' | 'indicative' | 'refuted';
   path_analysis: PathAnalysis | null;
+  runtime_verification?: RuntimeVerification;
+}
+
+// ── Runtime Verification (sandbox layer) ─────────────────────────────
+
+export type RuntimeBlockReason =
+  | 'BLOCKED_BY_TRANSFORM'
+  | 'BLOCKED_BY_AUTH'
+  | 'BLOCKED_BY_WAF'
+  | 'DELIVERY_FAILURE'
+  | 'ORACLE_INCONCLUSIVE'
+  | 'ENVIRONMENT_FAILURE';
+
+export type RuntimeVerificationState =
+  | 'pending'
+  | 'baseline_captured'
+  | 'payload_delivered'
+  | 'confirmed'
+  | 'refuted'
+  | 'blocked'
+  | 'inconclusive'
+  | 'error';
+
+export interface RuntimeVerification {
+  state: RuntimeVerificationState;
+  timestamp: string;
+  baseline?: {
+    status_code: number;
+    body_hash: string;
+    response_time_ms: number;
+  };
+  attack_response?: {
+    status_code: number;
+    body_hash: string;
+    response_time_ms: number;
+    canary_found: boolean;
+    timing_anomaly: boolean;
+    evidence_excerpt?: string;
+  };
+  block_reason?: RuntimeBlockReason;
+  explanation: string;
+  chain_id?: string;
+  variant_index?: number;
 }

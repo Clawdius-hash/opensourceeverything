@@ -369,6 +369,51 @@ const CWE_REGISTRY: Record<string, (map: NeuralMap) => VerificationResult> = {
 };
 
 // ---------------------------------------------------------------------------
+// Registry collision detection
+// ---------------------------------------------------------------------------
+
+function detectRegistryCollisions(): number {
+  const namedRegistries: { name: string; registry: Record<string, Function> }[] = [
+    { name: 'GENERATED_REGISTRY', registry: GENERATED_REGISTRY },
+    { name: 'CODE_QUALITY_REGISTRY', registry: CODE_QUALITY_REGISTRY },
+    { name: 'SENSITIVE_DATA_REGISTRY', registry: SENSITIVE_DATA_REGISTRY },
+    { name: 'AUTH_REGISTRY', registry: AUTH_REGISTRY },
+    { name: 'RESOURCE_REGISTRY', registry: RESOURCE_REGISTRY },
+    { name: 'CRYPTO_REGISTRY', registry: CRYPTO_REGISTRY },
+    { name: 'ARCHITECTURE_REGISTRY', registry: ARCHITECTURE_REGISTRY },
+    { name: 'MALICIOUS_CODE_REGISTRY', registry: MALICIOUS_CODE_REGISTRY },
+    { name: 'ERROR_HANDLING_REGISTRY', registry: ERROR_HANDLING_REGISTRY },
+    { name: 'NUMERIC_COERCION_REGISTRY', registry: NUMERIC_COERCION_REGISTRY },
+    { name: 'ENCODING_VALIDATION_REGISTRY', registry: ENCODING_VALIDATION_REGISTRY },
+    { name: 'MEMORY_SAFETY_REGISTRY', registry: MEMORY_SAFETY_REGISTRY },
+    { name: 'INJECTION_TAINT_REGISTRY', registry: INJECTION_TAINT_REGISTRY },
+  ];
+
+  const owners = new Map<string, string[]>();
+  for (const { name, registry } of namedRegistries) {
+    for (const key of Object.keys(registry)) {
+      if (!owners.has(key)) owners.set(key, []);
+      owners.get(key)!.push(name);
+    }
+  }
+
+  let collisions = 0;
+  for (const [key, sources] of owners) {
+    if (sources.length > 1) {
+      const winner = sources[sources.length - 1];
+      const others = sources.slice(0, -1).join(', ');
+      process.stderr.write(`[DST] Registry collision: ${key} defined in ${others} and ${winner} (${winner} wins)\n`);
+      collisions++;
+    }
+  }
+  return collisions;
+}
+
+if (process.env.DST_DEBUG) {
+  detectRegistryCollisions();
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
