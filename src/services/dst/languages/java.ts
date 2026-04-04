@@ -702,7 +702,7 @@ const EXPANSION_ENTRIES: Record<string, CalleePattern> = {
 const STORAGE_READ_METHODS = new Set([
   'findAll', 'findById', 'findOne', 'findBy', 'find',
   'getOne', 'getReferenceById', 'getById',
-  'query', 'queryForObject', 'queryForList',
+  'query', 'queryForObject', 'queryForList', 'queryForMap', 'queryForRowSet', 'queryForInt', 'queryForLong',
   'executeQuery', 'count', 'exists', 'existsById',
 ]);
 
@@ -766,6 +766,8 @@ const VARIABLE_TO_CLASS: Record<string, string> = {
   'restTemplate': 'RestTemplate',
   'webClient': 'WebClient',
   'jdbcTemplate': 'JdbcTemplate',
+  'JDBCtemplate': 'JdbcTemplate',
+  'jdbcTmpl': 'JdbcTemplate',
   'namedParameterJdbcTemplate': 'NamedParameterJdbcTemplate',
   'kafkaTemplate': 'KafkaTemplate',
   'jmsTemplate': 'JmsTemplate',
