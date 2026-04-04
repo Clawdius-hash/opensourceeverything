@@ -682,6 +682,22 @@ export function formatReport(results: VerificationResult[]): string {
         if (f.collapsed_cwes && f.collapsed_cwes.length > 0) {
           lines.push(`    Also covers: ${f.collapsed_cwes.join(', ')}`);
         }
+        // Show proof data when present (--prove mode)
+        const proof = (f as any).proof;
+        if (proof) {
+          lines.push(`    PROOF [${proof.proof_strength}]:`);
+          lines.push(`      Payload: ${proof.primary_payload.value}`);
+          lines.push(`      Canary:  ${proof.primary_payload.canary || '(timing-based)'}`);
+          lines.push(`      Context: ${proof.primary_payload.context}`);
+          lines.push(`      Deliver: ${proof.delivery.channel}${proof.delivery.http ? ` ${proof.delivery.http.method} ${proof.delivery.http.path}` : ''}`);
+          lines.push(`      Oracle:  ${proof.oracle.type} — ${proof.oracle.static_proof.slice(0, 100)}`);
+          if (proof.variants.length > 0) {
+            lines.push(`      Variants: ${proof.variants.length} additional payload(s)`);
+          }
+          if (!proof.primary_payload.execution_safe) {
+            lines.push(`      WARNING: Not safe for automated execution`);
+          }
+        }
         lines.push('');
       }
     }

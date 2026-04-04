@@ -459,11 +459,33 @@ function printSummary(allResults: FileResult[], elapsed: number): void {
 // Main
 // ---------------------------------------------------------------------------
 
+/**
+ * Enrich verification results with proof certificates from the reverse mapper.
+ * Shared helper called at all four scan points (demo, single-file, directory, cross-file).
+ */
+async function enrichWithProofs(
+  results: ReturnType<typeof verifyAll>,
+  map: NeuralMap,
+): Promise<void> {
+  const { generateProof } = await import('./payload-gen.js');
+  for (const result of results) {
+    if (!result.holds) {
+      for (const finding of result.findings) {
+        const proof = generateProof(map, finding, result.cwe);
+        if (proof) {
+          (finding as any).proof = proof;
+        }
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const jsonOutput = args.includes('--json');
   const noDedup = args.includes('--no-dedup');
   const pedantic = args.includes('--pedantic');
+  const proveMode = args.includes('--prove');
   const target = args.find(a => !a.startsWith('--'));
   const isDemo = args.includes('--demo') || !target;
   const verifyOptions = (noDedup || pedantic)
@@ -482,6 +504,9 @@ async function main(): Promise<void> {
     printMapStats(map);
 
     const results = verifyAll(map, 'javascript', verifyOptions);
+
+    // --prove: enrich findings with proof certificates (demo)
+    if (proveMode) await enrichWithProofs(results, map);
 
     if (jsonOutput) {
       console.log(JSON.stringify(results, null, 2));
@@ -521,6 +546,9 @@ async function main(): Promise<void> {
     printMapStats(map);
 
     const results = verifyAll(map, langConfig.profileImport, verifyOptions);
+
+    // --prove: enrich findings with proof certificates (single-file)
+    if (proveMode) await enrichWithProofs(results, map);
 
     if (jsonOutput) {
       console.log(JSON.stringify(results, null, 2));
@@ -568,6 +596,10 @@ async function main(): Promise<void> {
         const fileLangConfig = detectLanguage(file);
         const map = await analyzeWithRealMapper(source, file);
         const results = verifyAll(map, fileLangConfig.profileImport, verifyOptions);
+
+        // --prove: enrich findings with proof certificates (directory per-file)
+        if (proveMode) await enrichWithProofs(results, map);
+
         const findings = results.filter(r => !r.holds).reduce((s, r) => s + r.findings.length, 0);
 
         allResults.push({ filename: shortName, map, results });
@@ -625,6 +657,10 @@ async function main(): Promise<void> {
         }
         const dominantLang = [...langCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'javascript';
         const mergedResults = verifyAll(crossFileResult.mergedMap, dominantLang, verifyOptions);
+
+        // --prove: enrich findings with proof certificates (cross-file)
+        if (proveMode) await enrichWithProofs(mergedResults, crossFileResult.mergedMap);
+
         const mergedFindings = mergedResults.filter(r => !r.holds).reduce((s, r) => s + r.findings.length, 0);
 
         crossFileFindings = {
