@@ -151,11 +151,12 @@ export function generateChain(
   const cleanPath = httpSpec.path.startsWith('/') ? httpSpec.path : `/${httpSpec.path}`;
 
   const target: DeliveryTarget = {
-    url: `${cleanBase}${cleanPath}`,
-    method: determineHTTPMethod(proof.delivery),
+    base_url: cleanBase,
+    path: cleanPath,
   };
 
   const params: DeliveryParams = {
+    method: determineHTTPMethod(proof.delivery),
     param: httpSpec.param,
     header: httpSpec.header,
     cookie: httpSpec.cookie,
@@ -328,7 +329,8 @@ export async function executeChain(
       } else {
         observation = {
           signal_detected: false,
-          confidence: 0,
+          signal_type: 'none' as const,
+          confidence: 'none' as const,
           evidence: undefined,
         };
       }
@@ -340,7 +342,7 @@ export async function executeChain(
       });
 
       // If signal detected with high confidence → confirmed, stop
-      if (observation.signal_detected && observation.confidence >= 0.7) {
+      if (observation.signal_detected && (observation.confidence === 'high' || observation.confidence === 'medium')) {
         confirmedState = {
           variantIndex: attack.variant_index ?? 0,
           delivery: attackDelivery,
