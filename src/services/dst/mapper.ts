@@ -134,13 +134,24 @@ export class MapperContext {
    *  scanning node.edges[] on every addEdge call. */
   readonly edgeSet = new Set<string>();
 
-  /** Diagnostic counters — tracks silent failures for post-mapping visibility.
+  /** Diagnostic counters -- tracks silent failures for post-mapping visibility.
    *  Accessible on the returned context after buildNeuralMap completes. */
   diagnostics = {
     unmappedCalls: 0,
     droppedFlows: 0,
     droppedEdges: 0,
     totalCalls: 0,
+    /** Incremented by verifiers when a source-line fallback fires because
+     *  the mapper couldn't trace taint through the graph. Each increment
+     *  represents a CWE check that had to bypass the graph and regex-scan
+     *  source code instead. Higher = more mapper gaps. */
+    sourceLineFallbacks: 0,
+    /** Per-phase timing in milliseconds. Populated by buildNeuralMap. */
+    timing: {
+      walkMs: 0,
+      postProcessMs: 0,
+      totalMs: 0,
+    },
   };
 
   /** The language profile driving this mapping session */
@@ -1112,6 +1123,7 @@ export function buildNeuralMap(
   fileName: string,
   profile: LanguageProfile = javascriptProfile,
 ): { map: NeuralMap; ctx: MapperContext } {
+  const t0 = performance.now();
   const ctx = new MapperContext(fileName, sourceCode, profile);
   const root = tree.rootNode;
 
@@ -1122,6 +1134,8 @@ export function buildNeuralMap(
   // walkTree doesn't give us a post-visit hook. Instead, we use
   // the tree cursor for a proper enter/leave traversal.
   walkWithScopes(root, ctx, profile);
+
+  const tWalkDone = performance.now();
 
   // NOTE: We intentionally do NOT pop the module scope here.
   // The module scope remains on ctx.scopeStack so that callers can use
@@ -1139,13 +1153,18 @@ export function buildNeuralMap(
   // Post-processing: build DATA_FLOW edges from data_in references
   ctx.buildDataFlowEdges();
 
-  // Post-processing: PASS 2 — inter-procedural taint propagation
+  // Post-processing: PASS 2 -- inter-procedural taint propagation
   ctx.propagateInterproceduralTaint();
 
   // Post-processing: build READS, WRITES, DEPENDS edges
   ctx.buildReadsEdges();
   ctx.buildWritesEdges();
   ctx.buildDependsEdges();
+
+  const tDone = performance.now();
+  ctx.diagnostics.timing.walkMs = Math.round(tWalkDone - t0);
+  ctx.diagnostics.timing.postProcessMs = Math.round(tDone - tWalkDone);
+  ctx.diagnostics.timing.totalMs = Math.round(tDone - t0);
 
   return { map: ctx.neuralMap, ctx };
 }
