@@ -939,10 +939,16 @@ export function lookupCallee(calleeChain: string[]): CalleePattern | null {
   }
 
   // Wildcard: known storage methods on unknown objects
-  if (STORAGE_READ_METHODS.has(methodName) && !NON_DB_OBJECTS.has(objectName)) {
+  // Skip collection variables — List.remove() is not a DB write, Map.get() is not a DB read.
+  // Check exact match AND suffix match for common collection naming (valuesList, userMap, etc.)
+  const COLLECTION_SUFFIXES = ['List', 'Set', 'Map', 'Queue', 'Stack', 'Collection', 'Array', 'Vector', 'Deque'];
+  const isCollectionVar = NON_DB_OBJECTS.has(objectName)
+    || COLLECTION_SUFFIXES.some(s => objectName.endsWith(s))
+    || /^(values|entries|elements|keys|names|params|args|headers|cookies|parts)$/i.test(objectName);
+  if (STORAGE_READ_METHODS.has(methodName) && !isCollectionVar) {
     return { nodeType: 'STORAGE', subtype: 'db_read', tainted: false };
   }
-  if (STORAGE_WRITE_METHODS.has(methodName) && !NON_DB_OBJECTS.has(objectName)) {
+  if (STORAGE_WRITE_METHODS.has(methodName) && !isCollectionVar) {
     return { nodeType: 'STORAGE', subtype: 'db_write', tainted: false };
   }
 
