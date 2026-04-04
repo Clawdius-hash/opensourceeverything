@@ -304,19 +304,52 @@ export function analyzeTransforms(
 // Delivery spec construction
 // ---------------------------------------------------------------------------
 
-function extractHTTPDelivery(sourceNode: NeuralMapNode): DeliverySpec['http'] {
+/**
+ * Walk the NeuralMap to find a STRUCTURAL node whose line range contains
+ * the source node and has metadata.route_path set.
+ * Returns the route path, or '/' as fallback.
+ */
+function resolveRoutePath(map: NeuralMap, sourceNode: NeuralMapNode): string {
+  let bestPath: string | null = null;
+  let bestSpan = Infinity;
+
+  for (const n of map.nodes) {
+    if (n.node_type !== 'STRUCTURAL') continue;
+    if (!n.metadata.route_path) continue;
+
+    // Check if this structural node's line range contains the source node
+    const routePath = n.metadata.route_path as string;
+    const containsSource =
+      n.line_start <= sourceNode.line_start &&
+      (n.line_end === 0 ? n.line_start === sourceNode.line_start : n.line_end >= sourceNode.line_start);
+
+    if (containsSource) {
+      const span = n.line_end === 0 ? 0 : (n.line_end - n.line_start);
+      // Prefer the most specific (smallest span) containing node
+      if (span < bestSpan) {
+        bestSpan = span;
+        bestPath = routePath;
+      }
+    }
+  }
+
+  return bestPath ?? '/';
+}
+
+function extractHTTPDelivery(sourceNode: NeuralMapNode, map: NeuralMap): DeliverySpec['http'] {
   const snap = sourceNode.analysis_snapshot || sourceNode.code_snapshot;
   const paramName = sourceNode.param_names?.[0];
   const method = /\b(doPost|POST|post|body)\b/i.test(snap) ? 'POST' : 'GET';
+  const path = resolveRoutePath(map, sourceNode);
 
   if (/\bgetHeader\b|\bheader\b/i.test(snap)) {
-    return { method, path: '/', header: paramName || 'X-Custom' };
+    return { method, path, header: paramName || 'X-Custom' };
   }
   if (/\bgetCookies\b|\bcookie\b/i.test(snap)) {
-    return { method, path: '/', cookie: paramName || 'session' };
+    return { method, path, cookie: paramName || 'session' };
   }
 
-  return { method, path: '/', param: paramName || 'input' };
+  return { method, path, param: paramName || 'input' };
 }
 
 export function buildDeliverySpec(
@@ -335,7 +368,7 @@ export function buildDeliverySpec(
       case 'http_handler':
       case 'route_handler':
         channel = 'http';
-        http = extractHTTPDelivery(sourceNode);
+        http = extractHTTPDelivery(sourceNode, map);
         break;
       case 'user_input':
         channel = 'stdin';
@@ -355,7 +388,7 @@ export function buildDeliverySpec(
           sourceNode.analysis_snapshot || sourceNode.code_snapshot
         )) {
           channel = 'http';
-          http = extractHTTPDelivery(sourceNode);
+          http = extractHTTPDelivery(sourceNode, map);
         } else {
           channel = 'unknown';
         }
