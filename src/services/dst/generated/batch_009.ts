@@ -88,6 +88,7 @@ function createExternalNoTransformVerifier(
               description: `User input from ${src.label} reaches external system at ${sink.label} without transformation. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

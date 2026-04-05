@@ -86,6 +86,7 @@ function createIntermediateTransformVerifier(
               description: `User input from ${src.label} reaches processing at ${sink.label} without prior sanitization. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

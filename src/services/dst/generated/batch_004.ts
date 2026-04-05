@@ -148,6 +148,7 @@ function createNoTransformVerifier(
               description: `User input from ${src.label} reaches ${sink.label} without transformation. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

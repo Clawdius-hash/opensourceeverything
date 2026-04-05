@@ -107,13 +107,8 @@ export function hasPathWithoutGate(
 
     // A gate only counts if it actually processes data from the tracked path.
     // A CONTROL named "sanitize" that doesn't touch the tainted variable is NOT a real gate.
-    const isEffectiveGate = isGateType && (
-      // Gate has tainted OR sensitive data flowing INTO it (it processes the relevant input)
-      node.data_in?.some(d => d.tainted || d.sensitivity !== 'NONE') ||
-      // OR gate has a DATA_FLOW edge FROM a node on our current path
-      // (the data actually passes through this control)
-      node.edges?.some(e => e.edge_type === 'DATA_FLOW' && visited.has(`${e.target}:false`))
-    );
+    const isEffectiveGate = isGateType &&
+      (node.data_in?.some(d => d.tainted || d.sensitivity !== 'NONE') ?? false);
 
     const gateNow = passedGate || isEffectiveGate;
 
@@ -1050,6 +1045,7 @@ export function createGenericVerifier(
               description: `User input from ${src.label} reaches ${sink.label} without proper controls. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }
@@ -1142,6 +1138,7 @@ export function makeVerifier(
               missing: missingDesc, severity,
               description: `${sourceType} at ${src.label} → ${sinkType} at ${sink.label} without controls. Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

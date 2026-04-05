@@ -146,10 +146,12 @@ function createOutputVerifier(
       for (const sink of sinks) {
         // Primary: BFS taint path without TRANSFORM gate
         let vulnerable = hasPathWithoutTransform(map, src.id, sink.id);
+        let detectedVia: 'bfs' | 'sink_tainted' | 'scope_taint' = 'bfs';
 
         // Fallback 1: sink has tainted data_in (mapper captured taint but no edge path)
         if (!vulnerable && sinkHasTaintedDataIn(map, sink.id)) {
           vulnerable = true;
+          detectedVia = 'sink_tainted';
         }
 
         // Fallback 2: scope-based — INGRESS and sink share a function scope
@@ -157,6 +159,7 @@ function createOutputVerifier(
         // Catches Java Juliet patterns: data = request.getParameter("x"); ... response.getWriter().println(data);
         if (!vulnerable && scopeBasedTaintReaches(map, src.id, sink.id)) {
           vulnerable = true;
+          detectedVia = 'scope_taint';
         }
 
         if (vulnerable) {
@@ -178,6 +181,7 @@ function createOutputVerifier(
               description: `User input from ${src.label} reaches output at ${sink.label} without transformation. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: detectedVia,
             });
           }
         }

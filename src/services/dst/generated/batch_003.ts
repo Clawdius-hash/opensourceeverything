@@ -144,6 +144,7 @@ function createTransformStorageVerifier(
               description: `Internal operation at ${src.label} affects ${sink.label} without proper controls. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

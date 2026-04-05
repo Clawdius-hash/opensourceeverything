@@ -291,6 +291,7 @@ function createInputValidationVerifier(
                 `Vulnerable to ${cweName}.`,
               fix: 'Validate all input before processing. Use schema validation (zod, joi) for structured data. ' +
                 'Sanitize special characters. Reject malformed input early.',
+              via: 'bfs',
             });
           }
         }

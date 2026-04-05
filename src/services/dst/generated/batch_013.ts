@@ -51,6 +51,7 @@ function createEgressVerifier(
               description: `Data from ${src.label} reaches output at ${sink.label} without proper controls. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

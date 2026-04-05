@@ -58,6 +58,7 @@ function createAuthControlVerifier(
               description: `Authentication at ${sink.label} receives input from ${src.label} without security controls. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

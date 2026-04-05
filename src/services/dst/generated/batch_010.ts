@@ -55,6 +55,7 @@ function createAuthVerifier(
               description: `Request from ${src.label} reaches ${sink.label} without authentication/authorization. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

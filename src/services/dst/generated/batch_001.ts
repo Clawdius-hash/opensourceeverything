@@ -180,6 +180,7 @@ function createPathTraversalVerifier(
                 `Vulnerable to ${cweName}.`,
               fix: 'Resolve the full path with path.resolve(), verify it starts with your allowed base directory, ' +
                 'and reject paths containing traversal sequences. Never use user input directly in file operations.',
+              via: 'bfs',
             });
           }
         }
@@ -218,6 +219,7 @@ function createBufferVerifier(
                 `Vulnerable to ${cweName}.`,
               fix: 'Validate buffer sizes and array indices before access. Use safe allocation methods. ' +
                 'Check that write lengths do not exceed buffer capacity.',
+              via: 'bfs',
             });
           }
         }
@@ -260,6 +262,7 @@ function createIntegerVerifier(
                 `Vulnerable to ${cweName}.`,
               fix: 'Validate numeric inputs are within expected ranges. Use Number.isSafeInteger() for integers. ' +
                 'Check for overflow before arithmetic. Use BigInt for large values.',
+              via: 'bfs',
             });
           }
         }

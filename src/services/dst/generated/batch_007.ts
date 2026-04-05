@@ -85,6 +85,7 @@ function createTransformTransformVerifier(
               description: `Operation at ${src.label} feeds ${sink.label} without validation. ` +
                 `Vulnerable to ${cweName}.`,
               fix: fixDesc,
+              via: 'bfs',
             });
           }
         }

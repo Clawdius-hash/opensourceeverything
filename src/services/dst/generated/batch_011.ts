@@ -72,6 +72,7 @@ function createControlTransformVerifier(
                 description: `Check at ${src.label} feeds operation at ${sink.label} without additional control. ` +
                   `Vulnerable to ${cweName}.`,
                 fix: fixDesc,
+                via: 'bfs',
               });
             }
           }

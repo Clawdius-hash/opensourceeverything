@@ -107,23 +107,17 @@ export function tracePath(
 
     // Gate evaluation — mirrors _helpers.ts exactly
     const isGateType = gateSet.has(node.node_type);
-    const hasTaintedOrSensitiveInput = node.data_in?.some(
-      d => d.tainted || d.sensitivity !== 'NONE',
-    ) ?? false;
-    const hasDataFlowFromUngated = node.edges?.some(
-      e => e.edge_type === 'DATA_FLOW' && visited.has(`${e.target}:false`),
-    ) ?? false;
-    const isEffectiveGate = isGateType && (hasTaintedOrSensitiveInput || hasDataFlowFromUngated);
+    const isEffectiveGate = isGateType &&
+      (node.data_in?.some(d => d.tainted || d.sensitivity !== 'NONE') ?? false);
 
     if (isGateType) {
-      const reasons: string[] = [];
-      if (hasTaintedOrSensitiveInput) reasons.push('has tainted/sensitive data_in');
-      if (hasDataFlowFromUngated) reasons.push('DATA_FLOW edge to ungated visited node');
-      if (reasons.length === 0) reasons.push('no tainted data_in and no DATA_FLOW to ungated node');
+      const reason = isEffectiveGate
+        ? 'has tainted/sensitive data_in'
+        : 'no tainted data_in';
       gatesEvaluated.push({
         node: toTracedNode(node),
         effective: isEffectiveGate,
-        reason: reasons.join('; '),
+        reason,
       });
     }
 
@@ -198,7 +192,7 @@ export function tracePath(
  * For BFS findings, use tracePath() as normal.
  * For non-BFS findings, return a clear message about why the trace can't help.
  */
-export function findingTraceVerdict(finding: { via?: string }): string {
+export function findingTraceVerdict(finding: Pick<Finding, 'via'>): string {
   switch (finding.via) {
     case 'source_line_fallback':
       return 'SOURCE_LINE_FALLBACK — finding detected by regex scan of source code, not graph traversal. BFS trace unavailable because mapper could not build the taint path.';

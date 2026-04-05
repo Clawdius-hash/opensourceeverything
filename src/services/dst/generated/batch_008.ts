@@ -59,6 +59,7 @@ function createFilteringVerifier(
               fix: 'Use global replacement (replaceAll or /g flag) to filter ALL instances. ' +
                 'Apply filtering at all locations, not just the first occurrence. ' +
                 'Use proven sanitization libraries instead of custom regex.',
+              via: 'bfs',
             });
           }
         }
