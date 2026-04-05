@@ -22,15 +22,15 @@ function verifyCWE494(map: NeuralMap): VerificationResult {
   const INTEGRITY_RE = /\b(sha256|sha384|sha512|checksum|digest|verify|createHash|hashlib|MessageDigest|integrity\s*=|SRI|subresource|gpg|pgp|sigstore|cosign|notary|createVerify|crypto\.verify|hmac|signedUrl|signature)/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (!REMOTE_FETCH_RE.test(code)) continue;
 
     for (const downstream of map.nodes) {
       if (downstream.id === node.id) continue;
-      if (!(CODE_EXEC_RE.test(downstream.analysis_snapshot || downstream.analysis_snapshot || downstream.code_snapshot) || WRITE_EXEC_RE.test(downstream.analysis_snapshot || downstream.analysis_snapshot || downstream.code_snapshot))) continue;
+      if (!(CODE_EXEC_RE.test(downstream.analysis_snapshot || downstream.code_snapshot) || WRITE_EXEC_RE.test(downstream.analysis_snapshot || downstream.code_snapshot))) continue;
 
       if (hasPathWithoutControl(map, node.id, downstream.id)) {
-        const pathCode = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot) + ' ' + stripComments(downstream.analysis_snapshot || downstream.analysis_snapshot || downstream.code_snapshot);
+        const pathCode = stripComments(node.analysis_snapshot || node.code_snapshot) + ' ' + stripComments(downstream.analysis_snapshot || downstream.code_snapshot);
         if (!INTEGRITY_RE.test(pathCode)) {
           findings.push({
             source: nodeRef(node),
@@ -68,7 +68,7 @@ function verifyCWE506(map: NeuralMap): VerificationResult {
   const EXEC_NEAR_RE = /\b(eval|exec|Function|spawn|system|popen|subprocess|child_process|vm\.run|execSync)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     if (OBFUSCATED_EXEC_RE.test(code)) {
       findings.push({
@@ -135,7 +135,7 @@ function verifyCWE507(map: NeuralMap): VerificationResult {
 
     for (const node of map.nodes) {
       if (!containedIds.has(node.id)) continue;
-      const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
       if (SUSPICIOUS_OP_RE.test(code)) {
         findings.push({
@@ -170,11 +170,11 @@ function verifyCWE508(map: NeuralMap): VerificationResult {
   const ADMIN_CONTEXT_RE = /\b(cleanup|teardown|shutdown.?hook|graceful.?shutdown|before.?exit|uninstall|migration|rollback|test.?fixture|afterAll|afterEach|dispose|destructor)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     const parentId = findContainingFunction(map, node.id);
     const parentNode = parentId ? map.nodes.find(n => n.id === parentId) : null;
-    const inAdminContext = parentNode ? ADMIN_CONTEXT_RE.test(parentNode.label) || ADMIN_CONTEXT_RE.test(parentNode.analysis_snapshot || parentNode.analysis_snapshot || parentNode.code_snapshot) : false;
+    const inAdminContext = parentNode ? ADMIN_CONTEXT_RE.test(parentNode.label) || ADMIN_CONTEXT_RE.test(parentNode.analysis_snapshot || parentNode.code_snapshot) : false;
     if (inAdminContext) continue;
 
     if (DESTRUCTIVE_RE.test(code)) {
@@ -227,12 +227,12 @@ function verifyCWE509(map: NeuralMap): VerificationResult {
   const NET_SPREAD_RE = /\b(scp|rsync|psexec|wmic\s+.*process\s+call|net\s+use|ssh.*cat\s+.*>>|replicate|propagate|spread|infect)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     if (SELF_READ_RE.test(code)) {
       for (const target of map.nodes) {
         if (target.id === node.id) continue;
-        if (MODIFY_EXEC_RE.test(stripComments(target.analysis_snapshot || target.analysis_snapshot || target.code_snapshot))) {
+        if (MODIFY_EXEC_RE.test(stripComments(target.analysis_snapshot || target.code_snapshot))) {
           if (hasPathWithoutControl(map, node.id, target.id)) {
             findings.push({
               source: nodeRef(node), sink: nodeRef(target),
@@ -316,7 +316,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
   const DENY_LIST_RE = /\b(block|deny|reject|blacklist|blocklist|ban|forbidden|refuse|disallow|revoke|kick|disconnect)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     // --- Check hostname/IP identity trapdoor ---
     if (HOSTNAME_EQUALS_RE.test(code) || (HOSTNAME_CONDITIONAL_RE.test(code) && IP_LITERAL_CMP_RE.test(code))) {
@@ -414,7 +414,7 @@ function verifyCWE511(map: NeuralMap): VerificationResult {
   const DESTRUCTIVE_OPS_RE = /\b(delete|remove|drop|truncate|wipe|destroy|shutdown|exit|kill|format|unlink|rmdir|rm\s+-rf|corrupt|overwrite|disable|lock.?out|revoke|suspend|terminate|exec|Runtime)/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     const hasDateTrigger = DATE_TRIGGER_RE.test(code) || HARDCODED_DATE_RE.test(code);
     const hasCounterTrigger = COUNTER_TRIGGER_RE.test(code);
@@ -435,7 +435,7 @@ function verifyCWE511(map: NeuralMap): VerificationResult {
 
     for (const target of map.nodes) {
       if (target.id === node.id) continue;
-      if (!DESTRUCTIVE_OPS_RE.test(stripComments(target.analysis_snapshot || target.analysis_snapshot || target.code_snapshot))) continue;
+      if (!DESTRUCTIVE_OPS_RE.test(stripComments(target.analysis_snapshot || target.code_snapshot))) continue;
 
       if (hasPathWithoutControl(map, node.id, target.id)) {
         const triggerType = hasDateTrigger ? 'date/time trigger' : 'counter trigger';
@@ -484,7 +484,7 @@ function verifyCWE512(map: NeuralMap): VerificationResult {
   const CONSENT_RE = /\b(permission|consent|opt.?in|user.?agree|privacy.?policy|GDPR|requestPermission|checkPermission|Authorization|allowlist)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     for (const { re, name } of SURVEILLANCE_PATTERNS) {
       if (!re.test(code)) continue;
@@ -492,7 +492,7 @@ function verifyCWE512(map: NeuralMap): VerificationResult {
       // Check if surveillance data flows to network exfiltration
       for (const target of map.nodes) {
         if (target.id === node.id) continue;
-        const targetCode = stripComments(target.analysis_snapshot || target.analysis_snapshot || target.code_snapshot);
+        const targetCode = stripComments(target.analysis_snapshot || target.code_snapshot);
         if (!EXFIL_RE.test(targetCode)) continue;
 
         if (hasPathWithoutControl(map, node.id, target.id)) {
@@ -549,7 +549,7 @@ function verifyCWE514(map: NeuralMap): VerificationResult {
   const ERROR_CHANNEL_RE = /\b(throw|Error|Exception|reject|abort)\b.*\b(encode|btoa|Buffer\.from|JSON\.stringify|serialize)\b.*\b(data|payload|secret|token|key|credential)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     if (DNS_EXFIL_RE.test(code)) {
       findings.push({
@@ -614,7 +614,7 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
   const REGISTRY_RE = /\b(RegSetValueEx|RegCreateKey|Registry\.SetValue|Set-ItemProperty\s+.*HKLM|Set-ItemProperty\s+.*HKCU|winreg\.SetValue|reg\s+add)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     if (META_ENCODE_RE.test(code)) {
       findings.push({

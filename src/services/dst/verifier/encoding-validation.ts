@@ -231,7 +231,7 @@ function verifyCWE176(map: NeuralMap): VerificationResult {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
         const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
-        const srcCode = stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot);
+        const srcCode = stripComments(src.analysis_snapshot || src.code_snapshot);
         if (!UNICODE_SAFE176.test(sinkCode) && !UNICODE_SAFE176.test(srcCode)) {
           findings.push({
             source: nodeRef(src),
@@ -285,8 +285,8 @@ function verifyCWE177(map: NeuralMap): VerificationResult {
     for (const check of securityChecks177) {
       if (src.id === check.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, check.id)) {
-        const checkCode = stripComments(check.analysis_snapshot || check.analysis_snapshot || check.code_snapshot);
-        const srcCode = stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot);
+        const checkCode = stripComments(check.analysis_snapshot || check.code_snapshot);
+        const srcCode = stripComments(src.analysis_snapshot || src.code_snapshot);
 
         const hasPatternCheck177 = /[/].*[<>"'\\./].*[/]|\b(match|test|indexOf|includes|search|startsWith|endsWith)\b.*['"][<>"'\\./]/.test(checkCode);
 
@@ -421,7 +421,7 @@ function verifyCWE179(map: NeuralMap): VerificationResult {
               const validatorToCanon = hasTaintedPathWithoutControl(map, validator.id, canon.id);
 
               if (srcToValidator && validatorToCanon) {
-                const canonCode = stripComments(canon.analysis_snapshot || canon.analysis_snapshot || canon.code_snapshot);
+                const canonCode = stripComments(canon.analysis_snapshot || canon.code_snapshot);
                 const canonFunc = canonCode.match(CANON179)?.[0] || 'canonicalization';
 
                 findings.push({
@@ -603,7 +603,7 @@ function verifyCWE182(map: NeuralMap): VerificationResult {
       for (const sink of outputSinks182) {
         if (!hasTaintedPathWithoutControl(map, filter.id, sink.id)) continue;
 
-        const filterCode = stripComments(filter.analysis_snapshot || filter.analysis_snapshot || filter.code_snapshot);
+        const filterCode = stripComments(filter.analysis_snapshot || filter.code_snapshot);
         const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
 
         const usesEncoding = /\b(encode|escape|encodeURI|encodeURIComponent|htmlEncode|escapeHtml|he\.encode|cgi\.escape|html\.escape)\s*\(/i.test(filterCode);
@@ -666,7 +666,7 @@ function verifyCWE183(map: NeuralMap): VerificationResult {
     for (const allowlist of allowlistNodes183) {
       if (src.id === allowlist.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, allowlist.id)) {
-        const code = stripComments(allowlist.analysis_snapshot || allowlist.analysis_snapshot || allowlist.code_snapshot);
+        const code = stripComments(allowlist.analysis_snapshot || allowlist.code_snapshot);
         if (PERMISSIVE183.test(code) && !STRICT_SAFE183.test(code)) {
           let listType183 = 'input allowlist';
           if (/domain|host|origin|cors|url/i.test(code)) listType183 = 'domain/origin allowlist';
@@ -725,7 +725,7 @@ function verifyCWE185(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (node.node_type !== 'CONTROL' && node.node_type !== 'TRANSFORM') continue;
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (!REGEX_USE.test(code)) continue;
     if (SAFE_PATTERN.test(code)) continue;
 
@@ -807,7 +807,7 @@ function verifyCWE187(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (node.node_type !== 'CONTROL' && node.node_type !== 'TRANSFORM') continue;
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (!SECURITY_CONTEXT.test(code)) continue;
     if (SAFE_FULL_CMP.test(code)) continue;
 
@@ -892,7 +892,7 @@ function verifyCWE838(map: NeuralMap): VerificationResult {
   );
 
   for (const txNode of transforms) {
-    const txCode = stripComments(txNode.analysis_snapshot || txNode.analysis_snapshot || txNode.code_snapshot);
+    const txCode = stripComments(txNode.analysis_snapshot || txNode.code_snapshot);
     for (const mismatch of ENCODING_CONTEXT_MAP) {
       if (mismatch.encoderRE.test(txCode)) {
         for (const sink of sinks) {
@@ -921,7 +921,7 @@ function verifyCWE838(map: NeuralMap): VerificationResult {
 
   // Scan all nodes for inline encoding mismatch in the same code block
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(encodeURIComponent|encodeURI|url_encode)\s*\(/.test(code) &&
         /\b(innerHTML|document\.write|\.html\s*\(|dangerouslySetInnerHTML)\b/.test(code)) {
       findings.push({

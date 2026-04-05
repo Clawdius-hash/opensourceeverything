@@ -64,7 +64,7 @@ async function main() {
         }
       }
     } else {
-      console.log('  All 11 invariants PASS');
+      console.log('  All 12 invariants PASS');
     }
   } catch (e: any) {
     console.error('  INVARIANTS CRASHED:', e.message);

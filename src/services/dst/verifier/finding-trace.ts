@@ -9,6 +9,7 @@
  */
 
 import type { NeuralMap, NeuralMapNode, NodeType, EdgeType } from '../types.js';
+import type { Finding } from './types.js';
 
 // -------------------------------------------------------------------------
 // Public types
@@ -190,4 +191,26 @@ export function tracePath(
     reached_sink: reachedSink,
     verdict,
   };
+}
+
+/**
+ * Returns an honest verdict string for a finding based on its provenance.
+ * For BFS findings, use tracePath() as normal.
+ * For non-BFS findings, return a clear message about why the trace can't help.
+ */
+export function findingTraceVerdict(finding: { via?: string }): string {
+  switch (finding.via) {
+    case 'source_line_fallback':
+      return 'SOURCE_LINE_FALLBACK — finding detected by regex scan of source code, not graph traversal. BFS trace unavailable because mapper could not build the taint path.';
+    case 'sink_tainted':
+      return 'SINK_TAINTED — finding detected because sink node has tainted data_in entries, but no explicit graph path from source to sink exists.';
+    case 'scope_taint':
+      return 'SCOPE_TAINT — finding detected because tainted data and sink share a function scope, but no explicit DATA_FLOW edges connect them.';
+    case 'structural':
+      return 'STRUCTURAL — finding detected by structural pattern match on node properties, not taint tracking. No taint path exists to trace.';
+    case 'bfs':
+      return 'BFS — finding detected by graph traversal. Use tracePath() for full diagnostic.';
+    default:
+      return 'UNKNOWN_PROVENANCE — finding has no via tag. Legacy finding or provenance not yet wired.';
+  }
 }

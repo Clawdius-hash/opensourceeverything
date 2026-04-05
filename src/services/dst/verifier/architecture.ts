@@ -42,7 +42,7 @@ function verifyCWE1070(map: NeuralMap): VerificationResult {
   const NON_PICKLE_ATTR = /self\.\w*(?:lock|mutex|thread|socket|connection|file_handle|db_conn|cursor|session)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     // Java check
@@ -110,9 +110,9 @@ function verifyCWE1071(map: NeuralMap): VerificationResult {
   const INTENTIONAL_RE = /\b(intentional|deliberate|no-?op|noop|TODO|FIXME|HACK|abstract|interface)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
-    if (INTENTIONAL_RE.test(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot)) continue; // check original (comments matter here)
+    if (INTENTIONAL_RE.test(node.analysis_snapshot || node.code_snapshot)) continue; // check original (comments matter here)
 
     let matched = false;
     let description = '';
@@ -183,7 +183,7 @@ function verifyCWE1073(map: NeuralMap): VerificationResult {
   const THRESHOLD = 7; // More than 7 distinct DB access calls in one function
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|migration|seed)\b/i.test(node.label)) continue;
     if (node.node_type === 'META' || node.node_type === 'STRUCTURAL') continue;
 
@@ -232,7 +232,7 @@ function verifyCWE1074(map: NeuralMap): VerificationResult {
   const parentMap = new Map<string, string[]>();
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     let match;
 
     EXTENDS_RE.lastIndex = 0;
@@ -280,7 +280,7 @@ function verifyCWE1074(map: NeuralMap): VerificationResult {
     if (depth >= DEPTH_THRESHOLD) {
       // Find the node that defines this class
       const defNode = map.nodes.find(n => {
-        const code = n.analysis_snapshot || (n.analysis_snapshot || n.code_snapshot);
+        const code = n.analysis_snapshot || n.code_snapshot;
         return new RegExp(`\\bclass\\s+${cls}\\b`).test(code);
       });
       if (defNode && !/\b(test|spec|mock)\b/i.test(defNode.label)) {
@@ -321,7 +321,7 @@ function verifyCWE1075(map: NeuralMap): VerificationResult {
   const PYTHON_FINALLY_RETURN = /\bfinally\s*:\s*\n(?:\s+[^\n]+\n)*?\s+(return|break|continue|raise)\b/m;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     let match;
@@ -377,7 +377,7 @@ function verifyCWE1076(map: NeuralMap): VerificationResult {
   const HAS_HASHCODE = /\b(?:public\s+)?int\s+hashCode\s*\(\s*\)/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     // Check 1: Security method with trivial/empty body
@@ -490,7 +490,7 @@ function verifyCWE1079(map: NeuralMap): VerificationResult {
   const PURE_VIRTUAL_DTOR = /\bvirtual\s+~\w+\s*\(\s*\)\s*=\s*0/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     if (HAS_VIRTUAL_METHOD.test(code)) {
@@ -604,7 +604,7 @@ function verifyCWE1082(map: NeuralMap): VerificationResult {
   const SAFE_RELEASE = /\bAddRef\b.*\bRelease\b|\bIUnknown\b|\bstd::shared_ptr|shared_from_this|weak_ptr/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     let matched = false;
@@ -766,7 +766,7 @@ function verifyCWE1045(map: NeuralMap): VerificationResult {
   const classInfo = new Map<string, { hasVirtualDtor: boolean; node: NeuralMapNode }>();
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     // Only relevant for C/C++ files
     if (node.language && !/\b(c\+\+|cpp|cc|cxx|c)\b/i.test(node.language) &&
@@ -782,7 +782,7 @@ function verifyCWE1045(map: NeuralMap): VerificationResult {
 
   // Check inheritance relationships
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     const re = /\bclass\s+(\w+)\s*:\s*(?:public|protected|private)\s+(\w+)/g;
@@ -833,7 +833,7 @@ function verifyCWE1046(map: NeuralMap): VerificationResult {
   const SAFE_RE = /\b(StringBuilder|StringBuffer|StringIO|join\s*\(|Array\..*join|\.push\s*\(|parts\..*join|chunks\..*join|Buffer\.concat|strings\.Builder)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     const hasLoopConcat = LOOP_CONCAT_JS.test(code) || LOOP_CONCAT_PY.test(code) || LOOP_CONCAT_JAVA.test(code);
@@ -931,7 +931,7 @@ function verifyCWE1047(map: NeuralMap): VerificationResult {
   }
 
   for (const node of map.nodes) {
-    if (CIRCULAR_IMPORT_COMMENT.test(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot)) {
+    if (CIRCULAR_IMPORT_COMMENT.test(node.analysis_snapshot || node.code_snapshot)) {
       findings.push({
         source: nodeRef(node),
         sink: nodeRef(node),
@@ -1024,7 +1024,7 @@ function verifyCWE1050(map: NeuralMap): VerificationResult {
   ];
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|benchmark|perf)\b/i.test(node.label)) continue;
     if (!LOOP_RE.test(code)) continue;
 
@@ -1071,7 +1071,7 @@ function verifyCWE1051(map: NeuralMap): VerificationResult {
   const ENV_READ_RE = /\b(process\.env|os\.environ|os\.getenv|System\.getenv|ENV\[|getenv|config\.|settings\.|\.env|dotenv|configparser|application\.properties|appsettings|nconf|convict)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|example|fixture|seed)\b/i.test(node.label)) continue;
 
     let matched = false;
@@ -1130,7 +1130,7 @@ function verifyCWE1052(map: NeuralMap): VerificationResult {
   const NAMED_CONST_RE = /\b(const|final|readonly|static|#define|[A-Z][A-Z_]{2,}\s*=)\b/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|fixture)\b/i.test(node.label)) continue;
     if (!INIT_CONTEXT_RE.test(node.label) && !INIT_CONTEXT_RE.test(code)) continue;
 
@@ -1179,7 +1179,7 @@ function verifyCWE1053(map: NeuralMap): VerificationResult {
   const ingress = nodesOfType(map, 'INGRESS');
 
   for (const node of [...structural, ...ingress]) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (/\b(test|spec|mock|fixture|__test__)\b/i.test(node.label)) continue;
     if (!PUBLIC_API_RE.test(code) && node.node_type !== 'INGRESS') continue;
     if (DOC_RE.test(code)) continue;
@@ -1310,7 +1310,7 @@ function verifyCWE1055(map: NeuralMap): VerificationResult {
   const ABSTRACT_RE = /\b(abstract\s+class|interface\s|ABC|ABCMeta|@abstractmethod|Protocol|Mixin|mixin|trait\b|I[A-Z][a-zA-Z]+\b(?=\s*,|\s*\)))/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
 
     let matched = false;
@@ -1351,7 +1351,7 @@ function verifyCWE1056(map: NeuralMap): VerificationResult {
   const SECURITY_FN_RE = /\b(auth|authenticate|authorize|validate|sanitize|check[_-]?(?:auth|access|permission|role)|verify|encrypt|decrypt|sign|hash|grant|deny|permit|isAllowed)\b/i;
 
   for (const node of [...nodesOfType(map, 'CONTROL'), ...nodesOfType(map, 'TRANSFORM'), ...nodesOfType(map, 'AUTH')]) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
     if (!SECURITY_FN_RE.test(node.label) && !SECURITY_FN_RE.test(code)) continue;
     if (!VARIADIC_RE.test(code) && !ARGS_KWARGS_RE.test(code)) continue;
@@ -1386,7 +1386,7 @@ function verifyCWE1057(map: NeuralMap): VerificationResult {
 
   for (const type of NON_DATA_TYPES) {
     for (const node of nodesOfType(map, type)) {
-      const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
       if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
       if (DATA_LAYER_RE.test(node.label) || DATA_LAYER_RE.test(node.node_subtype)) continue;
 
@@ -1425,7 +1425,7 @@ function verifyCWE1058(map: NeuralMap): VerificationResult {
   const SYNC_RE = /\b(synchronized|lock|Lock|Mutex|mutex|RwLock|Semaphore|Atomic\w+|volatile|std::atomic|threading\.Lock|asyncio\.Lock|sync\.Mutex|sync\.RWMutex|concurrent\.locks|Interlocked|Monitor\.Enter|ConcurrentHashMap|ConcurrentDictionary)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
     if (!THREAD_CONTEXT_RE.test(code) && !THREAD_CONTEXT_RE.test(node.label)) continue;
 
@@ -1463,7 +1463,7 @@ function verifyCWE1059(map: NeuralMap): VerificationResult {
   const SEC_MODULE_RE = /\b(auth|crypto|security|permission|access[_-]?control|rbac|oauth|jwt|token|session|firewall|sanitiz|escap|encrypt)\b/i;
 
   for (const node of nodesOfType(map, 'STRUCTURAL')) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (/\b(test|spec|mock|fixture|__test__)\b/i.test(node.label)) continue;
 
     const lines = code.split('\n').length;
@@ -1509,7 +1509,7 @@ function verifyCWE1060(map: NeuralMap): VerificationResult {
   const SAFE_BATCH_RE = /\b(bulkWrite|insertMany|batchGet|multiGet|whereIn|IN\s*\(|Promise\.all|Promise\.allSettled|\$in\s*:|batchInsert|bulkInsert|bulk_create|executemany|VALUES\s*\(.*\),\s*\(|UNION\s+ALL)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|seed|fixture|migration)\b/i.test(node.label || node.file)) continue;
 
     for (const pattern of LOOP_QUERY_PATTERNS) {
@@ -1551,7 +1551,7 @@ function verifyCWE1061(map: NeuralMap): VerificationResult {
   const RETURN_MUTABLE_RE = /\breturn\s+(?:this\.|self\.)(?:_\w+|\w+(?:List|Map|Set|Array|Collection|Buffer|Data|Items|Elements|Entries|Records|Queue|Stack))\s*[;)]/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|dto|DTO|interface|enum|abstract)\b/i.test(node.label)) continue;
 
     for (const pattern of PUBLIC_MUTABLE_FIELDS) {
@@ -1618,7 +1618,7 @@ function verifyCWE1062(map: NeuralMap): VerificationResult {
   const BASE_CLASS_RE = /\b(?:abstract\s+class|class\s+\w*(?:Base|Abstract|Parent|Root|Super)\w*)\b/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|factory|builder)\b/i.test(node.label)) continue;
 
     if (TYPE_SWITCH_RE.test(code)) {
@@ -1671,7 +1671,7 @@ function verifyCWE1063(map: NeuralMap): VerificationResult {
   const HEAVY_STATIC_RE = /\bnew\s+(?:\w*(?:Connection|Client|Session|Service|Manager|Provider|Factory|Pool|Cache|Context|Engine|Server|Socket|Stream|Channel|Database|Repository|Controller|Handler)\w*)\s*\(/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
 
     for (const pattern of STATIC_BLOCK_PATTERNS) {
@@ -1709,7 +1709,7 @@ function verifyCWE1064(map: NeuralMap): VerificationResult {
   ];
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|generated|constructor)\b/i.test(node.label)) continue;
 
     for (const { re } of FUNC_SIG_PATTERNS) {
@@ -1772,7 +1772,7 @@ function verifyCWE1065(map: NeuralMap): VerificationResult {
   const SERVER_COMPONENT_RE = /\b(@Controller|@Service|@Component|@RestController|@RequestMapping|@Autowired|@Inject|@EJB|@Stateless|@Stateful|HttpServlet|GenericServlet|@WebServlet|@ManagedBean|extends\s+(?:Controller|BaseController|AbstractController|HttpServlet)|app\.(get|post|put|delete)\s*\(|router\.(get|post|put|delete)\s*\(|@app\.route)\b/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|main|cli|script|tool|util)\b/i.test(node.label || node.file)) continue;
     if (!SERVER_COMPONENT_RE.test(code) && !SERVER_COMPONENT_RE.test(node.label)) continue;
 
@@ -1813,7 +1813,7 @@ function verifyCWE1066(map: NeuralMap): VerificationResult {
   ];
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|dto|DTO)\b/i.test(node.label)) continue;
 
     if (SERIALIZABLE_RE.test(code) && !HAS_CONTROL_RE.test(code) && SENSITIVE_FIELD_RE.test(code)) {
@@ -1862,7 +1862,7 @@ function verifyCWE1067(map: NeuralMap): VerificationResult {
   const SAFE_INDEXED_RE = /\b(Map|Set|HashMap|HashSet|Dictionary|dict|Object\.fromEntries|new\s+Map|new\s+Set|\.has\s*\(|\.get\s*\(|index|indexed|lookup|cache|memo)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
 
     for (const pattern of NESTED_SEARCH_PATTERNS) {
@@ -1910,7 +1910,7 @@ function verifyCWE1068(map: NeuralMap): VerificationResult {
   const SECURITY_DEFERRED_RE = /\b(TODO|FIXME|HACK)\b[:\s]+[\s\S]{0,100}?\b(security|auth|permission|valid|sanitiz|encrypt|token|session|password|credential|vuln|inject|xss|csrf|sql)/i;
 
   for (const node of map.nodes) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     const codeNoComments = stripComments(code);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
 
@@ -1970,7 +1970,7 @@ function verifyCWE1069(map: NeuralMap): VerificationResult {
   const INTENTIONAL_EMPTY_RE = /\b(intentional|deliberate|expected|safe\s+to\s+ignore|best\s+effort|fire\s+and\s+forget|optional|noop|no-op)\b/i;
 
   for (const node of map.nodes) {
-    const rawCode = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const rawCode = node.analysis_snapshot || node.code_snapshot;
     const code = stripComments(rawCode);
     if (/\b(test|spec|mock)\b/i.test(node.label)) continue;
 
@@ -2021,7 +2021,7 @@ function verifyCWE1083(map: NeuralMap): VerificationResult {
   const IS_MIGRATION = /\b(?:migration|migrate|seed|fixture|schema|knexfile)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     if (IS_DATA_LAYER.test(node.label) || IS_DATA_LAYER.test(node.file)) continue;
     if (IS_MIGRATION.test(node.label) || IS_MIGRATION.test(node.file)) continue;
@@ -2085,7 +2085,7 @@ function verifyCWE1084(map: NeuralMap): VerificationResult {
   const THRESHOLD = 8; // Covering file + data + cache combined
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|migration|seed)\b/i.test(node.label)) continue;
     if (node.node_type === 'META' || node.node_type === 'STRUCTURAL') continue;
 
@@ -2221,7 +2221,7 @@ function verifyCWE1086(map: NeuralMap): VerificationResult {
   const childCount = new Map<string, { count: number; children: string[]; node: NeuralMapNode }>();
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     // Java/TS/JS extends
@@ -2314,7 +2314,7 @@ function verifyCWE1087(map: NeuralMap): VerificationResult {
   const FINAL_CLASS = /\bclass\s+\w+\s+final\b/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     // Only relevant for C++ code
@@ -2376,7 +2376,7 @@ function verifyCWE1089(map: NeuralMap): VerificationResult {
   const tableIndices = new Map<string, { count: number; node: NeuralMapNode }>();
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     // Count CREATE INDEX statements per table
@@ -2476,7 +2476,7 @@ function verifyCWE1090(map: NeuralMap): VerificationResult {
   const SENSITIVE_FIELD = /\b_(?:password|secret|key|token|credential|hash|salt|session|auth|permission|role|admin|private_?key|api_?key)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     if (node.node_type === 'META' || node.node_type === 'STRUCTURAL') continue;
 
@@ -2556,7 +2556,7 @@ function verifyCWE1091(map: NeuralMap): VerificationResult {
   const AUTO_CLOSE = /\btry\s*\(\s*\w+|using\s*\(\s*(?:var|final)?\s*\w+|\bwith\s+(?:open|connect)|defer\s+\w+\.(?:close|release)/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     if (node.node_type === 'META') continue;
 
@@ -2691,7 +2691,7 @@ function verifyCWE1094(map: NeuralMap): VerificationResult {
   const HAS_BOUNDS = /\b(?:LIMIT\s+\d|TOP\s+\d|FETCH\s+FIRST\s+\d|ROWNUM\s*<=?\s*\d|\.limit\s*\(\s*\d|\.take\s*\(\s*\d|\.first\s*\(\s*\d|OFFSET\s+\d.*LIMIT\s+\d)/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|migration|seed)\b/i.test(node.label)) continue;
 
     let isVulnerable = false;
@@ -2824,7 +2824,7 @@ function verifyCWE1108(map: NeuralMap): VerificationResult {
   for (const node of map.nodes) {
     if (/\b(test|spec|mock|fixture|__test__|\.test\.|\.spec\.)\b/i.test(node.label || node.file)) continue;
     if (node.node_subtype === 'module') continue;
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (!code) continue;
 
     let globalCount = 0;
@@ -2897,7 +2897,7 @@ function verifyCWE1109(map: NeuralMap): VerificationResult {
   const SAFE_REUSE = /^(?:i|j|k|idx|index|count|total|sum|result|buf|builder|sb|acc|temp|tmp|_)$/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|fixture)\b/i.test(node.label)) continue;
     if (code.split('\n').length < 10) continue;
 
@@ -2986,7 +2986,7 @@ function verifyCWE1110(map: NeuralMap): VerificationResult {
     if (/\b(test|spec|mock|fixture|__test__)\b/i.test(node.label)) continue;
     if (!SEC_MODULE_RE.test(node.label) && !SEC_MODULE_RE.test(node.node_subtype)) continue;
 
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     const lines = code.split('\n').length;
     if (lines < 40) continue;
 
@@ -3028,7 +3028,7 @@ function verifyCWE1111(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (node.node_type !== 'EXTERNAL' && node.node_type !== 'STORAGE') continue;
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     const codeStripped = stripComments(code);
     if (/\b(test|spec|mock|fixture)\b/i.test(node.label)) continue;
 
@@ -3085,7 +3085,7 @@ function verifyCWE1112(map: NeuralMap): VerificationResult {
 
   for (const node of apiNodes) {
     if (/\b(test|spec|mock|fixture|internal|private|_)\b/i.test(node.label)) continue;
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     const lines = code.split('\n').length;
     if (lines < 5) continue;
 
@@ -3139,7 +3139,7 @@ function verifyCWE1113(map: NeuralMap): VerificationResult {
   const INTERNAL_URLS = /(?:\/\/|#|\/\*|\*)\s*.*(?:https?:\/\/(?:10\.\d|172\.(?:1[6-9]|2\d|3[01])\.\d|192\.168\.\d|localhost|127\.0\.0\.1|internal\.|staging\.|dev\.)[\w./:@-]*|(?:jdbc|mongodb|redis|amqp):\/\/[\w./:@-]+)/i;
 
   for (const node of map.nodes) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (/\b(test|spec|mock|fixture|example|demo|sample)\b/i.test(node.label)) continue;
 
     if (SECRET_IN_COMMENT.test(code)) {
@@ -3198,7 +3198,7 @@ function verifyCWE1114(map: NeuralMap): VerificationResult {
   const SEC_CODE_RE = /\b(auth|crypto|security|permission|validate|sanitize|encrypt|decrypt|verify|sign|hash|token|session|password|login|access[_-]?control)\b/i;
 
   for (const node of map.nodes) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (/\b(test|spec|mock|fixture)\b/i.test(node.label)) continue;
     if (!SEC_CODE_RE.test(node.label + ' ' + code)) continue;
 
@@ -3287,7 +3287,7 @@ function verifyCWE1115(map: NeuralMap): VerificationResult {
     if (seenFiles.has(node.file)) continue;
     seenFiles.add(node.file);
 
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     const firstLines = code.split('\n').slice(0, 10).join('\n');
 
     if (!PROLOGUE_RE.test(firstLines) && !FILE_DOC_RE.test(firstLines)) {
@@ -3357,7 +3357,7 @@ function verifyCWE1116(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (/\b(test|spec|mock|fixture|example)\b/i.test(node.label)) continue;
-    const fullCode = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const fullCode = node.analysis_snapshot || node.code_snapshot;
     const strippedCode = stripComments(fullCode);
 
     for (const { commentRe, codeAbsentRe, desc, sev } of CONTRADICTIONS) {
@@ -3397,7 +3397,7 @@ function verifyCWE1117(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (/\b(test|spec|mock|fixture)\b/i.test(node.label)) continue;
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (!EXPORTED_FUNC_RE.test(code)) continue;
     if (!SEC_FUNC_RE.test(node.label) && !SEC_FUNC_RE.test(code)) continue;
 
@@ -3452,7 +3452,7 @@ function verifyCWE1095(map: NeuralMap): VerificationResult {
   const WHILE_BOUND_RE = /\bwhile\s*\(\s*(\w+)\s*[<>=!]+\s*(\w+)\s*\)/g;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     let match;
@@ -3524,7 +3524,7 @@ function verifyCWE1097(map: NeuralMap): VerificationResult {
   const CS_MAPPED = /\[(?:Table|Column|Key|DatabaseGenerated|ForeignKey)\]|\bDbSet\s*</;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|migration|seed)\b/i.test(node.label)) continue;
 
     if (JAVA_ENTITY.test(code) && !JAVA_MAPPED.test(code)) {
@@ -3576,7 +3576,7 @@ function verifyCWE1098(map: NeuralMap): VerificationResult {
   const RUST_CLONE = /\bimpl\s+Clone\s+for\b|#\[derive\([^\]]*Clone/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     if (CPP_RAW_PTR_FIELD.test(code) && !SMART_PTR.test(code)) {
@@ -3622,7 +3622,7 @@ function verifyCWE1099(map: NeuralMap): VerificationResult {
   const securityFnNames: Array<{ name: string; node: NeuralMapNode }> = [];
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     let match;
     SECURITY_FN_RE.lastIndex = 0;
@@ -3668,7 +3668,7 @@ function verifyCWE1100(map: NeuralMap): VerificationResult {
   const PLATFORM_ABSTRACTION = /\b(?:path\.join|path\.resolve|os\.path\.join|Path\.|Paths\.get|Environment\.GetFolderPath)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|config|platform|infra|util)\b/i.test(node.label)) continue;
     if (PLATFORM_ABSTRACTION.test(code) && !WIN_PATH.test(code) && !UNIX_PATH_HARDCODED.test(code)) continue;
 
@@ -3709,7 +3709,7 @@ function verifyCWE1101(map: NeuralMap): VerificationResult {
   const GENERATED_MARKER = /\b(?:auto[-_]?generated|codegen|template[-_]?output|generated[-_]?by|DO NOT (?:EDIT|MODIFY))\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     const isGenerated = GENERATED_MARKER.test(code) || GENERATED_MARKER.test(node.label);
 
@@ -3753,7 +3753,7 @@ function verifyCWE1102(map: NeuralMap): VerificationResult {
   const EXPLICIT_ENDIAN = /\b(?:htonl|htons|ntohl|ntohs|byteswap|ByteOrder|endian|BIG_ENDIAN|LITTLE_ENDIAN|\.order\s*\()\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     if (STRUCT_PACK_NATIVE.test(code) && !STRUCT_PACK_EXPLICIT.test(code)) {
@@ -3805,7 +3805,7 @@ function verifyCWE1104(map: NeuralMap): VerificationResult {
   ];
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     for (const dep of DEPRECATED_PACKAGES) {
       if (dep.pattern.test(code)) {
@@ -3834,7 +3834,7 @@ function verifyCWE1106(map: NeuralMap): VerificationResult {
   const CONSTANT_REF = /\b[A-Z][A-Z0-9_]{2,}\b/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     let match;
 
@@ -3885,7 +3885,7 @@ function verifyCWE1107(map: NeuralMap): VerificationResult {
   const JULIET_TEST_PATH_1107 = /\bCWE\d+\b|\b_bad\b|\b_good\b|\bjuliet\b|\btest.*suite\b|\bsamate\b|\bnist\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
     if (IS_CONSTANTS_FILE.test(node.label) || IS_CONSTANTS_FILE.test(node.file || '')) continue;
     if (JULIET_TEST_PATH_1107.test(node.file || '') || JULIET_TEST_PATH_1107.test(node.label)) continue;
@@ -3935,7 +3935,7 @@ function verifyCWE1118(map: NeuralMap): VerificationResult {
   const SEC_CONTEXT_RE = /\b(?:auth|login|verify|validate|permission|credential|token|session|password|decrypt|sign|certif|access[_-]?control|rbac|acl|oauth|jwt|saml|ldap|kerberos)\b/i;
 
   for (const node of map.nodes) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (/\b(test|spec|mock|stub|fixture)\b/i.test(node.label)) continue;
 
     // Check for empty catch blocks (most dangerous)
@@ -4004,7 +4004,7 @@ function verifyCWE1119(map: NeuralMap): VerificationResult {
   const THRESHOLD_LABEL = 5;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub)\b/i.test(node.label)) continue;
 
     const gotoCount = (code.match(GOTO_RE) || []).length;
@@ -4065,7 +4065,7 @@ function verifyCWE1120(map: NeuralMap): VerificationResult {
   const PARAM_LIST_RE = /\(([^)]*)\)/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|fixture|migration)\b/i.test(node.label)) continue;
 
     const lines = code.split('\n').length;
@@ -4116,7 +4116,7 @@ function verifyCWE1121(map: NeuralMap): VerificationResult {
   const DECISION_RE = /\b(?:if|else\s+if|elif|case|catch|except|rescue|while|for|foreach)\b|\?\s*[^:]*\s*:|&&|\|\|/g;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|fixture)\b/i.test(node.label)) continue;
     const lines = code.split('\n').length;
     if (lines < 15) continue;
@@ -4160,7 +4160,7 @@ function verifyCWE1122(map: NeuralMap): VerificationResult {
   const DIFFICULTY_THRESHOLD = 80;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|fixture)\b/i.test(node.label)) continue;
     const lines = code.split('\n').length;
     if (lines < 20) continue;
@@ -4218,7 +4218,7 @@ function verifyCWE1123(map: NeuralMap): VerificationResult {
   const RUBY_PYTHON_LANGS = new Set(['ruby', 'python']);
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|fixture|repl|playground|console)\b/i.test(node.label)) continue;
 
     if (EVAL_RE.test(code)) {
@@ -4294,7 +4294,7 @@ function verifyCWE1124(map: NeuralMap): VerificationResult {
   const MAX_DEPTH = 5;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|fixture)\b/i.test(node.label)) continue;
     const lines = code.split('\n');
     if (lines.length < 10) continue;
@@ -4387,7 +4387,7 @@ function verifyCWE1125(map: NeuralMap): VerificationResult {
   // or when the attack surface is truly excessive (many unprotected endpoints).
   // A simple servlet with 1-2 request handlers (doGet, doPost) reading cookies/params is normal.
   for (const ep of unprotectedEndpoints) {
-    const code = ep.analysis_snapshot || (ep.analysis_snapshot || ep.code_snapshot);
+    const code = ep.analysis_snapshot || ep.code_snapshot;
     const isWrite = /\b(?:POST|PUT|PATCH|DELETE|INSERT|UPDATE|CREATE|WRITE|REMOVE)\b/i.test(code) ||
                     /\b(?:post|put|patch|delete)\s*\(/i.test(ep.label);
     const isAdmin = /\b(?:admin|manage|config|setting|internal|debug|diagnostic)\b/i.test(ep.label + ' ' + code);
@@ -4449,7 +4449,7 @@ function verifyCWE1126(map: NeuralMap): VerificationResult {
   const SHARED_STATE_RE = /^(?:(?:let|var)\s+(?:cache|counter|count|total|accumulator|results|items|data|buffer|queue|stack|pending|connections)\b)/gm;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (/\b(test|spec|mock|stub|fixture|config|constant)\b/i.test(node.label)) continue;
 
     if (node.node_type === 'STRUCTURAL' || node.node_type === 'META') {
@@ -4522,7 +4522,7 @@ function verifyCWE1127(map: NeuralMap): VerificationResult {
   const SUPPRESS_THRESHOLD = 3;
 
   for (const node of map.nodes) {
-    const code = node.analysis_snapshot || (node.analysis_snapshot || node.code_snapshot);
+    const code = node.analysis_snapshot || node.code_snapshot;
     if (/\b(test|spec|mock|stub|fixture|types?\.d\.ts|declaration)\b/i.test(node.label)) continue;
     const lines = code.split('\n').length;
     if (lines < 5) continue;

@@ -26,6 +26,7 @@ export interface Finding {
   severity: 'critical' | 'high' | 'medium' | 'low';
   description: string;
   fix: string;
+  via?: 'bfs' | 'sink_tainted' | 'scope_taint' | 'source_line_fallback' | 'structural';
 }
 
 export interface NodeRef {
@@ -696,7 +697,10 @@ export function hasPathWithoutTransform(map: NeuralMap, sourceId: string, sinkId
  *   - Preserves string literals — won't strip // inside "strings" or 'strings'
  *   - Preserves template literals — won't strip // inside `backtick strings`
  */
-export function stripComments(code: string): string {
+const HASH_COMMENT_LANGS = new Set(['python', 'ruby', 'php', 'perl', 'shell', 'bash', 'r']);
+
+export function stripComments(code: string, language?: string): string {
+  const stripHash = !language || HASH_COMMENT_LANGS.has(language.toLowerCase());
   let result = '';
   let i = 0;
   const len = code.length;
@@ -752,8 +756,8 @@ export function stripComments(code: string): string {
       continue;
     }
 
-    // Hash comment: # ... (Python, Ruby, PHP)
-    if (ch === '#') {
+    // Hash comment: # ... (only for Python, Ruby, PHP, etc.)
+    if (ch === '#' && stripHash) {
       // Skip to end of line
       i++;
       while (i < len && code[i] !== '\n') {

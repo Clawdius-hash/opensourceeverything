@@ -319,7 +319,7 @@ export function checkMapInvariants(map: NeuralMap): InvariantViolation[] {
   // classified as STORAGE/db_write is a misclassification. This is the
   // semantic layer -- checking not just graph shape but graph MEANING.
   const COLLECTION_SUFFIXES = ['List', 'Set', 'Map', 'Queue', 'Stack', 'Collection', 'Array', 'Vector', 'Deque'];
-  const COLLECTION_NAMES = /^(values|entries|elements|keys|names|params|args|headers|cookies|parts|items|results|records|rows|columns|fields)$/i;
+  const COLLECTION_NAMES = /^(values|entries|elements|keys|names|params|args|headers|cookies|parts|items|results|records|rows|columns|fields|buffer|temp|output)$/i;
   for (const node of map.nodes) {
     if (node.node_type !== 'STORAGE') continue;
     // Extract the receiver name from the node label (e.g., "valuesList.remove(0)" → "valuesList")

@@ -289,17 +289,25 @@ export class MapperContext {
     };
 
     // Avoid duplicate flows (same name, same source/target pair)
-    const alreadyOut = fromNode.data_out.some(
+    // If a tainted flow arrives and a non-tainted duplicate exists, upgrade to tainted.
+    // Taint is NEVER downgraded by dedup.
+    const existingOut = fromNode.data_out.find(
       d => d.name === name && d.source === fromNodeId && d.target === toNodeId
     );
-    if (!alreadyOut) {
+    if (existingOut) {
+      if (tainted && !existingOut.tainted) existingOut.tainted = true;
+      if (range !== undefined && !existingOut.range) existingOut.range = range;
+    } else {
       fromNode.data_out.push({ ...flow });
     }
 
-    const alreadyIn = toNode.data_in.some(
+    const existingIn = toNode.data_in.find(
       d => d.name === name && d.source === fromNodeId && d.target === toNodeId
     );
-    if (!alreadyIn) {
+    if (existingIn) {
+      if (tainted && !existingIn.tainted) existingIn.tainted = true;
+      if (range !== undefined && !existingIn.range) existingIn.range = range;
+    } else {
       toNode.data_in.push({ ...flow });
     }
   }
@@ -840,6 +848,11 @@ export class MapperContext {
         // Remove outgoing DATA_FLOW edges from un-tainted local calls
         // (these edges represent incorrect taint propagation paths)
         if (untaintedCallIds.has(node.id)) {
+          for (const e of node.edges) {
+            if (e.edge_type === 'DATA_FLOW') {
+              this.edgeSet.delete(`${node.id}:${e.target}:DATA_FLOW`);
+            }
+          }
           node.edges = node.edges.filter(e => e.edge_type !== 'DATA_FLOW');
         }
       }

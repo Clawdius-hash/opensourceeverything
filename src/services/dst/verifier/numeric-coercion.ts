@@ -59,7 +59,7 @@ function verifyCWE119(map: NeuralMap): VerificationResult {
   if (findings.length === 0) {
     const ALWAYS_DANGEROUS_RE = /\b(gets|sprintf|vsprintf|strcpy|strcat)\s*\(/i;
     for (const node of memNodes) {
-      const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
       if (ALWAYS_DANGEROUS_RE.test(code) && !BOUNDS_SAFE_RE.test(code)) {
         findings.push({
           source: nodeRef(node), sink: nodeRef(node),
@@ -113,7 +113,7 @@ function verifyCWE120(map: NeuralMap): VerificationResult {
   }
   if (findings.length === 0) {
     for (const node of copyNodes) {
-      const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
       if (COPY_RE.test(code) && !SAFE_COPY_RE.test(code) && !SIZE_CHECK_RE.test(code)) {
         findings.push({
           source: nodeRef(node), sink: nodeRef(node),
@@ -285,7 +285,7 @@ function verifyCWE131(map: NeuralMap): VerificationResult {
   }
   if (findings.length === 0) {
     for (const node of allocNodes) {
-      const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+      const code = stripComments(node.analysis_snapshot || node.code_snapshot);
       if (DANGER_CALC_RE.test(code) && !SAFE_SIZE_RE.test(code)) {
         findings.push({
           source: nodeRef(node), sink: nodeRef(node),
@@ -573,7 +573,7 @@ function verifyCWE192(map: NeuralMap): VerificationResult {
 
   for (const node of map.nodes) {
     if (node.node_type !== 'TRANSFORM' && node.node_type !== 'STORAGE') continue;
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (SAFE_COERCE.test(code)) continue;
 
     if (NARROW_CAST.test(code)) {
@@ -719,7 +719,7 @@ function verifyCWE194(map: NeuralMap): VerificationResult {
   const SAFE_PATTERN = /\b(unsigned\s+char|uint8_t|u8)\s+\w+\s*=|\b\(\s*(unsigned\s+char|uint8_t|u8)\s*\)|\b&\s*0[xX]?[fF]{2}\b|\b&\s*255\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (SAFE_PATTERN.test(code)) continue;
 
     if (SIGNED_WIDEN.test(code)) {
@@ -773,7 +773,7 @@ function verifyCWE195(map: NeuralMap): VerificationResult {
   const SAFE_PATTERN = /\bif\s*\(\s*\w+\s*<\s*0\b|\bif\s*\(\s*\w+\s*<=?\s*0\s*\)|\bassert\s*\(\s*\w+\s*>=?\s*0\b|\bif\s*\(\s*\w+\s*>=\s*0\b.*(?:malloc|calloc|size|\[)/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (SAFE_PATTERN.test(code)) continue;
 
     const allocMatch = code.match(SIGNED_TO_SIZE);
@@ -834,7 +834,7 @@ function verifyCWE196(map: NeuralMap): VerificationResult {
   const SAFE_PATTERN = /\bif\s*\(\s*\w+\s*(?:>|<=)\s*(?:INT_MAX|INT32_MAX|LONG_MAX|i32::MAX|i64::MAX|0x7[fF]{7}|0x7[fF]{15}|2147483647)\b|\btry_from\b|\btry_into\b|\bsafe_cast\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (SAFE_PATTERN.test(code)) continue;
 
     if (UNSIGNED_TO_SIGNED.test(code) || UNSIGNED_ASSIGN.test(code)) {
@@ -893,7 +893,7 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
   const SAFE_PATTERN = /\bif\s*\(.*(?:>|<=?)\s*(?:FLT_MAX|FLOAT_MAX|INT32_MAX|INT_MAX|MAX_SAFE_INTEGER|Number\.MAX_SAFE_INTEGER|2147483647|f32::MAX|Byte\.MIN_VALUE|Byte\.MAX_VALUE|Short\.MIN_VALUE|Short\.MAX_VALUE|Character\.MIN_VALUE|Character\.MAX_VALUE|CHAR_MAX|SCHAR_MAX|SHRT_MAX|UCHAR_MAX|USHRT_MAX)\b|\bBigInt\b|\btry_from\b|\btry_into\b|\bsafe_cast\b|\bnarrow_cast\b|\bMath\.toIntExact\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (SAFE_PATTERN.test(code)) continue;
 
     if (DOUBLE_TO_FLOAT.test(code)) {
@@ -983,7 +983,7 @@ function verifyCWE198(map: NeuralMap): VerificationResult {
   const SAFE_ENDIAN = /\b(ntohl|ntohs|htonl|htons|be16toh|be32toh|be64toh|le16toh|le32toh|le64toh|htobe|htole|ByteOrder|endian|from_be_bytes|from_le_bytes|to_be_bytes|to_le_bytes|swap_bytes|BinaryPrimitives|BitConverter)\b/i;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (SAFE_ENDIAN.test(code)) continue;
     // Buffer.readInt32BE/LE is already endian-explicit — that's fine
     if (BUFFER_READ.test(code)) continue;

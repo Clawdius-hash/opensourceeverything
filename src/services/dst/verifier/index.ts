@@ -150,7 +150,7 @@ function verifyCWE579(map: NeuralMap): VerificationResult {
   }
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     if (SESSION_SET_RE.test(code) || (/\.setAttribute\s*\(/.test(code) && /getSession/.test(code))) {
       // Check 1: Known non-serializable types being stored
@@ -199,7 +199,7 @@ function verifyCWE580(map: NeuralMap): VerificationResult {
   const NEW_INSTEAD_RE = /\bnew\s+\w+\s*\(/;
 
   for (const node of map.nodes) {
-    const code = stripComments(node.analysis_snapshot || node.analysis_snapshot || node.code_snapshot);
+    const code = stripComments(node.analysis_snapshot || node.code_snapshot);
 
     if (CLONE_METHOD_RE.test(code)) {
       const callsSuperClone = SUPER_CLONE_RE.test(code);

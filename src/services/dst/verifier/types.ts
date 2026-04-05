@@ -27,6 +27,8 @@ export interface Finding {
   description: string;
   /** Remediation guidance */
   fix: string;
+  /** How this finding was detected — provenance tag for debug layer trust */
+  via?: 'bfs' | 'sink_tainted' | 'scope_taint' | 'source_line_fallback' | 'structural';
   /** CWEs collapsed into this finding by source-sink dedup (Layer 2) */
   collapsed_cwes?: string[];
   /** Proof certificate from the reverse mapper (payload-gen) — optional, added by --prove */

@@ -65,7 +65,9 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of storage) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+      const bfsHit89 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit89 = !bfsHit89 && sinkHasTaintedDataIn(map, sink.id);
+      if (bfsHit89 || sinkTaintHit89) {
         if (hasDeadBranch89) continue;
         // Check if the sink or containing scope uses parameterized queries
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
@@ -91,6 +93,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
             fix: 'Use parameterized queries (prepared statements) instead of string concatenation. ' +
               'Example: db.query("SELECT * FROM users WHERE id = $1", [userId]) instead of ' +
               'db.query("SELECT * FROM users WHERE id = " + userId)',
+            via: bfsHit89 ? 'bfs' : 'sink_tainted',
           });
         }
       }
@@ -208,6 +211,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `Data extracted inside inner class flows to SQL query at line ${sqlLine} via string concatenation without parameterization.`,
         fix: 'Use parameterized queries (prepared statements) instead of string concatenation.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -232,6 +236,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
             severity: 'critical',
             description: `User input concatenated into SQL query string without parameterization.`,
             fix: 'Use parameterized queries with placeholders ($1, ?) instead of string concatenation.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -308,7 +313,10 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
     for (const sink of egress) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       // Fallback 2: scope-based taint (Java Juliet patterns with incomplete DATA_FLOW edges)
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id) || scopeBasedTaintReaches(map, src.id, sink.id)) {
+      const bfsHit79 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit79 = !bfsHit79 && sinkHasTaintedDataIn(map, sink.id);
+      const scopeTaintHit79 = !bfsHit79 && !sinkTaintHit79 && scopeBasedTaintReaches(map, src.id, sink.id);
+      if (bfsHit79 || sinkTaintHit79 || scopeTaintHit79) {
         if (hasDeadBranch79 || hasInterproceduralKill79 || hasMapKeySafeRetrieval79) continue;
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -333,6 +341,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
               `This allows script injection.`,
             fix: 'Encode output for the target context. Use textContent instead of innerHTML. ' +
               'Use a sanitizer like DOMPurify for rich text. Never trust user input in HTML.',
+            via: bfsHit79 ? 'bfs' : sinkTaintHit79 ? 'sink_tainted' : 'scope_taint',
           });
         } else if (isEncoded && !isJsonResponse) {
           // Context-aware encoding check: encoding exists but may be wrong for the output context.
@@ -388,6 +397,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
               fix: 'Use context-appropriate encoding: htmlEscape/DOMPurify for HTML, ' +
                 'JSON.stringify/jsEscape for JavaScript, encodeURIComponent for URLs, ' +
                 'CSS encoding for style contexts. Never substitute one context\'s encoding for another.',
+              via: bfsHit79 ? 'bfs' : sinkTaintHit79 ? 'sink_tainted' : 'scope_taint',
             });
           }
         }
@@ -494,6 +504,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
             description: `User input from @RequestParam is reflected in @ResponseBody HTTP response at line ${xssSinkLine} without encoding. ` +
               `An attacker can inject script tags via the request parameter.`,
             fix: 'Encode output for the target context. Use HtmlUtils.htmlEscape() or a sanitizer before including user input in response bodies.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -562,9 +573,10 @@ function verifyCWE81(map: NeuralMap): VerificationResult {
 
   for (const src of ingress) {
     for (const sink of allErrorSinks) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-          sinkHasTaintedDataIn(map, sink.id) ||
-          scopeBasedTaintReaches(map, src.id, sink.id)) {
+      const bfsHit81 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit81 = !bfsHit81 && sinkHasTaintedDataIn(map, sink.id);
+      const scopeTaintHit81 = !bfsHit81 && !sinkTaintHit81 && scopeBasedTaintReaches(map, src.id, sink.id);
+      if (bfsHit81 || sinkTaintHit81 || scopeTaintHit81) {
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = /\bescape\s*\(|\bescapeHtml\b|\bhtmlEncode\s*\(|\bsanitize\s*\(|\bDOMPurify\b|\btextContent\b|\bencodeForHTML\b|\bESAPI\b|\bEncoder\b.*\bencode\b|\bHtmlUtils\.htmlEscape\b|\bStringEscapeUtils\b/i.test(combinedScope);
@@ -579,6 +591,7 @@ function verifyCWE81(map: NeuralMap): VerificationResult {
               `Error pages that echo user input (e.g. sendError with tainted data) enable reflected XSS.`,
             fix: 'HTML-encode all user-controlled values before including them in error messages or error pages. ' +
               'Use HttpServletResponse.sendError() only with static messages, or encode dynamic values with ESAPI/HtmlUtils.',
+            via: bfsHit81 ? 'bfs' : sinkTaintHit81 ? 'sink_tainted' : 'scope_taint',
           });
         }
       }
@@ -605,6 +618,7 @@ function verifyCWE81(map: NeuralMap): VerificationResult {
                 `Error messages that include unsanitized user data enable reflected XSS in error pages.`,
               fix: 'HTML-encode user-controlled values before passing to sendError(). ' +
                 'Use ESAPI.encoder().encodeForHTML() or HtmlUtils.htmlEscape() on dynamic values.',
+              via: 'source_line_fallback',
             });
             break;
           }
@@ -682,9 +696,10 @@ function verifyCWE83(map: NeuralMap): VerificationResult {
 
   for (const src of ingress) {
     for (const sink of allAttrSinks) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-          sinkHasTaintedDataIn(map, sink.id) ||
-          scopeBasedTaintReaches(map, src.id, sink.id)) {
+      const bfsHit83 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit83 = !bfsHit83 && sinkHasTaintedDataIn(map, sink.id);
+      const scopeTaintHit83 = !bfsHit83 && !sinkTaintHit83 && scopeBasedTaintReaches(map, src.id, sink.id);
+      if (bfsHit83 || sinkTaintHit83 || scopeTaintHit83) {
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
 
@@ -703,6 +718,7 @@ function verifyCWE83(map: NeuralMap): VerificationResult {
               `Attacker can break out of the attribute value or inject event handlers (e.g. " onmouseover="alert(1)).`,
             fix: 'Use attribute-context encoding (encodeForHTMLAttribute / ESAPI) for all user input in HTML attributes. ' +
               'Always quote attribute values. For URL attributes (href, src), validate against an allowlist of safe schemes.',
+            via: bfsHit83 ? 'bfs' : sinkTaintHit83 ? 'sink_tainted' : 'scope_taint',
           });
         }
       }
@@ -728,6 +744,7 @@ function verifyCWE83(map: NeuralMap): VerificationResult {
                 `Tainted data in attribute values (src, href, event handlers) enables XSS via attribute injection.`,
               fix: 'Use encodeForHTMLAttribute() or ESAPI encoding for user input in attributes. ' +
                 'Validate URL attributes against an allowlist of safe protocols.',
+              via: 'source_line_fallback',
             });
             break;
           }
@@ -836,6 +853,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
               `An attacker can use ../../ to access files outside the intended directory.`,
             fix: 'Resolve the full path with path.resolve(), then verify it starts with your allowed base directory. ' +
               'Never use user input directly in file operations.',
+            via: 'bfs',
           });
         }
       }
@@ -946,6 +964,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
                 `An attacker can use ../../ to access files outside the intended directory.`,
               fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
                 'Never use user input directly in file operations.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -1051,6 +1070,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
             `If the caller passes user-controlled input, an attacker can use ../../ to traverse directories.`,
           fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
             'Reject requests where the canonical path escapes the intended directory.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -1130,6 +1150,7 @@ function verifyCWE23(map: NeuralMap): VerificationResult {
               `An attacker can send "../" sequences to escape the intended directory and read/write arbitrary files.`,
             fix: 'Canonicalize the combined path with File.getCanonicalPath() or path.resolve(), then verify the result ' +
               'starts with the intended base directory. Reject any input containing ".." sequences.',
+            via: 'bfs',
           });
         }
       }
@@ -1232,6 +1253,7 @@ function verifyCWE23(map: NeuralMap): VerificationResult {
                 `An attacker can send "../" sequences to escape the intended directory and read/write arbitrary files.`,
               fix: 'Canonicalize the combined path with File.getCanonicalPath(), then verify the result ' +
                 'starts with the intended base directory. Reject any input containing ".." sequences.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -1309,6 +1331,7 @@ function verifyCWE36(map: NeuralMap): VerificationResult {
               `An attacker can send an absolute path like "/etc/passwd" or "C:\\Windows\\..." to access any file on the filesystem.`,
             fix: 'Never use user input as the entire file path. Always prepend a base directory and canonicalize: ' +
               'new File(BASE_DIR, input).getCanonicalPath() then verify startsWith(BASE_DIR). Reject absolute paths.',
+            via: 'bfs',
           });
         }
       }
@@ -1397,6 +1420,7 @@ function verifyCWE36(map: NeuralMap): VerificationResult {
                 `An attacker can send an absolute path like "/etc/passwd" or "C:\\Windows\\..." to access any file on the filesystem.`,
               fix: 'Never use user input as the entire file path. Always prepend a base directory and canonicalize: ' +
                 'new File(BASE_DIR, input).getCanonicalPath() then verify startsWith(BASE_DIR). Reject absolute paths.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -1454,6 +1478,7 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
             fix: 'Use safe parsers: JSON.parse for JSON, yaml.safeLoad / yaml.safe_load for YAML. ' +
               'Never use eval, unserialize, pickle.load, or yaml.load on untrusted data. ' +
               'Add schema validation (zod, joi) after parsing.',
+            via: 'bfs',
           });
         }
       }
@@ -1475,6 +1500,7 @@ function verifyCWE502(map: NeuralMap): VerificationResult {
           severity: 'critical',
           description: 'Untrusted data flows to a dangerous deserialization sink without type filtering.',
           fix: 'Use ObjectInputFilter, type-safe parsers, or avoid deserializing untrusted data entirely.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -1525,6 +1551,7 @@ function verifyCWE918(map: NeuralMap): VerificationResult {
             fix: 'Validate URLs against an allowlist of permitted domains. ' +
               'Parse the URL with new URL() and check the hostname. ' +
               'Never let user input directly control request destinations.',
+            via: 'bfs',
           });
         }
       }
@@ -1556,6 +1583,7 @@ function verifyCWE918(map: NeuralMap): VerificationResult {
         fix: 'Validate URLs against an allowlist of permitted domains. ' +
           'Parse the URL with new URL() and check the hostname. ' +
           'Never let user input directly control request destinations.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -1585,7 +1613,9 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
 
   for (const src of ingress) {
     for (const sink of shellExec) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+      const bfsHit78 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit78 = !bfsHit78 && sinkHasTaintedDataIn(map, sink.id);
+      if (bfsHit78 || sinkTaintHit78) {
         const scopeSnapshots78 = getContainingScopeSnapshots(map, sink.id);
         const combinedScope78 = stripComments(scopeSnapshots78.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isSafe = combinedScope78.match(
@@ -1601,6 +1631,7 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
             fix: 'Never pass user input to shell commands. Use execFile or spawn with an argument array ' +
               'instead of exec with string interpolation. If shell is unavoidable, use a strict allowlist ' +
               'of permitted values.',
+            via: bfsHit78 ? 'bfs' : 'sink_tainted',
           });
         }
       }
@@ -1870,6 +1901,7 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
             missing: 'CONTROL (input sanitization or safe command API)', severity: 'critical',
             description: `User input flows to OS command execution at line ${i + 1} without sanitization.`,
             fix: 'Never pass user input to shell commands. Use safe APIs with argument arrays.',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -1932,6 +1964,7 @@ function verifyCWE78(map: NeuralMap): VerificationResult {
             `After defaultReadObject(), attacker-controlled field data reaches Runtime.exec() without sanitization.`,
           fix: 'Never pass deserialized field values to shell commands. Validate deserialized data against a strict allowlist. ' +
             'Consider using look-ahead deserialization (ObjectInputFilter) to restrict deserialized classes.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -1998,6 +2031,7 @@ function verifyCWE611(map: NeuralMap): VerificationResult {
             fix: 'Disable external entity processing in the XML parser configuration. ' +
               'Use defusedxml (Python), set resolveEntities: false, or use noent: false. ' +
               'For libxmljs: NEVER use {noent:true}. Consider using JSON instead of XML where possible.',
+            via: 'bfs',
           });
         }
       }
@@ -2034,6 +2068,7 @@ function verifyCWE611(map: NeuralMap): VerificationResult {
           fix: 'Disable external entity processing in the XML parser configuration. ' +
             'NEVER use {noent:true} with libxmljs/libxmljs2. ' +
             'Use noent: false or remove the noent option entirely.',
+          via: 'scope_taint',
         });
       }
     }
@@ -2118,6 +2153,7 @@ function verifyCWE611(map: NeuralMap): VerificationResult {
           fix: 'Set XMLConstants.ACCESS_EXTERNAL_DTD and ACCESS_EXTERNAL_SCHEMA to empty string. ' +
             'For XMLInputFactory: xif.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, ""). ' +
             'For DocumentBuilderFactory: dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true).',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -2176,6 +2212,7 @@ function verifyCWE94(map: NeuralMap): VerificationResult {
               : 'Never pass user input to eval(), exec(), or Function(). ' +
                 'Use ast.literal_eval() for Python or JSON.parse() for JSON data. ' +
                 'If dynamic evaluation is required, use a sandboxed environment with strict allowlists.',
+            via: 'bfs',
           });
         }
       }
@@ -2209,6 +2246,7 @@ function verifyCWE94(map: NeuralMap): VerificationResult {
             fix: 'NEVER use vm.runInContext/runInNewContext with user-controlled data. ' +
               'The Node.js vm module is NOT a security mechanism. ' +
               'Use a true sandbox (vm2, isolated-vm) or avoid dynamic code evaluation entirely.',
+            via: 'scope_taint',
           });
           break; // One finding per vm node is sufficient
         }
@@ -2256,6 +2294,7 @@ function verifyCWE94(map: NeuralMap): VerificationResult {
             fix: 'NEVER use vm.runInContext/runInNewContext with user-controlled data. ' +
               'The Node.js vm module is NOT a security mechanism. ' +
               'Use a true sandbox (vm2, isolated-vm) or avoid dynamic code evaluation entirely.',
+            via: 'scope_taint',
           });
           break;
         }
@@ -2314,6 +2353,7 @@ function verifyCWE1321(map: NeuralMap): VerificationResult {
             fix: 'Never merge user input directly into objects. Use an allowlist of permitted keys. ' +
               'Use Object.create(null) for lookup objects. Avoid lodash.merge/defaultsDeep with untrusted data. ' +
               'Consider using Map instead of plain objects for dynamic keys.',
+            via: 'bfs',
           });
         }
       }
@@ -2387,6 +2427,7 @@ function verifyCWE158(map: NeuralMap): VerificationResult {
                 `An attacker can bypass the file type check with a poison null byte (e.g., "evil.txt%00.pdf" passes an endsWith(".pdf") check, then the null byte is stripped, serving "evil.txt").`,
               fix: 'Move null byte sanitization BEFORE the file type/extension validation. ' +
                 'The correct order is: (1) strip null bytes, (2) validate file type, (3) perform file operation.',
+              via: 'bfs',
             });
             break;
           }
@@ -2416,6 +2457,7 @@ function verifyCWE158(map: NeuralMap): VerificationResult {
             fix: 'Strip null bytes from filenames BEFORE validation. ' +
               'Use filename.replace(/\\0/g, "") or a dedicated function like cutOffPoisonNullByte(). ' +
               'Always sanitize null bytes before any file type or extension check.',
+            via: 'bfs',
           });
           break;
         }
@@ -2487,6 +2529,7 @@ function verifyCWE117(map: NeuralMap): VerificationResult {
               `An attacker can inject fake log entries via newlines or forge audit trails.`,
             fix: 'Strip or encode newlines (\\n, \\r), control characters, and log-format delimiters ' +
               'from user input before logging. Use structured logging (JSON) to prevent injection.',
+            via: 'bfs',
           });
         }
       }
@@ -2518,6 +2561,7 @@ function verifyCWE117(map: NeuralMap): VerificationResult {
                   `An attacker can inject fake log entries via newlines or forge audit trails.`,
                 fix: 'Strip or encode newlines (\\n, \\r), control characters, and log-format delimiters ' +
                   'from user input before logging. Use structured logging (JSON) to prevent injection.',
+                via: 'scope_taint',
               });
             }
           }
@@ -2591,6 +2635,7 @@ function verifyCWE117(map: NeuralMap): VerificationResult {
                 `Carriage return characters can still inject fake log entries or forge output lines.`,
               fix: 'Replace both \\n and \\r (and ideally all control characters) from user input before logging or displaying. ' +
                 'Use replaceAll("[\\\\r\\\\n]", "") or a structured logging framework.',
+              via: 'source_line_fallback',
             });
             break;
           }
@@ -2625,6 +2670,7 @@ function verifyCWE117(map: NeuralMap): VerificationResult {
                 `An attacker can inject fake log entries via \\r\\n sequences.`,
               fix: 'Strip newlines (\\n, \\r) and control characters from user input before output. ' +
                 'Use structured logging (JSON) to prevent log injection.',
+              via: 'source_line_fallback',
             });
             break;
           }
@@ -2731,6 +2777,7 @@ function verifyCWE601(map: NeuralMap): VerificationResult {
             fix: 'Validate redirect URLs against an allowlist of trusted domains. ' +
               'Use relative paths only: if (!url.startsWith("/") || url.startsWith("//")) reject. ' +
               'Parse with new URL() and check .hostname against allowed origins.',
+            via: 'bfs',
           });
         }
       }
@@ -2764,7 +2811,7 @@ function verifyCWE610(map: NeuralMap): VerificationResult {
     for (const sink of sinks610) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (!SAFE610.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE610.test(stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot))) {
+        if (!SAFE610.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE610.test(stripComments(src.analysis_snapshot || src.code_snapshot))) {
           const rt = DB610.test(sink.analysis_snapshot || sink.code_snapshot) ? 'database connection' : 'external resource';
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
@@ -2772,6 +2819,7 @@ function verifyCWE610(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} controls ${rt} reference at ${sink.label}. Attacker can access resources in another security sphere.`,
             fix: 'Validate references against an allowlist. Parse URLs and check hostname. Never let user input control connection strings.',
+            via: 'bfs',
           });
         }
       }
@@ -2807,7 +2855,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
         if (hasDeadBranch643 || hasInterproceduralStatic643) continue;
-        if (!SAFE643.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE643.test(stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot))) {
+        if (!SAFE643.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE643.test(stripComments(src.analysis_snapshot || src.code_snapshot))) {
           const concat = XP_CAT643.test(sink.analysis_snapshot || sink.code_snapshot);
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
@@ -2817,6 +2865,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
               (concat ? 'String concatenation builds the XPath expression. ' : '') +
               `Attacker can inject XPath operators to bypass auth or exfiltrate data.`,
             fix: 'Use parameterized XPath (XPathVariableResolver in Java, variable bindings in lxml). Escape special chars. Never concatenate user input into XPath.',
+            via: 'bfs',
           });
         }
       }
@@ -2834,6 +2883,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} in scope with XPath construction at ${sink.label}. Injection possible if input interpolated.`,
             fix: 'Use parameterized XPath or escape special characters. Never concatenate user input into XPath.',
+            via: 'scope_taint',
           }); break;
         }
       }
@@ -2951,6 +3001,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
               severity: 'high',
               description: `User input flows to XPath query at line ${i + 1} without escaping.`,
               fix: 'Use parameterized XPath with XPathVariableResolver. Never concatenate user input into XPath.',
+              via: 'source_line_fallback',
             });
             break;
           }
@@ -2994,6 +3045,7 @@ function verifyCWE776(map: NeuralMap): VerificationResult {
               (hasDanger ? 'Parser has dangerous entity expansion enabled. ' : '') +
               'Billion Laughs attack can expand recursive entities into gigabytes of memory.',
             fix: 'Prohibit DTDs (disallow-doctype-decl). Set entityExpansionLimit. Use defusedxml. Set noent:false in libxmljs.',
+            via: 'bfs',
           });
         }
       }
@@ -3010,6 +3062,7 @@ function verifyCWE776(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} in scope with XML parser at ${sink.label} without entity expansion limits.`,
             fix: 'Prohibit DTDs or set entity expansion limits. Use defusedxml or hardened parser.',
+            via: 'scope_taint',
           }); break;
         }
       }
@@ -3034,7 +3087,7 @@ function verifyCWE20(map: NeuralMap): VerificationResult {
     for (const sink of processingSinks) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        const srcCode = stripComments(src.analysis_snapshot || src.analysis_snapshot || src.code_snapshot);
+        const srcCode = stripComments(src.analysis_snapshot || src.code_snapshot);
         const sinkCode = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!VALIDATION_SAFE20.test(srcCode) && !VALIDATION_SAFE20.test(sinkCode)) {
           findings.push({
@@ -3047,6 +3100,7 @@ function verifyCWE20(map: NeuralMap): VerificationResult {
             fix: 'Validate all user input before processing. Use schema validation (Joi, Zod, Yup), ' +
               'type coercion (parseInt, Number), allowlists for enum values, regex patterns for strings, ' +
               'and range checks for numbers. Reject invalid input early.',
+            via: 'bfs',
           });
         }
       }
@@ -3098,6 +3152,7 @@ function verifyCWE74(map: NeuralMap): VerificationResult {
             fix: 'Neutralize user input for the target context before passing to downstream components. ' +
               'Use context-appropriate encoding (URL encoding for URLs, HTML encoding for HTML, etc.). ' +
               'Prefer structured APIs over string concatenation.',
+            via: 'bfs',
           });
         }
       }
@@ -3155,6 +3210,7 @@ function verifyCWE77(map: NeuralMap): VerificationResult {
             fix: 'Use argument arrays instead of string concatenation for commands. ' +
               'execFile("cmd", [arg1, arg2]) instead of exec("cmd " + arg1). ' +
               'If strings are unavoidable, escape with shlex.quote (Python) or a strict allowlist.',
+            via: 'bfs',
           });
         }
       }
@@ -3200,7 +3256,9 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
     for (const sink of ldapSinks90) {
       if (src.id === sink.id) continue;
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+      const bfsHit90 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit90 = !bfsHit90 && sinkHasTaintedDataIn(map, sink.id);
+      if (bfsHit90 || sinkTaintHit90) {
         if (hasDeadBranch90 || hasStaticVal90 || hasInterproceduralKill90) continue;
         const sinkCode90 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!LDAP_SAFE90.test(sinkCode90)) {
@@ -3217,6 +3275,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
             fix: 'Escape LDAP special characters (*, (, ), \\, NUL) in user input. ' +
               'Use ldap.escape() or escape_filter_chars(). Prefer filter builder APIs (Filter.eq, Filter.and) ' +
               'over string concatenation. Validate input format (e.g., alphanumeric only for usernames).',
+            via: bfsHit90 ? 'bfs' : 'sink_tainted',
           });
         }
       }
@@ -3383,6 +3442,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input flows to LDAP query at line ${i + 1} without escaping.`,
             fix: 'Escape LDAP special characters. Use filter builder APIs over string concatenation.',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -3444,6 +3504,7 @@ function verifyCWE91(map: NeuralMap): VerificationResult {
                 'Blind injection leaks data via behavior differences even without direct output.'
               : 'Use DOM APIs (createTextNode, setAttribute) instead of string concatenation. ' +
                 'Encode XML special characters (&, <, >, \', ") with escapeXml() or he.encode().',
+            via: 'bfs',
           });
         }
       }
@@ -3496,6 +3557,7 @@ function verifyCWE93(map: NeuralMap): VerificationResult {
             fix: 'Strip or reject CR (\\r) and LF (\\n) characters from user input before embedding in headers or logs. ' +
               'Use input.replace(/[\\r\\n]/g, "") or a framework header sanitization function. ' +
               'Modern frameworks (Express 4+) auto-reject headers with CRLF, but explicit validation is safer.',
+            via: 'bfs',
           });
         }
       }
@@ -3555,6 +3617,7 @@ function verifyCWE95(map: NeuralMap): VerificationResult {
               ? 'Replace setTimeout("code", ms) with setTimeout(function, ms). Never pass user input as a string to timer functions.'
               : 'Eliminate eval/exec entirely. Use JSON.parse for JSON, ast.literal_eval for Python literals. ' +
                 'If dynamic evaluation is required, use isolated-vm (NOT Node.js vm module) with strict input validation.',
+            via: 'bfs',
           });
         }
       }
@@ -3607,6 +3670,7 @@ function verifyCWE96(map: NeuralMap): VerificationResult {
             fix: 'Never write user input to files with executable extensions (.php, .jsp, .py, etc.). ' +
               'Validate file extensions against a strict allowlist. Sanitize content to remove executable directives. ' +
               'Store user content outside the web root and serve with Content-Disposition: attachment.',
+            via: 'bfs',
           });
         }
       }
@@ -3663,6 +3727,7 @@ function verifyCWE98(map: NeuralMap): VerificationResult {
                 'Never pass user input directly to include/require. Disable allow_url_include in php.ini. ' +
                 'Example: $pages = ["home" => "home.php"]; include($pages[$_GET["page"]] ?? "404.php");'
               : 'Use an allowlist of valid module names. Never construct import paths from user input.',
+            via: 'bfs',
           });
         }
       }
@@ -3717,6 +3782,7 @@ function verifyCWE99(map: NeuralMap): VerificationResult {
               'Use enums or switch statements for resource selection. ' +
               'For numeric identifiers (ports), validate range. For strings, use a strict allowlist. ' +
               'Never let user input directly select backend resources.',
+            via: 'bfs',
           });
         }
       }
@@ -3759,7 +3825,9 @@ function verifyCWE15(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of configSinks) {
       if (src.id === sink.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sinkHasTaintedDataIn(map, sink.id)) {
+      const bfsHit15 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const sinkTaintHit15 = !bfsHit15 && sinkHasTaintedDataIn(map, sink.id);
+      if (bfsHit15 || sinkTaintHit15) {
         const scopeSnaps15 = getContainingScopeSnapshots(map, sink.id);
         const scope15 = stripComments(scopeSnaps15.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         if (!safeConfigRe.test(scope15)) {
@@ -3773,6 +3841,7 @@ function verifyCWE15(map: NeuralMap): VerificationResult {
             fix: 'Never pass unsanitized external input to system configuration APIs. ' +
               'Use an allowlist of permitted configuration values. ' +
               'Validate against a strict pattern (e.g., switch/case or Set.has()) before calling setCatalog(), setProperty(), putenv(), etc.',
+            via: bfsHit15 ? 'bfs' : 'sink_tainted',
           });
         }
       }
@@ -3821,6 +3890,7 @@ function verifyCWE15(map: NeuralMap): VerificationResult {
               description: `System/configuration setting modified with a variable at line ${li + 1}: "${tr.slice(0, 100)}". ` +
                 `If this value originates from external input, an attacker can control system configuration.`,
               fix: 'Validate the value against an allowlist before passing it to configuration APIs.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -3886,7 +3956,9 @@ function verifyCWE111(map: NeuralMap): VerificationResult {
         if (callPattern.test(code) && !declPattern.test(code)) {
           // This node calls a native method — check if any INGRESS reaches it
           for (const src of ingress) {
-            if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+            const bfsHit111a = hasTaintedPathWithoutControl(map, src.id, node.id);
+            const sinkTaintHit111a = !bfsHit111a && sinkHasTaintedDataIn(map, node.id);
+            if (bfsHit111a || sinkTaintHit111a) {
               // Check scope for validation
               const scopeSnapshots = getContainingScopeSnapshots(map, node.id);
               const combinedScope = stripComments(scopeSnapshots.join('\n') || code);
@@ -3904,6 +3976,7 @@ function verifyCWE111(map: NeuralMap): VerificationResult {
                   fix: 'Validate all data before passing to JNI native methods. Check string lengths, ' +
                     'integer ranges, and array bounds. Use an allowlist of permitted values where possible. ' +
                     'Consider wrapping JNI calls in a safe Java API that validates inputs.',
+                  via: bfsHit111a ? 'bfs' : 'sink_tainted',
                 });
                 break; // One finding per sink per native method
               }
@@ -3920,7 +3993,9 @@ function verifyCWE111(map: NeuralMap): VerificationResult {
     const code = stripComments(node.analysis_snapshot || node.code_snapshot);
     if (LOAD_LIBRARY_RE.test(code)) {
       for (const src of ingress) {
-        if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+        const bfsHit111b = hasTaintedPathWithoutControl(map, src.id, node.id);
+        const sinkTaintHit111b = !bfsHit111b && sinkHasTaintedDataIn(map, node.id);
+        if (bfsHit111b || sinkTaintHit111b) {
           findings.push({
             source: nodeRef(src),
             sink: nodeRef(node),
@@ -3930,6 +4005,7 @@ function verifyCWE111(map: NeuralMap): VerificationResult {
               `An attacker can load arbitrary native libraries, gaining code execution.`,
             fix: 'Never pass user input to System.loadLibrary(). Use a hardcoded library name or ' +
               'validate against a strict allowlist of permitted library names.',
+            via: bfsHit111b ? 'bfs' : 'sink_tainted',
           });
           break;
         }
@@ -3964,6 +4040,7 @@ function verifyCWE111(map: NeuralMap): VerificationResult {
                     `and memory corruption are possible when user input reaches native methods.`,
                   fix: 'Validate all data before passing to JNI native methods. Check string lengths, ' +
                     'integer ranges, and array bounds. Use an allowlist of permitted values where possible.',
+                  via: 'scope_taint',
                 });
                 break;
               }
@@ -4032,6 +4109,7 @@ function verifyCWE114(map: NeuralMap): VerificationResult {
           fix: 'Use System.load() with an absolute path to the library instead of System.loadLibrary(). ' +
             'Example: System.load("/opt/myapp/libs/mylib.so") instead of System.loadLibrary("mylib"). ' +
             'If System.loadLibrary() is unavoidable, restrict java.library.path and use a SecurityManager.',
+          via: 'structural',
         });
       }
     }
@@ -4044,7 +4122,9 @@ function verifyCWE114(map: NeuralMap): VerificationResult {
       }
       // Check if tainted input flows to this node
       for (const src of ingress) {
-        if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+        const bfsHit114a = hasTaintedPathWithoutControl(map, src.id, node.id);
+        const sinkTaintHit114a = !bfsHit114a && sinkHasTaintedDataIn(map, node.id);
+        if (bfsHit114a || sinkTaintHit114a) {
           if (!ALLOWLIST_RE.test(combinedScope)) {
             findings.push({
               source: nodeRef(src),
@@ -4055,6 +4135,7 @@ function verifyCWE114(map: NeuralMap): VerificationResult {
                 `An attacker can load any native library on disk, gaining arbitrary code execution.`,
               fix: 'Never pass user input to System.load(). Use a hardcoded absolute path or ' +
                 'validate the path against a strict allowlist of permitted library paths.',
+              via: bfsHit114a ? 'bfs' : 'sink_tainted',
             });
             break;
           }
@@ -4065,7 +4146,9 @@ function verifyCWE114(map: NeuralMap): VerificationResult {
     // --- Detection 3: Runtime.exec() or ProcessBuilder with tainted input ---
     if (RUNTIME_EXEC_RE.test(code) || PROCESS_BUILDER_RE.test(code)) {
       for (const src of ingress) {
-        if (hasTaintedPathWithoutControl(map, src.id, node.id) || sinkHasTaintedDataIn(map, node.id)) {
+        const bfsHit114b = hasTaintedPathWithoutControl(map, src.id, node.id);
+        const sinkTaintHit114b = !bfsHit114b && sinkHasTaintedDataIn(map, node.id);
+        if (bfsHit114b || sinkTaintHit114b) {
           if (!ALLOWLIST_RE.test(combinedScope)) {
             findings.push({
               source: nodeRef(src),
@@ -4077,6 +4160,7 @@ function verifyCWE114(map: NeuralMap): VerificationResult {
               fix: 'Never pass user input to Runtime.exec() or ProcessBuilder. Use a strict allowlist ' +
                 'of permitted commands. Consider using a ProcessBuilder with a fixed command array ' +
                 'instead of string concatenation.',
+              via: bfsHit114b ? 'bfs' : 'sink_tainted',
             });
             break;
           }
@@ -4126,6 +4210,7 @@ function verifyCWE477(map: NeuralMap): VerificationResult {
           description: `Obsolete function ${api.name} used at ${node.label}. ` +
             `Deprecated APIs may have known bugs, security vulnerabilities, or undefined behavior.`,
           fix: api.fix,
+          via: 'structural',
         });
       }
     }

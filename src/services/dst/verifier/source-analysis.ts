@@ -33,7 +33,10 @@ export function stripRegexLiterals(code: string): string {
   return code.replace(/(?<![=!<>])\/(?![/*])(?:[^/\\]|\\.)+\/[gimsuy]*/g, '//');
 }
 
-export function stripComments(code: string): string {
+const HASH_COMMENT_LANGS = new Set(['python', 'ruby', 'php', 'perl', 'shell', 'bash', 'r']);
+
+export function stripComments(code: string, language?: string): string {
+  const stripHash = !language || HASH_COMMENT_LANGS.has(language.toLowerCase());
   let result = '';
   let i = 0;
   const len = code.length;
@@ -89,8 +92,8 @@ export function stripComments(code: string): string {
       continue;
     }
 
-    // Hash comment: # ... (Python, Ruby, PHP)
-    if (ch === '#') {
+    // Hash comment: # ... (only for Python, Ruby, PHP, etc.)
+    if (ch === '#' && stripHash) {
       // Skip to end of line
       i++;
       while (i < len && code[i] !== '\n') {
