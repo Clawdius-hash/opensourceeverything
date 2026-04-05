@@ -54,7 +54,8 @@ function verifyCWE207(map: NeuralMap): VerificationResult {
           description: `Auth handler at ${node.label} returns distinguishable responses for different failure reasons. ` +
             `Attackers can enumerate valid usernames/emails by observing which error message they receive.`,
           fix: 'Return a single generic message for all auth failures: "Invalid credentials." Use the same HTTP status code (401) ' +
-            'regardless of whether the user exists or the password is wrong. Log the specific reason server-side only.' });
+            'regardless of whether the user exists or the password is wrong. Log the specific reason server-side only.',
+          via: 'structural' });
       }
     }
   }
@@ -67,7 +68,8 @@ function verifyCWE207(map: NeuralMap): VerificationResult {
         missing: 'TRANSFORM (uniform error for auth failures)',
         severity: 'low',
         description: `Response at ${sink.label} reveals whether a specific username/email exists in the system via distinct error messages.`,
-        fix: 'Use a generic error message: "Invalid credentials." Do not distinguish between user-not-found and wrong-password.' });
+        fix: 'Use a generic error message: "Invalid credentials." Do not distinguish between user-not-found and wrong-password.',
+        via: 'structural' });
     }
   }
 
@@ -116,6 +118,7 @@ function verifyCWE208(map: NeuralMap): VerificationResult {
         fix: 'Use crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) in Node.js, ' +
           'MessageDigest.isEqual() in Java, hmac.compare_digest() in Python, ' +
           'or Rack::Utils.secure_compare() in Ruby. For passwords, bcrypt.compare() is inherently constant-time.',
+        via: 'structural',
       });
     }
 
@@ -129,6 +132,7 @@ function verifyCWE208(map: NeuralMap): VerificationResult {
             `The time difference between "user not found" (fast) and "wrong password" (slow, hashes) reveals valid usernames.`,
           fix: 'Always perform the password comparison even when the user is not found. Compare against a dummy hash: ' +
             'bcrypt.compare(password, "$2b$10$invalidhashplaceholder...") to normalize timing.',
+          via: 'structural',
         });
       }
     }
@@ -149,6 +153,7 @@ function verifyCWE208(map: NeuralMap): VerificationResult {
             description: `Auth comparison at ${src.label} reaches response at ${sink.label} without constant-time protection. ` +
               `Response timing leaks secret information.`,
             fix: 'Wrap all secret comparisons in constant-time functions. Add artificial delay or ensure consistent response timing.',
+            via: 'bfs',
           });
         }
       }
@@ -196,6 +201,7 @@ function verifyCWE243(map: NeuralMap): VerificationResult {
             'outside the jail. The canonical sequence is: chroot(dir); chdir("/"); ' +
             'For better isolation, consider pivot_root (Linux) or pledge/unveil (OpenBSD). ' +
             'Drop privileges after entering the jail.',
+          via: 'structural',
         });
       }
     }
@@ -248,6 +254,7 @@ function verifyCWE244(map: NeuralMap): VerificationResult {
             'SecureZeroMemory() (Windows), memset_s() (C11), OPENSSL_cleanse(), or sodium_memzero(). ' +
             'Regular memset() before free() is NOT safe — the compiler may remove it as dead store. ' +
             'In managed languages: overwrite byte arrays (strings are immutable), use SecureString/.NET, or pin + zero.',
+          via: 'structural',
         });
       }
     }
@@ -282,6 +289,7 @@ function verifyCWE245(map: NeuralMap): VerificationResult {
         fix: 'Use container-managed DataSources: configure in server.xml/application.xml and obtain via JNDI lookup or @Resource injection. ' +
           'For JPA: use @PersistenceContext with EntityManager. For Spring: use JdbcTemplate or Spring Data. ' +
           'Never call DriverManager.getConnection() in production J2EE code.',
+        via: 'structural',
       });
     }
   }
@@ -315,6 +323,7 @@ function verifyCWE246(map: NeuralMap): VerificationResult {
         fix: 'Replace direct socket usage with container-managed alternatives: JMS for async messaging, ' +
           'JAX-RS/JAX-WS for web services, EJB remote interfaces or gRPC for RPC. ' +
           'If raw sockets are truly needed (custom protocol), use a resource adapter (JCA) so the container can manage the lifecycle.',
+        via: 'structural',
       });
     }
   }
@@ -359,6 +368,7 @@ function verifyCWE248(map: NeuralMap): VerificationResult {
             'Node.js: process.on("uncaughtException"), Express: app.use(err, req, res, next), ' +
             'Java: Thread.setDefaultUncaughtExceptionHandler, Spring: @ControllerAdvice, ' +
             'Python: sys.excepthook. Always return generic errors to users — log details server-side.',
+          via: 'structural',
         });
       }
     }
@@ -379,6 +389,7 @@ function verifyCWE248(map: NeuralMap): VerificationResult {
         fix: 'Return generic error messages to clients: "Internal Server Error" with a correlation ID. ' +
           'Log full exception details server-side. In production, set NODE_ENV=production, DEBUG=false, ' +
           'or equivalent to suppress detailed error output.',
+        via: 'structural',
       });
     }
   }
@@ -420,6 +431,7 @@ function verifyCWE252(map: NeuralMap): VerificationResult {
             fix: 'Always check return values: if (' + funcName.trim() + '(...) < 0) { handle_error(); }. ' +
               'For security-critical functions (setuid, chroot), abort on failure — do not continue. ' +
               'In Rust, use Result<> and the ? operator. In Go, always check err != nil.',
+            via: 'structural',
           });
         }
       }
@@ -461,6 +473,7 @@ function verifyCWE252(map: NeuralMap): VerificationResult {
               severity: 'medium',
               description: `Method ${node.label} calls ${methodName}() without checking the return value. The return value indicates success/failure or bytes read, and ignoring it can lead to data loss or incorrect behavior.`,
               fix: `Always check the return value of ${methodName}(). For read(): check for -1 (EOF) and partial reads. For delete(): verify the file was actually deleted.`,
+              via: 'source_line_fallback',
             });
           }
           break; // One finding per function is enough
@@ -513,6 +526,7 @@ function verifyCWE253(map: NeuralMap): VerificationResult {
           description: `Incorrect return value check at ${node.label}: ${desc}. ` +
             `Using the wrong sentinel or comparison means the check passes when it should fail, or vice versa.`,
           fix: correct,
+          via: 'structural',
         });
       }
     }
@@ -555,6 +569,7 @@ function verifyCWE341(map: NeuralMap): VerificationResult {
           `An attacker who can observe system state can predict these values and forge tokens or session IDs.`,
         fix: 'Use a CSPRNG (crypto.randomBytes, SecureRandom, os.urandom) instead of system state. ' +
           'Timestamps and counters are fully predictable to anyone who can observe the system.',
+        via: 'structural',
       });
     }
   }
@@ -591,6 +606,7 @@ function verifyCWE342(map: NeuralMap): VerificationResult {
           `This enables enumeration attacks, IDOR, and authorization bypass.`,
         fix: 'Use non-sequential identifiers: UUIDv4, CSPRNG-generated tokens, or ULID. ' +
           'If ordering is needed, use a separate non-exposed sequence internally.',
+        via: 'structural',
       });
     }
   }
@@ -637,6 +653,7 @@ function verifyCWE343(map: NeuralMap): VerificationResult {
         `within the code's validity window.`,
       fix: 'For OTPs: enforce strict rate limiting (3-5 attempts), short expiry (5 min), and lockout. ' +
         'For tokens: use at least 128 bits of CSPRNG entropy. A 6-digit OTP is only acceptable with aggressive rate limiting.',
+      via: 'scope_taint',
     });
   }
   return { cwe: 'CWE-343', name: 'Predictable Value Range from Previous Values', holds: findings.length === 0, findings };
@@ -671,6 +688,7 @@ function verifyCWE344(map: NeuralMap): VerificationResult {
         `for all requests/users makes the protection worthless — replay attacks, rainbow tables, and IV reuse attacks apply.`,
       fix: 'Generate a unique value per request (CSRF tokens), per user (salts), or per encryption operation (IVs/nonces). ' +
         'Use crypto.randomBytes() or equivalent. Never hardcode security-sensitive values.',
+      via: 'structural',
     });
   }
   return { cwe: 'CWE-344', name: 'Use of Invariant Value in Dynamically Changing Context', holds: findings.length === 0, findings };
@@ -705,6 +723,7 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
         fix: 'Either handle the error (return error status, retry, use fallback), re-throw it, ' +
           'or at minimum log it AND set an error state. If the exception truly cannot occur, ' +
           'add a comment explaining why and consider an assertion.',
+        via: 'structural',
       });
     } else if (LOG_ONLY_CATCH.test(rawCode) && !CORRECTIVE_ACTION.test(code)) {
       findings.push({
@@ -716,6 +735,7 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
           `invalid state. Logging alone does not fix the error condition.`,
         fix: 'After logging, take corrective action: return an error code, set a flag, ' +
           'use a fallback value, retry the operation, or re-throw for upstream handling.',
+        via: 'structural',
       });
     }
 
@@ -749,6 +769,7 @@ function verifyCWE390(map: NeuralMap): VerificationResult {
                   `the program continues as if the operation succeeded.`,
                 fix: 'Handle the error: throw an exception, return an error code, log and set error state, ' +
                   'or take corrective action (retry, fallback). Do not silently ignore error conditions.',
+                via: 'structural',
               });
             }
           }
@@ -795,6 +816,7 @@ function verifyCWE391(map: NeuralMap): VerificationResult {
             fix: `Check errno after ${funcName}, or verify the return value against the documented ` +
               `error sentinel. For strtol/strtod, check errno == ERANGE and endptr. ` +
               `For POSIX I/O, check both return value AND errno.`,
+            via: 'structural',
           });
         }
       }
@@ -829,6 +851,7 @@ function verifyCWE392(map: NeuralMap): VerificationResult {
         fix: 'Propagate the error to the caller: return an error code, throw/re-throw the exception, ' +
           'return a Result/Either type, or set an error flag that the caller checks. ' +
           'If returning a default is intentional, document it clearly and log the error.',
+        via: 'structural',
       });
     }
   }
@@ -864,6 +887,7 @@ function verifyCWE393(map: NeuralMap): VerificationResult {
           `Security tools and monitoring systems will miss the failure entirely.`,
         fix: 'Return the appropriate HTTP error status: 400 for bad input, 401 for authentication failure, ' +
           '403 for authorization failure, 404 for not found, 409 for conflicts, 500 for server errors.',
+        via: 'structural',
       });
     }
     if (C_SUCCESS_IN_ERROR.test(code)) {
@@ -876,6 +900,7 @@ function verifyCWE393(map: NeuralMap): VerificationResult {
           `(setuid, chroot, authentication), this is especially dangerous.`,
         fix: 'Return a non-zero error code, -1, or a specific errno-style value in error paths. ' +
           'Never return the success sentinel from an error handler.',
+        via: 'structural',
       });
     }
     for (const { pattern, desc } of WRONG_HTTP_CODE) {
@@ -889,6 +914,7 @@ function verifyCWE393(map: NeuralMap): VerificationResult {
             `500 instead of 403 triggers unnecessary retry logic.`,
           fix: 'Use semantically correct HTTP status codes: 401 for authentication, 403 for authorization, ' +
             '404 for not found, 400 for validation, 409 for conflicts, 500 only for genuine server errors.',
+          via: 'structural',
         });
         break;
       }
@@ -923,6 +949,7 @@ function verifyCWE394(map: NeuralMap): VerificationResult {
         fix: `Handle all return states of ${funcMatch[0]}: (1) >0 = success/partial (may need retry loop), ` +
           `(2) 0 = EOF/peer closed, (3) -1 = error (check errno for EINTR, EAGAIN, EWOULDBLOCK). ` +
           `Never assume a non-negative return means "all bytes transferred."`,
+        via: 'structural',
       });
     }
   }
@@ -959,6 +986,7 @@ function verifyCWE395(map: NeuralMap): VerificationResult {
             fix: 'Replace the catch with explicit null checks: if (obj != null) { obj.method(); }. ' +
               'In Java, use Optional<>. In JS/TS, use optional chaining (?.) and nullish coalescing (??). ' +
               'In Python, check "if value is not None" before access.',
+            via: 'structural',
           });
           break;
         }
@@ -998,6 +1026,7 @@ function verifyCWE396(map: NeuralMap): VerificationResult {
           'Use multiple catch blocks for different exception types. If a generic catch is truly needed ' +
           '(top-level error handler), log the full exception and re-throw unexpected types. ' +
           'In Python: except ValueError, except IOError — never bare "except:".',
+        via: 'structural',
       });
     }
   }
@@ -1031,6 +1060,7 @@ function verifyCWE397(map: NeuralMap): VerificationResult {
         fix: 'Declare specific checked exceptions: "throws IOException, SQLException" instead of ' +
           '"throws Exception". Wrap implementation-specific exceptions in domain exceptions. ' +
           'In Python, document specific exceptions in docstrings.',
+        via: 'structural',
       });
     }
   }
@@ -1059,6 +1089,7 @@ function verifyCWE546(map: NeuralMap): VerificationResult {
         description: `Security-related suspicious comment at ${node.label}: "${secMatch[0].slice(0, 120)}". ` +
           'Indicates known but unresolved security work. Attackers study comments for vulnerability hints.',
         fix: 'Resolve the security issue. If not immediately fixable, create a tracked ticket and remove detailed comments from source.',
+        via: 'structural',
       });
     } else {
       const match = SUSPICIOUS_COMMENT_RE.exec(code);
@@ -1074,6 +1105,7 @@ function verifyCWE546(map: NeuralMap): VerificationResult {
             description: `Suspicious comment in security-relevant code at ${node.label}: "${match[0].slice(0, 120)}". ` +
               'Unfinished work in security-critical paths may leave gaps in protection.',
             fix: 'Review and resolve. Remove or sanitize comments before production. Track in issue tracker if not immediately fixable.',
+            via: 'structural',
           });
         }
       }
@@ -1104,6 +1136,7 @@ function verifyCWE546(map: NeuralMap): VerificationResult {
             severity: 'low',
             description: `L${i + 1}: Suspicious comment contains '${keyword}': ${line.trim().slice(0, 100)}`,
             fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -1125,6 +1158,7 @@ function verifyCWE546(map: NeuralMap): VerificationResult {
                 severity: 'low',
                 description: `L${i + 1}: Suspicious comment contains '${keyword}': ${bc.slice(0, 100)}`,
                 fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+                via: 'source_line_fallback',
               });
             }
           }
@@ -1152,6 +1186,7 @@ function verifyCWE546(map: NeuralMap): VerificationResult {
               severity: 'low',
               description: `L${lineNum}: Suspicious multi-line comment contains '${keyword}'`,
               fix: 'Review and resolve security-related BUG/FIXME/HACK/KLUDGE comments before release.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -1187,6 +1222,7 @@ function verifyCWE547(map: NeuralMap): VerificationResult {
         description: `Hard-coded cryptographic constant at ${node.label}: "${match?.[0] || 'crypto parameter'}". ` +
           'Cannot be updated when standards change without redeployment.',
         fix: 'Make crypto parameters configurable via environment variables or config. Use current recommended values (PBKDF2 >= 600000, AES-256, RSA >= 2048).',
+        via: 'structural',
       });
     }
 
@@ -1199,6 +1235,7 @@ function verifyCWE547(map: NeuralMap): VerificationResult {
         description: `Hard-coded security timeout at ${node.label}: "${match?.[0] || 'timeout'}". ` +
           'Incident response may require immediate timeout changes without redeployment.',
         fix: 'Make timeouts configurable. Store in config/env vars. Document security implications.',
+        via: 'structural',
       });
     }
 
@@ -1212,6 +1249,7 @@ function verifyCWE547(map: NeuralMap): VerificationResult {
           description: `Hard-coded security threshold at ${node.label}: "${match?.[0] || 'threshold'}". ` +
             'Security thresholds need to be adjustable for incident response and compliance changes.',
           fix: 'Externalize security constants to configuration. Use environment-specific values (stricter in production).',
+          via: 'structural',
         });
       }
     }
@@ -1259,6 +1297,7 @@ function verifyCWE558(map: NeuralMap): VerificationResult {
             'use getpwuid(geteuid()) to get the effective user from the process credentials. ' +
             'In Python, use getpass.getuser() or pwd.getpwuid(os.getuid()). ' +
             'Never use getlogin() for security decisions.',
+          via: 'structural',
         });
       }
     }
@@ -1309,6 +1348,7 @@ function verifyCWE560(map: NeuralMap): VerificationResult {
           fix: `umask() takes a MASK of bits to REMOVE, not a MODE of bits to SET. ` +
             `Common correct values: umask(0022) for mode 0755, umask(0077) for mode 0700, umask(0027) for mode 0750. ` +
             `Formula: umask = 0777 - desired_mode. Review and fix to use the correct mask value.`,
+          via: 'structural',
         });
       }
     }
@@ -1361,6 +1401,7 @@ function verifyCWE564(map: NeuralMap): VerificationResult {
                 'session.createQuery("FROM User WHERE name = :name").setParameter("name", userInput). ' +
                 'Or use the JPA Criteria API which is injection-safe by construction. ' +
                 'Never concatenate user input into HQL/JPQL/native query strings.',
+              via: 'bfs',
             });
           }
         }
@@ -1391,6 +1432,7 @@ function verifyCWE564(map: NeuralMap): VerificationResult {
                 `HQL injection can read/modify any Hibernate-managed entity.`,
               fix: 'Use query.setParameter() instead of string concatenation. ' +
                 'Or use Criteria API / JPA CriteriaBuilder for type-safe queries.',
+              via: 'structural',
             });
           }
         }
@@ -1444,6 +1486,7 @@ function verifyCWE567(map: NeuralMap): VerificationResult {
             'Python: threading.Lock or queue.Queue. ' +
             'C/C++: std::mutex, std::atomic, or pthread_mutex. ' +
             'Or redesign to use immutable data and message passing.',
+          via: 'structural',
         });
       }
     }
@@ -1488,6 +1531,7 @@ function verifyCWE568(map: NeuralMap): VerificationResult {
             'protected void finalize() throws Throwable { try { /* cleanup */ } finally { super.finalize(); } }. ' +
             'Better: avoid finalize() entirely. Use try-with-resources (AutoCloseable) or ' +
             'java.lang.ref.Cleaner (Java 9+). finalize() is deprecated since Java 9.',
+          via: 'structural',
         });
       }
     }
@@ -1540,6 +1584,7 @@ function verifyCWE573(map: NeuralMap): VerificationResult {
         fix: 'Restructure code to ensure all operations on a resource complete before close()/dispose(). ' +
           'Use try-with-resources (Java), using statement (C#), with statement (Python), or ' +
           'RAII patterns (C++) to ensure correct resource lifecycle.',
+        via: 'structural',
       });
     }
 
@@ -1559,6 +1604,7 @@ function verifyCWE573(map: NeuralMap): VerificationResult {
           fix: 'Always check the return value of lookup/find/get operations before using it. ' +
             'Use Optional (Java), ?. operator (TypeScript/Kotlin), or explicit null guards. ' +
             'Ensure the catch block does not silently grant access on failure.',
+          via: 'structural',
         });
       }
     }
@@ -1576,6 +1622,7 @@ function verifyCWE573(map: NeuralMap): VerificationResult {
           `path, the exception may cause a fail-open condition.`,
         fix: 'Create a mutable copy before modification: new ArrayList<>(immutableList), ' +
           '{...frozenObj}, or list(frozenTuple). Or redesign to avoid mutation.',
+        via: 'structural',
       });
     }
   }
@@ -1610,6 +1657,7 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
       description: `${node.label} uses user-controlled input directly in a loop condition. ` +
         `An attacker can supply a very large value to cause CPU exhaustion (DoS), 0 to skip processing, or negative to cause unexpected behavior.`,
       fix: 'Validate and cap loop bounds: const count = Math.min(parseInt(input), MAX_ALLOWED). Always enforce an upper limit on user-controlled iteration counts.',
+      via: 'structural',
     });
   }
 
@@ -1631,9 +1679,11 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
       // We can't use hasTaintedPathWithoutControl here because the loop IS a CONTROL node
       // and the BFS would see it as a gate. Instead, check the loop's data_in directly.
       let loopHasTaint = false;
+      let taintViaSinkTainted = false;
       if (loop.node_type === 'CONTROL' && loop.node_subtype === 'loop') {
-        loopHasTaint = loop.data_in.some((d: any) => d.tainted) ||
-                       loop.tags?.includes('tainted_loop_bound');
+        taintViaSinkTainted = loop.data_in.some((d: any) => d.tainted) ||
+                              !!loop.tags?.includes('tainted_loop_bound');
+        loopHasTaint = taintViaSinkTainted;
       } else {
         loopHasTaint = hasTaintedPathWithoutControl(map, src.id, loop.id);
       }
@@ -1658,6 +1708,7 @@ function verifyCWE606(map: NeuralMap): VerificationResult {
             description: `User input from ${src.label} reaches loop at ${loop.label} without bounds validation. ` +
               `Attacker can control iteration count causing denial-of-service.`,
             fix: 'Add bounds validation between input and loop: validate type is integer, enforce minimum (>= 0) and maximum (<= MAX_ALLOWED) before using in loop.',
+            via: taintViaSinkTainted ? 'sink_tainted' : 'bfs',
           });
         }
       }
@@ -1702,6 +1753,7 @@ function verifyCWE613(map: NeuralMap): VerificationResult {
           `Never-expiring sessions allow stolen session tokens to be reused indefinitely.`,
         fix: 'Set a reasonable positive timeout: session.setMaxInactiveInterval(1800) for 30 minutes. ' +
           'Enforce both idle timeout and absolute timeout. Invalidate sessions on logout.',
+        via: 'structural',
       });
     }
   }
@@ -1730,6 +1782,7 @@ function verifyCWE613(map: NeuralMap): VerificationResult {
             'Sessions without expiration remain valid indefinitely, allowing stolen tokens to be reused without limit.',
           fix: 'Set session maxAge/expires. Use both absolute timeout (max session lifetime) and idle timeout ' +
             '(inactivity limit). Recommended: 15-30 min idle, 8-24h absolute for web apps.',
+          via: 'structural',
         });
       } else {
         // Check for excessively long durations
@@ -1751,6 +1804,7 @@ function verifyCWE613(map: NeuralMap): VerificationResult {
                 'Long-lived sessions increase the window for session hijacking.',
               fix: 'Reduce session timeout. For web applications: 15-30 min idle timeout, 8-24h absolute timeout. ' +
                 'For APIs: use short-lived access tokens (15-60 min) with refresh tokens.',
+              via: 'structural',
             });
           }
         }
@@ -1773,6 +1827,7 @@ function verifyCWE613(map: NeuralMap): VerificationResult {
           'Tokens without expiration are valid forever and cannot be effectively revoked.',
         fix: 'Always set expiresIn/exp when creating JWTs. Use short-lived access tokens (15-60 min) ' +
           'with a refresh token rotation strategy. Validate exp on every request.',
+        via: 'structural',
       });
     }
   }
@@ -1796,6 +1851,7 @@ function verifyCWE613(map: NeuralMap): VerificationResult {
           'Users cannot explicitly end sessions, leaving tokens valid until natural expiration.',
         fix: 'Implement a logout endpoint that destroys the server-side session (req.session.destroy()) ' +
           'and clears the session cookie. For JWTs, maintain a token blocklist or use short-lived tokens with refresh token revocation.',
+        via: 'structural',
       });
     }
   }
@@ -1838,6 +1894,7 @@ function verifyCWE616(map: NeuralMap): VerificationResult {
           fix: 'Always check $_FILES["x"]["error"] === UPLOAD_ERR_OK first. Use move_uploaded_file($_FILES["x"]["tmp_name"], $dest) ' +
             'which verifies the file was actually uploaded via HTTP POST. Never trust $_FILES["x"]["name"] or ["type"] — ' +
             'validate extensions against an allowlist and check MIME with finfo_file().',
+          via: 'structural',
         });
         continue;
       }
@@ -1859,6 +1916,7 @@ function verifyCWE616(map: NeuralMap): VerificationResult {
             fix: 'Generate a safe filename server-side (e.g., UUID + validated extension). ' +
               'Validate the extension against an allowlist. Check the file content with finfo/magic bytes. ' +
               'Never use the client filename directly in file system operations.',
+            via: 'structural',
           });
         }
       }
@@ -1893,6 +1951,7 @@ function verifyCWE616(map: NeuralMap): VerificationResult {
             `(name, type, tmp_name, error, size) — all must be checked for safe handling.`,
           fix: 'Check error code, validate file size, verify MIME type server-side (finfo_file), ' +
             'generate a safe destination filename, and use move_uploaded_file() for the actual move.',
+          via: 'bfs',
         });
       }
     }
@@ -1929,6 +1988,7 @@ function verifyCWE617(map: NeuralMap): VerificationResult {
           `An attacker can craft input that fails the assertion, causing denial-of-service.`,
         fix: 'Replace assert() with proper input validation that returns an error response (400 Bad Request). ' +
           'Assertions are for invariants that should NEVER be false — user input can be anything.',
+        via: 'structural',
       });
       continue;
     }
@@ -1945,6 +2005,7 @@ function verifyCWE617(map: NeuralMap): VerificationResult {
           description: `User input from ${src.label} can reach assertion at ${node.label}. ` +
             `If crafted input causes the assertion to fail, the process will abort (DoS).`,
           fix: 'Either: (1) validate input before it reaches the assertion, or (2) replace the assertion with proper error handling that returns a graceful error instead of crashing.',
+          via: 'bfs',
         });
         break;
       }
@@ -1965,6 +2026,7 @@ function verifyCWE617(map: NeuralMap): VerificationResult {
               `If this code is reachable and assertions are enabled, it will unconditionally crash the process.`,
             fix: 'Remove the always-failing assert, or replace with proper error handling (throw, return error). ' +
               'If this is meant as unreachable-code marker, use a throw statement instead.',
+            via: 'structural',
           });
         } else {
           const hasErrorPath = /\b(catch|error|except|fail|invalid|unexpected)\b/i.test(code);
@@ -1977,6 +2039,7 @@ function verifyCWE617(map: NeuralMap): VerificationResult {
                 `(assertions not compiled out), a failed assertion will crash the process instead of handling the error gracefully.`,
               fix: 'Replace assert with proper error handling (throw, return error code, log and recover). ' +
                 'Reserve assertions for truly impossible conditions, and ensure they are compiled out in production (NDEBUG).',
+              via: 'structural',
             });
           }
         }
@@ -2023,6 +2086,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
         fix: 'Remove extract() entirely. Access request data explicitly: $name = $_POST["name"]. ' +
           'If extract is truly needed, use EXTR_SKIP to prevent overwriting: extract($data, EXTR_SKIP). ' +
           'Better: use a framework that provides structured input access (Laravel $request->input()).',
+        via: 'structural',
       });
       continue;
     }
@@ -2038,6 +2102,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
         fix: 'Replace extract($data) with explicit assignments. If needed, use extract($data, EXTR_SKIP) ' +
           'to prevent overwriting existing variables. For parse_str(), always provide a second argument: ' +
           'parse_str($str, $result) to capture into a named array instead of local scope.',
+        via: 'structural',
       });
       continue;
     }
@@ -2052,6 +2117,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
           `any local variable can be overwritten.`,
         fix: 'Replace $$key = $value with an associative array: $data[$key] = $value. ' +
           'This isolates dynamic keys into a container instead of polluting the local scope.',
+        via: 'structural',
       });
       continue;
     }
@@ -2066,6 +2132,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
         fix: 'Use a dictionary to store dynamic values: data[key] = value. ' +
           'Never call locals().update() or globals().update() with user-controlled data. ' +
           'Avoid exec() — use ast.literal_eval() for safe data parsing.',
+        via: 'structural',
       });
       continue;
     }
@@ -2083,6 +2150,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
           fix: 'Validate method/attribute names against an explicit allowlist: ' +
             'ALLOWED = [:name, :email]; raise unless ALLOWED.include?(attr). ' +
             'Use strong_parameters in Rails to whitelist permitted attributes.',
+          via: 'structural',
         });
         continue;
       }
@@ -2099,6 +2167,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
         fix: 'Use a dedicated data object instead of assigning to this/global. ' +
           'Filter keys against an allowlist before Object.assign(). ' +
           'Never use the "with" statement — it is deprecated and creates scope injection risks.',
+        via: 'structural',
       });
     }
   }
@@ -2124,6 +2193,7 @@ function verifyCWE621(map: NeuralMap): VerificationResult {
             `any variable in scope — including authentication flags and configuration.`,
           fix: 'Remove extract/dynamic variable creation, or filter the input to only contain expected keys. ' +
             'Use explicit variable assignment instead of bulk variable injection.',
+          via: 'bfs',
         });
       }
     }
@@ -2166,6 +2236,7 @@ function verifyCWE622(map: NeuralMap): VerificationResult {
           `An attacker can specify an arbitrary module path, leading to code execution.`,
         fix: 'Never use user input in require()/import(). Use an allowlist of permitted modules: ' +
           'const allowed = { "json": jsonPlugin, "csv": csvPlugin }; const handler = allowed[input].',
+        via: 'structural',
       });
       continue;
     }
@@ -2180,6 +2251,7 @@ function verifyCWE622(map: NeuralMap): VerificationResult {
           `malicious behavior into the hook chain.`,
         fix: 'Validate hook arguments: check types, validate against an allowlist of permitted hooks/handlers, ' +
           'and never allow user input to specify function references directly.',
+        via: 'structural',
       });
     }
   }
@@ -2201,6 +2273,7 @@ function verifyCWE622(map: NeuralMap): VerificationResult {
           description: `User input from ${src.label} flows to hook registration at ${hook.label}. ` +
             `If this input controls which hook is registered or its arguments, attackers can inject behavior.`,
           fix: 'Add input validation between the ingress and hook registration. Use allowlists for permitted hook names and validate argument types.',
+          via: 'bfs',
         });
       }
     }
@@ -2247,6 +2320,7 @@ function verifyCWE624(map: NeuralMap): VerificationResult {
           `This is equivalent to eval() and enables remote code execution if input is user-controlled.`,
         fix: 'Remove the /e flag. In PHP, use preg_replace_callback() instead of preg_replace with /e. ' +
           'In Perl, use /r with a callback or s///r with explicit evaluation only on trusted data.',
+        via: 'structural',
       });
       continue;
     }
@@ -2260,6 +2334,7 @@ function verifyCWE624(map: NeuralMap): VerificationResult {
           `Attacker can inject regex metacharacters causing ReDoS, or in some languages, code execution.`,
         fix: 'Escape user input before using in regex: JS: input.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"), ' +
           'Python: re.escape(input), Java: Pattern.quote(input), Go: regexp.QuoteMeta(input).',
+        via: 'structural',
       });
     }
   }
@@ -2283,6 +2358,7 @@ function verifyCWE624(map: NeuralMap): VerificationResult {
             `or, in languages with executable regex, arbitrary code execution.`,
           fix: 'Apply regex escaping (re.escape, Pattern.quote, etc.) to user input before compiling. ' +
             'Or use string matching (indexOf, includes) instead of regex for simple searches.',
+          via: 'bfs',
         });
       }
     }
@@ -2336,6 +2412,7 @@ function verifyCWE626(map: NeuralMap): VerificationResult {
             fix: 'Strip null bytes from input BEFORE any validation: $input = str_replace(chr(0), "", $input). ' +
               'In PHP 5.3.4+, fopen() rejects null bytes — but older versions and some C extensions do not. ' +
               'Best practice: reject input containing null bytes entirely rather than stripping.',
+            via: 'bfs',
           });
         } else {
           findings.push({
@@ -2348,6 +2425,7 @@ function verifyCWE626(map: NeuralMap): VerificationResult {
             fix: 'Strip or reject null bytes in user input: input.replace(/\\0/g, "") (JS), ' +
               'str_replace(chr(0), "", $input) (PHP), input.replace("\\x00", "") (Python). ' +
               'Better: reject any input containing null bytes with a 400 error.',
+            via: 'bfs',
           });
         }
         break;
@@ -2371,6 +2449,7 @@ function verifyCWE626(map: NeuralMap): VerificationResult {
         fix: 'Never use user input in include/require. Use an allowlist: ' +
           '$pages = ["home" => "home.php", "about" => "about.php"]; include($pages[$input] ?? "404.php"). ' +
           'This eliminates both path traversal and null byte attacks entirely.',
+        via: 'structural',
       });
     }
   }
@@ -2421,6 +2500,7 @@ function verifyCWE627(map: NeuralMap): VerificationResult {
           `user-controlled $var allows overwriting any variable and injecting code.`,
         fix: 'Remove eval entirely. Use an explicit mapping: $handlers = ["x" => fn() => ...]; ' +
           '$handlers[$input]() ?? throw. For dynamic variable access, use an array: $data[$key] = $value.',
+        via: 'structural',
       });
       continue;
     }
@@ -2435,6 +2515,7 @@ function verifyCWE627(map: NeuralMap): VerificationResult {
           `Combined with variable injection, this can bypass authentication or execute arbitrary code.`,
         fix: 'Replace variable variables with array access: $data[$_GET["key"]] instead of ${$_GET["key"]}. ' +
           'Validate the key against an allowlist of expected variable names.',
+        via: 'structural',
       });
       continue;
     }
@@ -2449,6 +2530,7 @@ function verifyCWE627(map: NeuralMap): VerificationResult {
           `Python code. exec(f"{var_name} = {var_value}") is equivalent to eval() for injection.`,
         fix: 'Remove exec(). Use a dictionary for dynamic variable storage: data[key] = value. ' +
           'If you need dynamic attribute access, use getattr/setattr with an allowlist of permitted attributes.',
+        via: 'structural',
       });
       continue;
     }
@@ -2464,6 +2546,7 @@ function verifyCWE627(map: NeuralMap): VerificationResult {
         fix: 'Validate attribute names against an explicit allowlist: ' +
           'ALLOWED_ATTRS = {"name", "email"}; if attr not in ALLOWED_ATTRS: raise ValueError. ' +
           'Never pass user input directly to getattr/setattr.',
+        via: 'structural',
       });
       continue;
     }
@@ -2479,6 +2562,7 @@ function verifyCWE627(map: NeuralMap): VerificationResult {
         fix: 'Replace eval/Function with structured alternatives: ' +
           'JS: use object lookup or switch/case. Python: use dict dispatch. PHP: use match/array mapping. ' +
           'For math expressions, use a safe parser library instead of eval.',
+        via: 'structural',
       });
     }
   }
@@ -2504,6 +2588,7 @@ function verifyCWE627(map: NeuralMap): VerificationResult {
             `arbitrary variable manipulation and code execution.`,
           fix: 'Remove dynamic evaluation. Use structured alternatives (dictionary lookup, switch/case, allowlist). ' +
             'If eval is absolutely necessary, sandbox it completely and validate input against a strict grammar.',
+          via: 'bfs',
         });
       }
     }
@@ -2553,6 +2638,7 @@ function verifyCWE636(map: NeuralMap): VerificationResult {
           `the error condition to bypass authentication entirely.`,
         fix: 'Security checks MUST fail closed: catch blocks should return false, throw, or deny access. ' +
           'Pattern: try { return verifyToken(token); } catch (e) { return false; } — never catch and allow.',
+        via: 'structural',
       });
       continue;
     }
@@ -2567,6 +2653,7 @@ function verifyCWE636(map: NeuralMap): VerificationResult {
           `silently continues or returns True, effectively granting access on failure.`,
         fix: 'Replace "except: pass" with "except: return False" or "except: raise". ' +
           'Security checks must fail closed. Log the error for debugging but always deny access on exception.',
+        via: 'structural',
       });
       continue;
     }
@@ -2586,6 +2673,7 @@ function verifyCWE636(map: NeuralMap): VerificationResult {
           fix: 'Initialize security variables to false/deny: let isAuthorized = false; ' +
             'Set to true ONLY after positive verification: if (validToken) isAuthorized = true. ' +
             'This ensures any unexpected code path defaults to deny.',
+          via: 'structural',
         });
         continue;
       }
@@ -2614,6 +2702,7 @@ function verifyCWE636(map: NeuralMap): VerificationResult {
           `Security mechanisms must fail closed — deny access on any unexpected condition.`,
         fix: 'Add explicit deny in all catch/except blocks: return false, throw an auth error, or redirect to login. ' +
           'Never use empty catch blocks or "except: pass" in security-critical code paths.',
+        via: 'structural',
       });
     }
   }
@@ -2669,6 +2758,7 @@ function verifyCWE920(map: NeuralMap): VerificationResult {
               `Without size/rate limits, an attacker can submit crafted input that consumes excessive ` +
               `CPU, memory, or storage — causing denial of service.`,
             fix: p.fix,
+            via: 'structural',
           });
           break;
         }
@@ -2729,6 +2819,7 @@ function verifyCWE921(map: NeuralMap): VerificationResult {
           description: `${node.label}: ${p.name}. ` +
             `Sensitive data stored without access controls can be read by other applications or attackers.`,
           fix: p.fix,
+          via: 'structural',
         });
         break;
       }
@@ -2750,6 +2841,7 @@ function verifyCWE921(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Storage node ${store.label} handles sensitive data but has no visible encryption or access control.`,
         fix: 'Use encrypted storage with access controls. Mobile: Keychain/Keystore. Server: Vault, AWS KMS.',
+        via: 'structural',
       });
     }
   }
@@ -2782,7 +2874,8 @@ function verifyCWE922(map: NeuralMap): VerificationResult {
     for (const p of INSECURE_922) {
       if (p.pattern.test(code)) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: `CONTROL (secure storage — ${p.name})`, severity: p.severity,
-          description: `${node.label}: ${p.name}. Storing sensitive information in insecure mechanisms exposes it to unauthorized access, XSS, or device compromise.`, fix: p.fix });
+          description: `${node.label}: ${p.name}. Storing sensitive information in insecure mechanisms exposes it to unauthorized access, XSS, or device compromise.`, fix: p.fix,
+          via: 'structural' });
         break;
       }
     }
@@ -2797,7 +2890,8 @@ function verifyCWE922(map: NeuralMap): VerificationResult {
       if (!sibs.some(n => ENC922.test(stripComments(n.analysis_snapshot || n.code_snapshot)))) {
         findings.push({ source: nodeRef(store), sink: nodeRef(store), missing: 'CONTROL (encrypted/access-controlled storage)', severity: 'high',
           description: `Storage node ${store.label} handles sensitive data without encryption or access controls.`,
-          fix: 'Encrypt sensitive data before storing. Use Keychain (iOS), Keystore (Android), DPAPI (Windows), or Vault/KMS.' });
+          fix: 'Encrypt sensitive data before storing. Use Keychain (iOS), Keystore (Android), DPAPI (Windows), or Vault/KMS.',
+          via: 'scope_taint' });
       }
     }
   }
@@ -2829,7 +2923,8 @@ function verifyCWE924(map: NeuralMap): VerificationResult {
         description: `Message channel at ${node.label} lacks integrity verification. ` +
           (tlsOnly ? `TLS protects in transit but not against compromised endpoints, replays, or queue tampering.`
                    : `Without integrity checks, messages can be tampered with in transit or at rest.`),
-        fix: 'Sign messages with HMAC-SHA256 or Ed25519. Include nonce/timestamp for replay prevention. Verify before processing.' });
+        fix: 'Sign messages with HMAC-SHA256 or Ed25519. Include nonce/timestamp for replay prevention. Verify before processing.',
+        via: 'scope_taint' });
     }
   }
   return { cwe: 'CWE-924', name: 'Improper Enforcement of Message Integrity During Transmission', holds: findings.length === 0, findings };

@@ -109,6 +109,7 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
           fix: 'Move secrets to environment variables or a secret manager. ' +
             'Use process.env.SECRET_NAME or a vault client. ' +
             'Never commit secrets to source control.',
+          via: 'structural',
         });
         break; // One finding per node is enough
       }
@@ -157,6 +158,7 @@ function verifyCWE798(map: NeuralMap): VerificationResult {
             fix: 'Move secrets to environment variables or a secret manager. ' +
               'Use process.env.SECRET_NAME or a vault client. ' +
               'Never commit secrets to source control.',
+            via: 'source_line_fallback',
           });
           break; // One finding per line is enough
         }
@@ -208,6 +210,7 @@ function verifyCWE200(map: NeuralMap): VerificationResult {
             fix: 'Explicitly select which fields to return (allowlist pattern). ' +
               'Use DTO/view models to strip sensitive fields before sending. ' +
               'Never send raw database records directly to clients.',
+            via: 'bfs',
           });
         }
       }
@@ -290,6 +293,7 @@ function verifyCWE256(map: NeuralMap): VerificationResult {
         fix: 'Hash passwords with bcrypt, scrypt, or Argon2 before storing. ' +
           'Example: const hashed = await bcrypt.hash(password, 12); db.store(hashed). ' +
           'Never store passwords as plaintext or with reversible encoding.',
+        via: 'structural',
       });
     }
   }
@@ -329,6 +333,7 @@ function verifyCWE257(map: NeuralMap): VerificationResult {
       PASSWORD_RE.test(txNode.label) ||
       txNode.data_in.some(d => PASSWORD_RE.test(d.name));
 
+    let pwFlowedViaBfs = false;
     if (!handlesPassword) {
       // Check if an INGRESS with password data flows into this transform
       const pwIngress = map.nodes.filter(n =>
@@ -342,6 +347,7 @@ function verifyCWE257(map: NeuralMap): VerificationResult {
         }
       }
       if (!pwFlows) continue;
+      pwFlowedViaBfs = true;
     }
 
     // Skip if a one-way hash is ALSO present (reversible encoding might be for transport, not storage)
@@ -364,6 +370,7 @@ function verifyCWE257(map: NeuralMap): VerificationResult {
       fix: 'Use one-way hashing (bcrypt, scrypt, Argon2) for passwords — NEVER reversible encryption. ' +
         'Encryption (AES, base64) can be reversed with the key. Hashing cannot be reversed. ' +
         'Example: await bcrypt.hash(password, 12) instead of encrypt(password, key).',
+      via: pwFlowedViaBfs ? 'bfs' : 'structural',
     });
   }
 
@@ -411,6 +418,7 @@ function verifyCWE260(map: NeuralMap): VerificationResult {
       fix: 'Move passwords to environment variables or a secret manager (AWS SSM, HashiCorp Vault, Azure Key Vault). ' +
         'Reference them as: process.env.DB_PASSWORD or vault.read("secret/db"). ' +
         'Never commit config files with real passwords.',
+      via: 'structural',
     });
   }
 
@@ -498,6 +506,7 @@ function verifyCWE312(map: NeuralMap): VerificationResult {
           : 'Encrypt sensitive data before writing to storage using AES-256-GCM or similar. ' +
             'Use field-level encryption for database columns containing PII, secrets, or financial data. ' +
             'Example: const encrypted = crypto.createCipheriv("aes-256-gcm", key, iv).update(data).',
+        via: 'structural',
       });
     }
   }
@@ -556,6 +565,7 @@ function verifyCWE313(map: NeuralMap): VerificationResult {
       fix: 'Encrypt sensitive data before writing to files. Use AES-256-GCM for field-level encryption. ' +
         'Consider using OS-level encrypted storage or a secrets manager instead of plain files. ' +
         'Set restrictive file permissions (0600) as defense in depth.',
+      via: 'structural',
     });
   }
 
@@ -597,6 +607,7 @@ function verifyCWE314(map: NeuralMap): VerificationResult {
       fix: 'Encrypt sensitive values before storing in the registry. On Windows, use DPAPI (ProtectedData.Protect). ' +
         'On macOS/iOS, use Keychain. On Android, use EncryptedSharedPreferences. ' +
         'Never store plaintext passwords or API keys in system registries.',
+      via: 'structural',
     });
   }
 
@@ -671,6 +682,7 @@ function verifyCWE315(map: NeuralMap): VerificationResult {
           fix: 'Encrypt sensitive cookie values. Use signed/encrypted cookies (e.g., jwt.sign or cookie-parser with secret). ' +
             'Set flags: httpOnly: true (prevents JS access), secure: true (HTTPS only), sameSite: "strict". ' +
             'Prefer server-side sessions over storing sensitive data in cookies.',
+          via: 'structural',
         });
       }
       continue;
@@ -730,6 +742,7 @@ function verifyCWE315(map: NeuralMap): VerificationResult {
           `Variable '${valueVar}' carries credential/sensitive data to the cookie without encryption.`,
         fix: 'Encrypt or hash sensitive cookie values before storage. Use MessageDigest/SHA-256+, AES encryption, ' +
           'or signed cookies (jwt.sign). Set flags: httpOnly, secure, sameSite.',
+        via: 'scope_taint',
       });
     }
   }
@@ -773,6 +786,7 @@ function verifyCWE315(map: NeuralMap): VerificationResult {
               `Variable '${valVar}' carries credential/sensitive data to the cookie without encryption or hashing.`,
             fix: 'Encrypt or hash sensitive cookie values before storage. Use MessageDigest/SHA-256+, AES encryption, ' +
               'or signed cookies (jwt.sign). Set flags: httpOnly, secure, sameSite.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -818,6 +832,7 @@ function verifyCWE316(map: NeuralMap): VerificationResult {
           `Log entries persist in memory buffers, log files, and log aggregation services.`,
         fix: 'Never log passwords, tokens, or secret keys. Redact sensitive fields before logging. ' +
           'Use structured logging with field-level redaction. Example: log({ user: id, password: "[REDACTED]" }).',
+        via: 'structural',
       });
       continue;
     }
@@ -837,6 +852,7 @@ function verifyCWE316(map: NeuralMap): VerificationResult {
         fix: 'Minimize the lifetime of sensitive data in memory. Zero buffers after use. ' +
           'In Node.js, use Buffer.alloc() and buf.fill(0) when done. Avoid caching secrets in global scope. ' +
           'In languages with manual memory management, explicitly zero and free secret buffers.',
+        via: 'structural',
       });
     }
   }
@@ -905,6 +921,7 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
           fix: 'Use HTTPS (TLS) for all endpoints that handle sensitive data. ' +
             'Replace http:// with https:// in all API URLs. Configure HSTS headers. ' +
             'In production, enforce TLS 1.2+ and reject downgrade attempts.',
+          via: 'structural',
         });
         continue;
       }
@@ -920,6 +937,7 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
         description: `Sensitive data transmitted over cleartext FTP at ${netNode.label}. ` +
           `FTP sends credentials and data in plaintext.`,
         fix: 'Use SFTP or FTPS instead of plain FTP. Never transmit sensitive data over unencrypted channels.',
+        via: 'structural',
       });
       continue;
     }
@@ -934,6 +952,7 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
         description: `Sensitive data transmitted over Telnet at ${netNode.label}. ` +
           `Telnet sends all data including passwords in plaintext.`,
         fix: 'Use SSH instead of Telnet. Never use unencrypted protocols for sensitive data.',
+        via: 'structural',
       });
     }
   }
@@ -959,6 +978,7 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
             `An attacker on the network can intercept passwords, tokens, and PII in transit.`,
           fix: 'Serve all sensitive endpoints over HTTPS. Redirect HTTP to HTTPS. ' +
             'Use HSTS (Strict-Transport-Security header) to prevent downgrade attacks.',
+          via: 'structural',
         });
       }
     }
@@ -1004,10 +1024,10 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
         sink.data_in.some(d => d.sensitivity !== 'NONE' || SENSITIVE_RE.test(d.name) || d.tainted);
       if (!sinkSensitive) continue;
 
-      const hasUnsafePath = hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-        scopeBasedTaintReaches(map, src.id, sink.id);
+      const bfsHit319 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const scopeHit319 = !bfsHit319 && scopeBasedTaintReaches(map, src.id, sink.id);
 
-      if (hasUnsafePath) {
+      if (bfsHit319 || scopeHit319) {
         const scopeSnaps = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnaps.join('\n'));
         if (!CRYPTO_TRANSFORM_RE_319.test(combinedScope)) {
@@ -1023,6 +1043,7 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
                 `in a database/auth call — an attacker on the network can intercept them (MITM).`,
               fix: 'Use SSLSocket/TLS for the network connection, or decrypt credentials with Cipher ' +
                 'before using them. Never transmit passwords over plain TCP sockets.',
+              via: bfsHit319 ? 'bfs' : 'scope_taint',
             });
           }
         }
@@ -1090,6 +1111,7 @@ function verifyCWE319(map: NeuralMap): VerificationResult {
                     fix: 'Use SSLSocket instead of plain Socket for receiving credentials. ' +
                       'Alternatively, decrypt the password with Cipher before passing to getConnection(). ' +
                       'Never transmit credentials over unencrypted channels.',
+                    via: 'source_line_fallback',
                   });
                 }
               }
@@ -1138,7 +1160,8 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
         if (LEAK_RE.test(code) && !SAFE_RE.test(code) && CLIENT_EGRESS_RE.test(code)) {
           findings.push({ source: nodeRef(errNode), sink: nodeRef(sink), missing: 'TRANSFORM (error message sanitization before response)', severity: 'medium',
             description: `Error handler at ${errNode.label} exposes detailed error information (stack traces, internal messages) in the response.`,
-            fix: 'Return generic error messages to users. Log detailed errors server-side. Use error codes instead of raw exception messages.' });
+            fix: 'Return generic error messages to users. Log detailed errors server-side. Use error codes instead of raw exception messages.',
+            via: 'structural' });
         }
         continue;
       }
@@ -1147,7 +1170,8 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
         if (LEAK_RE.test(errCode) && !SAFE_RE.test(sinkCode) && CLIENT_EGRESS_RE.test(sinkCode)) {
           findings.push({ source: nodeRef(errNode), sink: nodeRef(sink), missing: 'TRANSFORM (error message sanitization before response)', severity: 'medium',
             description: `Error handler at ${errNode.label} sends detailed error info to ${sink.label}. Stack traces or DB error messages may be exposed.`,
-            fix: 'Return generic error messages to users. Log detailed errors server-side. Use error codes instead of raw exception messages.' });
+            fix: 'Return generic error messages to users. Log detailed errors server-side. Use error codes instead of raw exception messages.',
+            via: 'bfs' });
         }
       }
     }
@@ -1180,6 +1204,7 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
               severity: 'medium',
               description: `Catch block at ${node.label} calls printStackTrace(), exposing full stack trace including internal class names, file paths, and line numbers.`,
               fix: 'Log exceptions server-side with a logging framework. Return generic error messages to users. Never call printStackTrace() in production code.',
+              via: 'structural',
             });
           }
         }
@@ -1197,6 +1222,7 @@ function verifyCWE209(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Catch block at ${node.label} sends exception details to the HTTP response, exposing internal error information.`,
             fix: 'Return generic error messages to users. Log detailed errors server-side using a logging framework.',
+            via: 'structural',
           });
         }
       }
@@ -1224,7 +1250,8 @@ function verifyCWE215(map: NeuralMap): VerificationResult {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (production environment gate for debug code)',
         severity: hasSensitive ? 'high' : 'medium',
         description: `Debug code at ${node.label} is not gated by environment check. ` + (hasSensitive ? 'Debug output references sensitive data (credentials, tokens, keys).' : 'Diagnostic output may expose internal state in production.'),
-        fix: 'Remove debug code before deployment, or gate behind environment checks: if (process.env.NODE_ENV !== "production") { ... }.' });
+        fix: 'Remove debug code before deployment, or gate behind environment checks: if (process.env.NODE_ENV !== "production") { ... }.',
+        via: 'structural' });
     }
   }
   return { cwe: 'CWE-215', name: 'Insertion of Sensitive Info Into Debug Code', holds: findings.length === 0, findings };
@@ -1248,7 +1275,8 @@ function verifyCWE497(map: NeuralMap): VerificationResult {
     if (node.node_type === 'EGRESS') {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (system information filtering before response)', severity: 'medium',
         description: `Response at ${node.label} exposes system information (OS details, server version, internal paths, or internal network addresses).`,
-        fix: 'Remove system information from responses. Disable X-Powered-By headers. Use helmet.hidePoweredBy() or equivalent.' });
+        fix: 'Remove system information from responses. Disable X-Powered-By headers. Use helmet.hidePoweredBy() or equivalent.',
+        via: 'structural' });
       continue;
     }
     for (const sink of egress) {
@@ -1256,7 +1284,8 @@ function verifyCWE497(map: NeuralMap): VerificationResult {
       if (hasPathWithoutControl(map, node.id, sink.id)) {
         findings.push({ source: nodeRef(node), sink: nodeRef(sink), missing: 'CONTROL (system information filtering before response)', severity: 'medium',
           description: `System information from ${node.label} flows to response at ${sink.label}. OS details or internal network addresses may be exposed.`,
-          fix: 'Remove system information from responses. Strip X-Powered-By and Server headers.' });
+          fix: 'Remove system information from responses. Strip X-Powered-By and Server headers.',
+          via: 'bfs' });
         break;
       }
     }
@@ -1286,7 +1315,8 @@ function verifyCWE532(map: NeuralMap): VerificationResult {
     if (SENSITIVE_RE.test(code) && !SAFE_RE.test(code)) {
       findings.push({ source: nodeRef(sink), sink: nodeRef(sink), missing: 'TRANSFORM (sensitive data redaction before logging)', severity: 'high',
         description: `Log statement at ${sink.label} directly references sensitive data (passwords, tokens, keys). Log files are often accessible to operators and monitoring systems.`,
-        fix: 'Never log sensitive data. Mask/redact before logging: logger.info("Login", { user: email, password: "***" }). Use structured logging with field-level filtering.' });
+        fix: 'Never log sensitive data. Mask/redact before logging: logger.info("Login", { user: email, password: "***" }). Use structured logging with field-level filtering.',
+        via: 'structural' });
     }
   }
 
@@ -1302,7 +1332,8 @@ function verifyCWE532(map: NeuralMap): VerificationResult {
         if (!SAFE_RE.test(sinkCode) && !findings.some(f => f.sink.id === sink.id)) {
           findings.push({ source: nodeRef(src), sink: nodeRef(sink), missing: 'TRANSFORM (sensitive data redaction before logging)', severity: 'high',
             description: `Sensitive data from ${src.label} flows to log at ${sink.label} without redaction. Credentials, tokens, or PII may persist in log files.`,
-            fix: 'Redact sensitive fields before logging. Use a logging middleware that automatically masks fields like password, token, authorization.' });
+            fix: 'Redact sensitive fields before logging. Use a logging middleware that automatically masks fields like password, token, authorization.',
+            via: 'bfs' });
         }
       }
     }
@@ -1332,7 +1363,8 @@ function verifyCWE538(map: NeuralMap): VerificationResult {
     if (PUBLIC_PATH_RE.test(code) && (SENSITIVE_RE.test(code) || writer.data_in.some(d => d.sensitivity !== 'NONE')) && !SAFE_RE.test(code)) {
       findings.push({ source: nodeRef(writer), sink: nodeRef(writer), missing: 'CONTROL (write sensitive data outside web-accessible directories)', severity: 'high',
         description: `File write at ${writer.label} places sensitive data in a web-accessible directory. Files in public/static/uploads may be directly retrievable.`,
-        fix: 'Store sensitive files outside the web root. Use application-level access controls for file downloads. Never write config or credential files to public directories.' });
+        fix: 'Store sensitive files outside the web root. Use application-level access controls for file downloads. Never write config or credential files to public directories.',
+        via: 'structural' });
     }
   }
 
@@ -1344,7 +1376,8 @@ function verifyCWE538(map: NeuralMap): VerificationResult {
       if (PUBLIC_PATH_RE.test(writerCode) && !SAFE_RE.test(writerCode) && hasPathWithoutControl(map, src.id, writer.id) && !findings.some(f => f.sink.id === writer.id)) {
         findings.push({ source: nodeRef(src), sink: nodeRef(writer), missing: 'CONTROL (prevent sensitive data from reaching public directories)', severity: 'high',
           description: `Sensitive data from ${src.label} flows to file write at ${writer.label} in a public directory.`,
-          fix: 'Write sensitive files outside the web root, or use access-controlled download endpoints.' });
+          fix: 'Write sensitive files outside the web root, or use access-controlled download endpoints.',
+          via: 'bfs' });
       }
     }
   }
@@ -1367,7 +1400,8 @@ function verifyCWE540(map: NeuralMap): VerificationResult {
     if ((HARDCODED_RE.test(code) || INLINE_SECRET_RE.test(code)) && !SAFE_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (externalize secrets to environment variables or secret manager)', severity: 'high',
         description: `Source code at ${node.label} contains hardcoded sensitive values (API keys, connection strings, or cryptographic material). Source code is stored in version control and accessible to all developers.`,
-        fix: 'Move secrets to environment variables or a secret manager (AWS Secrets Manager, HashiCorp Vault). Rotate any secrets committed to version control.' });
+        fix: 'Move secrets to environment variables or a secret manager (AWS Secrets Manager, HashiCorp Vault). Rotate any secrets committed to version control.',
+        via: 'structural' });
     }
   }
   return { cwe: 'CWE-540', name: 'Inclusion of Sensitive Info in Source Code', holds: findings.length === 0, findings };
@@ -1388,7 +1422,8 @@ function verifyCWE548(map: NeuralMap): VerificationResult {
     if (DIR_LISTING_RE.test(code) && !SAFE_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (disable directory listing)', severity: 'medium',
         description: `Configuration at ${node.label} enables directory listing. Attackers can enumerate files, discovering backups, config files, and hidden endpoints.`,
-        fix: 'Disable directory listing: Options -Indexes (Apache), autoindex off (nginx), remove serve-index middleware (Express).' });
+        fix: 'Disable directory listing: Options -Indexes (Apache), autoindex off (nginx), remove serve-index middleware (Express).',
+        via: 'structural' });
     }
   }
   return { cwe: 'CWE-548', name: 'Exposure of Info Through Directory Listing', holds: findings.length === 0, findings };
@@ -1409,7 +1444,8 @@ function verifyCWE550(map: NeuralMap): VerificationResult {
     if (VERBOSE_ERROR_RE.test(code) && !SAFE_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (disable detailed error pages in production)', severity: 'medium',
         description: `Server configuration at ${node.label} enables detailed error pages. Framework error pages expose stack traces, source paths, DB queries, and environment variables.`,
-        fix: 'Disable debug error pages in production: DEBUG=False (Django), NODE_ENV=production (Express), customErrors mode="RemoteOnly" (.NET). Use custom error pages.' });
+        fix: 'Disable debug error pages in production: DEBUG=False (Django), NODE_ENV=production (Express), customErrors mode="RemoteOnly" (.NET). Use custom error pages.',
+        via: 'structural' });
     }
   }
   return { cwe: 'CWE-550', name: 'Server-Generated Error Message Info Leak', holds: findings.length === 0, findings };
@@ -1432,7 +1468,8 @@ function verifyCWE598(map: NeuralMap): VerificationResult {
     if (GET_SENSITIVE_RE.test(code) || GET_FORM_RE.test(code) || FETCH_GET_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (use POST method for sensitive data)', severity: 'medium',
         description: `Code at ${node.label} transmits sensitive data via GET query parameters. Query strings are logged by web servers, proxies, and browsers.`,
-        fix: 'Use POST requests with data in the request body for sensitive fields. Never put credentials or PII in URLs. For APIs, send sensitive data in headers (Authorization) or POST body.' });
+        fix: 'Use POST requests with data in the request body for sensitive fields. Never put credentials or PII in URLs. For APIs, send sensitive data in headers (Authorization) or POST body.',
+        via: 'structural' });
     }
   }
   for (const src of ingress) {
@@ -1442,7 +1479,8 @@ function verifyCWE598(map: NeuralMap): VerificationResult {
         !findings.some(f => f.source.id === src.id)) {
       findings.push({ source: nodeRef(src), sink: nodeRef(src), missing: 'CONTROL (use POST method for routes handling sensitive data)', severity: 'medium',
         description: `GET route at ${src.label} accepts sensitive parameters. GET parameters appear in server logs, browser history, and Referer headers.`,
-        fix: 'Change to POST endpoint for sensitive data. Use req.body instead of req.query for credentials.' });
+        fix: 'Change to POST endpoint for sensitive data. Use req.body instead of req.query for credentials.',
+        via: 'structural' });
     }
   }
   // ---------------------------------------------------------------------------
@@ -1466,6 +1504,7 @@ function verifyCWE598(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Code at ${node.label} generates an HTML form using GET method with a password field. Passwords will appear in the URL, browser history, server logs, and Referer headers.`,
             fix: 'Change the form method to POST. Sensitive data like passwords should never be transmitted as URL query parameters.',
+            via: 'structural',
           });
         }
       }
@@ -1522,7 +1561,8 @@ function verifyCWE615(map: NeuralMap): VerificationResult {
     if (commentText.length > 0 && COMMENT_SENSITIVE_RE.test(commentText)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (remove sensitive information from source code comments)', severity: 'medium',
         description: `Comments at ${node.label} contain sensitive information (credentials, API keys, internal URLs, or TODO items with passwords). Comments persist in version control and may be served to clients in JS bundles.`,
-        fix: 'Remove all credentials, API keys, and internal URLs from comments. Use a secrets manager. Run pre-commit hooks (e.g., detect-secrets) to catch secrets in comments.' });
+        fix: 'Remove all credentials, API keys, and internal URLs from comments. Use a secrets manager. Run pre-commit hooks (e.g., detect-secrets) to catch secrets in comments.',
+        via: 'structural' });
     }
 
     // Check for HTML comments with credentials embedded in string literals sent to output
@@ -1535,7 +1575,8 @@ function verifyCWE615(map: NeuralMap): VerificationResult {
         description: `HTML comment at ${node.label} contains sensitive information (credentials, passwords) that will be sent to the client. ` +
           `HTML comments are visible in browser "View Source" and can be harvested by attackers.`,
         fix: 'Remove all credentials from HTML comments. Never embed passwords, API keys, or database credentials ' +
-          'in HTML output, even inside comments. Use server-side configuration for sensitive values.' });
+          'in HTML output, even inside comments. Use server-side configuration for sensitive values.',
+        via: 'structural' });
     }
   }
   return { cwe: 'CWE-615', name: 'Inclusion of Sensitive Info in Source Code Comments', holds: findings.length === 0, findings };
@@ -1582,6 +1623,7 @@ function verifyCWE359(map: NeuralMap): VerificationResult {
               `Log systems are often less secured, exposing PII to wider audiences.`,
             fix: 'Redact or mask PII before logging. Use opaque identifiers for correlation. ' +
               'Never log full SSN, health data, or financial account numbers.',
+            via: 'bfs',
           });
         }
       }
@@ -1598,6 +1640,7 @@ function verifyCWE359(map: NeuralMap): VerificationResult {
               `This may violate GDPR, CCPA, HIPAA, or other privacy regulations.`,
             fix: 'Anonymize or pseudonymize PII before sending to third parties. ' +
               'Use hashed identifiers instead of real PII for analytics.',
+            via: 'bfs',
           });
         }
       }
@@ -1616,6 +1659,7 @@ function verifyCWE359(map: NeuralMap): VerificationResult {
               `Over-exposing PII violates least-privilege and may breach privacy regulations.`,
             fix: 'Use a response DTO that explicitly includes only necessary fields. ' +
               'Apply data minimization — return only what the consumer needs.',
+            via: 'bfs',
           });
           break;
         }
@@ -1664,6 +1708,7 @@ function verifyCWE402(map: NeuralMap): VerificationResult {
               `Stack traces reveal file paths, library versions, and internal architecture.`,
             fix: 'Never send raw stack traces in production. Return a generic error with an error ID. ' +
               'Log the full error server-side for debugging.',
+            via: node.node_type === 'EGRESS' ? 'structural' : 'bfs',
           });
         }
       }
@@ -1680,6 +1725,7 @@ function verifyCWE402(map: NeuralMap): VerificationResult {
               description: `Internal resource from ${node.label} flows to external boundary at ${sink.label}. ` +
                 `Internal IPs, file paths, or connection strings may leak across trust boundaries.`,
               fix: 'Sanitize all responses at trust boundaries. Replace internal references with public-facing equivalents.',
+              via: 'bfs',
             });
             break;
           }
@@ -1698,6 +1744,7 @@ function verifyCWE402(map: NeuralMap): VerificationResult {
               `Environment variables often contain secrets, API keys, and infrastructure details.`,
             fix: 'Never include process.env values in API responses. ' +
               'Use a dedicated config endpoint that returns only public settings.',
+            via: sink.id === node.id ? 'structural' : 'bfs',
           });
           break;
         }
@@ -1747,6 +1794,7 @@ function verifyCWE524(map: NeuralMap): VerificationResult {
           fix: 'Set Cache-Control: no-store on all responses containing sensitive data. ' +
             'Also set Pragma: no-cache for HTTP/1.0 compatibility. ' +
             'Consider adding Surrogate-Control: no-store for CDN layers.',
+          via: 'structural',
         });
       }
     }
@@ -1784,6 +1832,7 @@ function verifyCWE525(map: NeuralMap): VerificationResult {
           fix: 'Add autocomplete="off" to sensitive form fields (or autocomplete="new-password" for password fields). ' +
             'Set Cache-Control: no-store on pages containing sensitive forms. ' +
             'For single-page apps, clear sensitive fields on component unmount.',
+          via: 'structural',
         });
       }
     }
@@ -1825,6 +1874,7 @@ function verifyCWE526(map: NeuralMap): VerificationResult {
               `Environment variables typically contain database URLs, API keys, and secrets.`,
             fix: 'Never serialize the full process.env object. Explicitly select only public configuration values. ' +
               'Use a config module that whitelists safe environment variables.',
+            via: sink.id === node.id ? 'structural' : 'bfs',
           });
           break;
         }
@@ -1847,6 +1897,7 @@ function verifyCWE526(map: NeuralMap): VerificationResult {
                   `Environment variables often contain secrets that should never reach client-side code.`,
                 fix: 'Access only specific, known-safe environment variables. Use a PUBLIC_ or NEXT_PUBLIC_ prefix convention. ' +
                   'Never pass raw env values to client responses without explicit whitelisting.',
+                via: eg.id === node.id ? 'structural' : 'bfs',
               });
               break;
             }
@@ -1891,6 +1942,7 @@ function verifyCWE526(map: NeuralMap): VerificationResult {
                   severity: 'medium',
                   description: `Environment variable read at ${envNode.label} is exposed via HTTP response at ${egNode.label}. Environment variables contain sensitive system configuration.`,
                   fix: 'Do not expose environment variables in HTTP responses. If configuration display is needed, whitelist specific safe values.',
+                  via: 'scope_taint',
                 });
               }
             }
@@ -1912,6 +1964,7 @@ function verifyCWE526(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `Method ${node.label} reads environment variables and writes to HTTP response. Environment variables may contain PATH, credentials, or internal configuration.`,
           fix: 'Remove environment variable data from response output. Log server-side only if needed.',
+          via: 'structural',
         });
       }
     }
@@ -1947,6 +2000,7 @@ function verifyCWE528(map: NeuralMap): VerificationResult {
         fix: 'Disable core dumps in production (ulimit -c 0 or setrlimit RLIMIT_CORE to 0). ' +
           'If needed for debugging, set restrictive permissions (chmod 600) and direct dumps to a protected directory. ' +
           'Use kernel.core_pattern to pipe dumps to a secured handler.',
+        via: 'structural',
       });
     }
   }
@@ -1987,6 +2041,7 @@ function verifyCWE552(map: NeuralMap): VerificationResult {
             'Restrict served paths to a specific public directory. ' +
             'Block access to dotfiles (.env, .git, .ssh) and config files. ' +
             'Disable directory listing (autoindex off).',
+          via: 'structural',
         });
       }
     }
@@ -2001,6 +2056,7 @@ function verifyCWE552(map: NeuralMap): VerificationResult {
           `Attackers can enumerate all files in the directory, discovering backup files, configs, and source code.`,
         fix: 'Disable directory listing. For Nginx: autoindex off. For Apache: Options -Indexes. ' +
           'Serve only explicitly mapped routes.',
+        via: 'structural',
       });
     }
   }
@@ -2039,7 +2095,8 @@ function verifyCWE210(map: NeuralMap): VerificationResult {
         description: `Error response at ${node.label} includes internal details (file paths, DB schema, query text). ` +
           `These self-generated messages reveal application internals to attackers.`,
         fix: 'Construct error messages with only user-relevant info: error code + generic description. ' +
-          'Log detailed context server-side. Never interpolate internal paths, table names, or SQL into user-facing errors.' });
+          'Log detailed context server-side. Never interpolate internal paths, table names, or SQL into user-facing errors.',
+        via: 'structural' });
       continue;
     }
 
@@ -2050,7 +2107,8 @@ function verifyCWE210(map: NeuralMap): VerificationResult {
           missing: 'TRANSFORM (sanitize self-generated error before response)',
           severity: 'medium',
           description: `Self-generated error at ${node.label} with internal details flows to response at ${sink.label}.`,
-          fix: 'Map internal errors to generic user-facing messages. Use error codes, not raw details.' });
+          fix: 'Map internal errors to generic user-facing messages. Use error codes, not raw details.',
+          via: 'bfs' });
       }
     }
   }
@@ -2092,7 +2150,8 @@ function verifyCWE211(map: NeuralMap): VerificationResult {
             description: `External error from ${ext.label} flows to response at ${sink.label} without filtering. ` +
               `Database/API error messages expose connection details, internal hostnames, and query structure.`,
             fix: 'Catch external errors and map them to generic user-facing messages. Log the original error server-side. ' +
-              'Never pass database SQLSTATE, connection strings, or upstream service errors to clients.' });
+              'Never pass database SQLSTATE, connection strings, or upstream service errors to clients.',
+            via: 'bfs' });
           break;
         }
       }
@@ -2112,7 +2171,8 @@ function verifyCWE211(map: NeuralMap): VerificationResult {
               missing: 'CONTROL (filter external error details from response)',
               severity: 'medium',
               description: `Code at ${node.label} passes external error messages directly to the response.`,
-              fix: 'Wrap external errors: catch (err) { res.status(500).json({ error: "Service unavailable" }); logger.error(err); }' });
+              fix: 'Wrap external errors: catch (err) { res.status(500).json({ error: "Service unavailable" }); logger.error(err); }',
+              via: 'structural' });
           }
           break;
         }
@@ -2121,7 +2181,8 @@ function verifyCWE211(map: NeuralMap): VerificationResult {
             missing: 'CONTROL (filter external error before response)',
             severity: 'medium',
             description: `External error passthrough at ${node.label} reaches response at ${sink.label}.`,
-            fix: 'Wrap external errors in generic messages. Log originals server-side.' });
+            fix: 'Wrap external errors in generic messages. Log originals server-side.',
+            via: 'bfs' });
           break;
         }
       }
@@ -2165,7 +2226,8 @@ function verifyCWE212(map: NeuralMap): VerificationResult {
           severity: 'high',
           description: `Code at ${node.label} stores or transfers data containing sensitive fields (passwords, tokens, PII) without scrubbing.`,
           fix: 'Explicitly select safe fields before storage/transfer: const safe = { id, email, name }. ' +
-            'Or delete sensitive fields: delete user.password. Use an allowlist, not a denylist.' });
+            'Or delete sensitive fields: delete user.password. Use an allowlist, not a denylist.',
+          via: 'structural' });
         continue;
       }
 
@@ -2177,7 +2239,8 @@ function verifyCWE212(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `Unscrubbed sensitive data from ${node.label} reaches ${sink.label}. ` +
               `Fields like password, token, or SSN may be stored or transmitted.`,
-            fix: 'Add a data transformation step that strips sensitive fields before storage/transfer. Use DTOs or view models.' });
+            fix: 'Add a data transformation step that strips sensitive fields before storage/transfer. Use DTOs or view models.',
+            via: 'bfs' });
           break;
         }
       }
@@ -2222,7 +2285,8 @@ function verifyCWE213(map: NeuralMap): VerificationResult {
               description: `Sensitive data from ${src.label} (classified/tagged as sensitive) flows to ${sink.label} ` +
                 `which has no corresponding policy enforcement. Data classification is inconsistent across components.`,
               fix: 'Enforce consistent data classification: if source marks data as PII/sensitive, all downstream consumers must ' +
-                'enforce the same policy. Use a data classification framework and enforce it at API boundaries.' });
+                'enforce the same policy. Use a data classification framework and enforce it at API boundaries.',
+              via: 'bfs' });
             break;
           }
         }
@@ -2263,7 +2327,8 @@ function verifyCWE214(map: NeuralMap): VerificationResult {
         `Command-line arguments are visible to all users via \`ps aux\`, /proc/PID/cmdline, and process monitoring tools.`,
       fix: 'Pass secrets via stdin pipe: echo "$SECRET" | command --password-stdin. ' +
         'Or use config files with restricted permissions (.my.cnf, .pgpass). ' +
-        'Or use credential helpers/secret managers. Never pass secrets as argv.' });
+        'Or use credential helpers/secret managers. Never pass secrets as argv.',
+      via: 'structural' });
   }
 
   return { cwe: 'CWE-214', name: 'Invocation of Process Using Visible Sensitive Information', holds: findings.length === 0, findings };
@@ -2305,7 +2370,8 @@ function verifyCWE222(map: NeuralMap): VerificationResult {
           `malicious portion falls beyond the truncation boundary, bypassing logging, validation, or filtering.`,
         fix: 'Log complete security data or explicitly note truncation. For validation, check the FULL input before truncating. ' +
           'For audit logs, use overflow records or reference IDs pointing to complete data. ' +
-          'Never validate truncated input — validate first, then truncate for display.' });
+          'Never validate truncated input — validate first, then truncate for display.',
+        via: 'structural' });
     }
   }
 
@@ -2363,7 +2429,8 @@ function verifyCWE223(map: NeuralMap): VerificationResult {
         description: `Security event at ${node.label} (${eventType}) is not logged. Without audit trails, ` +
           `failed attacks go undetected and incident response lacks forensic data.`,
         fix: `Log all ${eventType} events with: timestamp, actor (user/IP), action, target resource, and outcome (success/failure). ` +
-          'Use structured logging. Send security events to SIEM. Ensure logs are tamper-resistant.' });
+          'Use structured logging. Send security events to SIEM. Ensure logs are tamper-resistant.',
+        via: 'structural' });
     }
   }
 
@@ -2402,7 +2469,8 @@ function verifyCWE224(map: NeuralMap): VerificationResult {
           description: `Code at ${node.label} uses dynamic property access to invoke functions, potentially ` +
             `constructing dangerous function names at runtime to bypass static analysis and security filters.`,
           fix: 'Use Content-Security-Policy to block eval. Do not allow dynamic construction of function names. ' +
-            'Use an explicit allowlist of callable functions. Apply CSP unsafe-eval restriction.' });
+            'Use an explicit allowlist of callable functions. Apply CSP unsafe-eval restriction.',
+          via: 'structural' });
       }
     } else if (ALIAS_DANGER224_RE.test(code) && !SAFE224_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
@@ -2411,7 +2479,8 @@ function verifyCWE224(map: NeuralMap): VerificationResult {
         description: `Code at ${node.label} aliases a dangerous function (eval, exec, system) to an alternate name. ` +
           `This obscures the security-relevant operation from code review and static analysis.`,
         fix: 'Do not alias dangerous functions. Use explicit, well-named wrappers with security controls. ' +
-          'Flag aliased dangerous functions in linting rules.' });
+          'Flag aliased dangerous functions in linting rules.',
+        via: 'structural' });
     } else if (ENCODED_INVOKE224_RE.test(code) && !SAFE224_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'CONTROL (prevent encoded/obfuscated code execution)',
@@ -2419,7 +2488,8 @@ function verifyCWE224(map: NeuralMap): VerificationResult {
         description: `Code at ${node.label} decodes and immediately executes content, potentially ` +
           `using encoding to obscure a dangerous operation from security tools.`,
         fix: 'Never decode-then-execute. If dynamic code loading is needed, use integrity checks (SRI, signature verification). ' +
-          'Apply CSP restrictions. Audit all encoded content at deploy time.' });
+          'Apply CSP restrictions. Audit all encoded content at deploy time.',
+        via: 'structural' });
     }
   }
 
@@ -2460,6 +2530,7 @@ function verifyCWE226(map: NeuralMap): VerificationResult {
           fix: 'Clear all sensitive fields before returning resources to a pool: buffer.fill(0), memset_s(), ' +
             'or explicit field deletion. For connection pools, reset session state. For objects, zero all sensitive properties. ' +
             'Use explicit_bzero/SecureZeroMemory to prevent compiler optimization of the clearing.',
+          via: 'structural',
         });
       }
     }
@@ -2485,6 +2556,7 @@ function verifyCWE226(map: NeuralMap): VerificationResult {
                 `without scrubbing. The resource will be reused with leftover sensitive data intact.`,
               fix: 'Add a TRANSFORM node between the sensitive storage and the pool return that zeroes all sensitive fields. ' +
                 'Use language-appropriate secure zeroing (explicit_bzero, SecureZeroMemory, buffer.fill(0)).',
+              via: 'bfs',
             });
           }
         }
@@ -2633,6 +2705,7 @@ function verifyCWE226(map: NeuralMap): VerificationResult {
             fix: `Clear the buffer before it goes out of scope. For StringBuffer/StringBuilder: ` +
               `${buf.varName}.delete(0, ${buf.varName}.length()). For char[]: Arrays.fill(${buf.varName}, '\\0'). ` +
               `For byte[]: Arrays.fill(${buf.varName}, (byte) 0). Do this in a finally block to ensure cleanup on exceptions.`,
+            via: 'source_line_fallback',
           });
         }
       }
@@ -2679,6 +2752,7 @@ function verifyCWE226(map: NeuralMap): VerificationResult {
               `cleared. The char[]/byte[] remains in memory with sensitive content until garbage collection.`,
             fix: `Call Arrays.fill(${varName}, '\\0') in a finally block before the method returns. ` +
               `Using char[] for passwords is only secure if you actually zero it when done.`,
+            via: 'source_line_fallback',
           });
         }
       }
@@ -2716,6 +2790,7 @@ function verifyCWE472(map: NeuralMap): VerificationResult {
           'that is used without server-side re-validation. Hidden fields are trivially modifiable via browser dev tools.',
         fix: 'Never trust hidden form fields for prices, quantities, or authorization. ' +
           'Recalculate business values server-side. Use signed tokens (HMAC/JWT) for tamper detection.',
+        via: 'structural',
       });
     }
 
@@ -2730,6 +2805,7 @@ function verifyCWE472(map: NeuralMap): VerificationResult {
           `Users can freely modify ${source}s -- treating them as immutable is a pricing/authorization bypass.`,
         fix: 'Derive business-critical values from server-side state (database, session). ' +
           'If the value must come from the client, sign it with HMAC and verify on the server.',
+        via: 'structural',
       });
     }
   }
@@ -2754,6 +2830,7 @@ function verifyCWE472(map: NeuralMap): VerificationResult {
             'If this is price/quantity/role, the user can manipulate it to bypass business rules.',
           fix: 'Recalculate prices/totals server-side from database. Validate roles against session. ' +
             'Never trust client-submitted business values.',
+          via: 'bfs',
         });
       }
     }
@@ -2789,6 +2866,7 @@ function verifyCWE473(map: NeuralMap): VerificationResult {
             : 'Any in-scope variable can be overwritten by crafted request parameters.'),
         fix: 'Never use extract() on user input. If you must, use EXTR_SKIP or EXTR_PREFIX_ALL. ' +
           'Better: explicitly assign only the variables you need. Disable register_globals in php.ini.',
+        via: 'structural',
       });
     }
 
@@ -2801,6 +2879,7 @@ function verifyCWE473(map: NeuralMap): VerificationResult {
           'In PHP < 8, this imports parsed values into the current scope, overwriting existing variables.',
         fix: 'Always use parse_str($string, $result) with a second argument to capture into an array. ' +
           'In PHP 8+, the second argument is required, but older code may still run on PHP 7.x.',
+        via: 'structural',
       });
     }
   }
@@ -2845,6 +2924,7 @@ function verifyCWE474(map: NeuralMap): VerificationResult {
            'Behavior varies by platform, may cause security bugs on different compilers/OS.'),
         fix: `Replace ${fn}() with ${alternatives[fn.toLowerCase()] || 'a well-defined portable alternative'}. ` +
           'Always check return values and handle error cases explicitly.',
+        via: 'structural',
       });
     }
 
@@ -2856,6 +2936,7 @@ function verifyCWE474(map: NeuralMap): VerificationResult {
         description: `parseInt() at ${node.label} called without radix. ` +
           'Leading "0" means octal in some engines, "0x" means hex. Input "08" parses as 0 or 8 depending on engine.',
         fix: 'Always use parseInt(value, 10) with explicit radix. Or use Number() for strict numeric conversion.',
+        via: 'structural',
       });
     }
   }
@@ -2893,6 +2974,7 @@ function verifyCWE488(map: NeuralMap): VerificationResult {
             'Under concurrent requests, user A will see user B\'s data -- a session data cross-contamination bug.',
           fix: 'Use request-scoped storage (req.session, AsyncLocalStorage, ThreadLocal). ' +
             'Never store per-user data in module-level or static variables in a multi-tenant server.',
+          via: 'structural',
         });
       }
     }
@@ -2909,6 +2991,7 @@ function verifyCWE488(map: NeuralMap): VerificationResult {
             'All users may receive the same cached user-specific data -- classic session data exposure.',
           fix: 'Include the user ID or session ID in cache keys for per-user data. ' +
             'Example: cache.set(`user:${userId}:profile`, data) instead of cache.set("profile", data).',
+          via: 'structural',
         });
       }
     }
@@ -2947,6 +3030,7 @@ function verifyCWE527(map: NeuralMap): VerificationResult {
           fix: 'Serve only from a dedicated build/public directory. ' +
             'Use an allowlist of safe extensions (.html, .css, .js, .png). ' +
             'Block access to .git/, .env, source files in web server config.',
+          via: 'structural',
         });
       }
     }
@@ -2960,6 +3044,7 @@ function verifyCWE527(map: NeuralMap): VerificationResult {
           '.git/ exposure reveals full source history. .env exposure reveals secrets.',
         fix: 'Add explicit deny rules: location ~ /\\.git { deny all; }. ' +
           'Never serve from a directory containing .git or .env.',
+        via: 'structural',
       });
     }
   }
@@ -2994,6 +3079,7 @@ function verifyCWE529(map: NeuralMap): VerificationResult {
         fix: `Block access to ${file} at the web server level. ` +
           'In Apache: <FilesMatch "^\\.ht"> Require all denied </FilesMatch>. ' +
           'In nginx: location ~ /\\.ht { deny all; }',
+        via: 'structural',
       });
     }
 
@@ -3006,6 +3092,7 @@ function verifyCWE529(map: NeuralMap): VerificationResult {
           'This file contains password hashes that can be cracked offline.',
         fix: 'Store .htpasswd outside the web root. ' +
           'Add explicit deny rules: <Files ".htpasswd"> Require all denied </Files>',
+        via: 'structural',
       });
     }
 
@@ -3018,6 +3105,7 @@ function verifyCWE529(map: NeuralMap): VerificationResult {
           'Disallow entries are a roadmap for attackers -- they tell bots (and attackers) exactly where the interesting stuff is.',
         fix: 'Use authentication/authorization instead of robots.txt to protect sensitive paths. ' +
           'robots.txt is for SEO, not security. Sensitive paths should return 403/404 to unauthorized users.',
+        via: 'structural',
       });
     }
   }
@@ -3057,6 +3145,7 @@ function verifyCWE531(map: NeuralMap): VerificationResult {
         fix: 'Use environment variables or a secrets manager for test credentials. ' +
           'Use obviously fake values like "test-api-key-do-not-use" for unit tests. ' +
           'Add pre-commit hooks to detect secrets (git-secrets, detect-secrets).',
+        via: 'structural',
       });
     }
 
@@ -3069,6 +3158,7 @@ function verifyCWE531(map: NeuralMap): VerificationResult {
           'Production database credentials in test files are a common source of data breaches.',
         fix: 'Use environment variables for connection strings. Use testcontainers or in-memory databases for tests. ' +
           'Never hardcode production connection strings anywhere, especially test files.',
+        via: 'structural',
       });
     }
 
@@ -3081,6 +3171,7 @@ function verifyCWE531(map: NeuralMap): VerificationResult {
           'AWS keys in source control are automatically scraped by bots. Account compromise is likely within minutes.',
         fix: 'Immediately rotate the exposed AWS key. Use IAM roles, STS, or environment variables instead. ' +
           'Add AWS key patterns to .gitignore and pre-commit hooks.',
+        via: 'structural',
       });
     }
 
@@ -3093,6 +3184,7 @@ function verifyCWE531(map: NeuralMap): VerificationResult {
           'If this is a real key (not a test fixture), it is compromised the moment it is committed.',
         fix: 'Generate ephemeral test-only keys in CI. Use mkcert for local development. ' +
           'Never commit real private keys to source control.',
+        via: 'structural',
       });
     }
 
@@ -3105,6 +3197,7 @@ function verifyCWE531(map: NeuralMap): VerificationResult {
           'Using real PII in tests violates privacy regulations (GDPR, CCPA, PCI-DSS).',
         fix: 'Use synthetic test data generators (faker.js, Bogus). ' +
           'Never use real customer data in tests. This may be a compliance violation.',
+        via: 'structural',
       });
     }
   }
@@ -3139,6 +3232,7 @@ function verifyCWE535(map: NeuralMap): VerificationResult {
         description: `Shell command at ${node.label} exposes stderr/error output directly in HTTP responses. ` +
           'Shell error messages reveal file paths, system usernames, installed software versions, and internal architecture.',
         fix: 'Capture stderr separately and log it server-side. Return a generic error message to users. Never include raw command output in responses.',
+        via: 'structural',
       });
     }
   }
@@ -3158,6 +3252,7 @@ function verifyCWE535(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `Shell command output from ${shell.label} flows to response at ${egress.label} without error filtering.`,
           fix: 'Intercept shell errors. Map to generic error codes. Log details server-side only.',
+          via: 'bfs',
         });
       }
     }
@@ -3182,6 +3277,7 @@ function verifyCWE535(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Code at ${node.label} writes sensitive information (session IDs, credentials) to System.err. Shell error streams may be captured in logs or exposed to administrators.`,
             fix: 'Do not write session IDs, passwords, or other sensitive data to stderr. Use generic messages instead.',
+            via: 'structural',
           });
         }
       }
@@ -3216,7 +3312,8 @@ function verifyCWE533(map: NeuralMap): VerificationResult {
     if (hasLogWithSensitive) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (filter sensitive data from server logs)', severity: 'medium',
         description: `Code at ${node.label} logs sensitive information to server log files.`,
-        fix: 'Do not log session IDs, passwords, or other sensitive data.' });
+        fix: 'Do not log session IDs, passwords, or other sensitive data.',
+        via: 'structural' });
     }
   }
   if (inferMapLanguage(map) === 'java') {
@@ -3230,7 +3327,8 @@ function verifyCWE533(map: NeuralMap): VerificationResult {
         if (!findings.some(f => f.source.id === node.id)) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (do not log session IDs)', severity: 'medium',
             description: `Method ${node.label} logs session ID to server log. Session IDs in logs enable session hijacking.`,
-            fix: 'Remove session IDs from log messages.' });
+            fix: 'Remove session IDs from log messages.',
+            via: 'structural' });
         }
       }
     }
@@ -3253,7 +3351,8 @@ function verifyCWE534(map: NeuralMap): VerificationResult {
     if (DEBUG_LOG_RE.test(code) && SENSITIVE_DATA_RE.test(code) && !SAFE_DEBUG_RE.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (filter sensitive data from debug logs)', severity: 'medium',
         description: `Code at ${node.label} logs sensitive information to debug log files.`,
-        fix: 'Do not log session IDs or credentials at any log level.' });
+        fix: 'Do not log session IDs or credentials at any log level.',
+        via: 'structural' });
     }
   }
   if (inferMapLanguage(map) === 'java') {
@@ -3265,7 +3364,8 @@ function verifyCWE534(map: NeuralMap): VerificationResult {
         if (!findings.some(f => f.source.id === node.id)) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (do not log session IDs to debug log)', severity: 'medium',
             description: `Method ${node.label} logs session ID to debug log via Level.FINEST/FINE.`,
-            fix: 'Remove session IDs from debug log messages.' });
+            fix: 'Remove session IDs from debug log messages.',
+            via: 'structural' });
         }
       }
     }
@@ -3294,6 +3394,7 @@ function verifyCWE536(map: NeuralMap): VerificationResult {
         description: `Servlet at ${node.label} writes exception details (stack traces, messages) to the HTTP response. ` +
           'Runtime error messages reveal class names, file paths, SQL queries, and framework internals.',
         fix: 'Use @ControllerAdvice/@ExceptionHandler (Spring) or error-page directives (web.xml). Log full details server-side.',
+        via: 'structural',
       });
     }
   }
@@ -3312,6 +3413,7 @@ function verifyCWE536(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Servlet configuration at ${cfg.label} enables detailed error output. Stack traces will be visible to users.`,
         fix: 'Set server.error.include-stacktrace=never (Spring Boot). Configure custom error pages in web.xml.',
+        via: 'structural',
       });
     }
   }
@@ -3340,6 +3442,7 @@ function verifyCWE537(map: NeuralMap): VerificationResult {
         description: `Java catch block at ${node.label} exposes exception details in output. ` +
           'Java exception messages often contain SQL queries, file paths, class names, and connection strings.',
         fix: 'Log the full exception server-side: logger.error("Operation failed", e). Return a generic error with an error ID for correlation.',
+        via: 'structural',
       });
     }
   }
@@ -3356,6 +3459,7 @@ function verifyCWE537(map: NeuralMap): VerificationResult {
           severity: 'low',
           description: `Dangerous Java operation at ${node.label} lacks exception handling. Unhandled exceptions propagate to the default error handler, which may expose internal details.`,
           fix: 'Wrap in try-catch. Log full exception server-side. Return generic error message.',
+          via: 'structural',
         });
       }
     }
@@ -3465,6 +3569,7 @@ function verifyCWE600(map: NeuralMap): VerificationResult {
         fix: 'Wrap all exception-throwing operations in try/catch within servlet handlers. ' +
           'Log the full exception server-side (logger.error). Return a generic error response to the client. ' +
           'Configure custom error pages in web.xml or use @ControllerAdvice (Spring).',
+        via: 'structural',
       });
     }
   }
@@ -3498,6 +3603,7 @@ function verifyCWE539(map: NeuralMap): VerificationResult {
         description: `Cookie at ${node.label} stores sensitive data with persistence (Expires/Max-Age). ` +
           'Persistent cookies survive browser restarts and are accessible on shared/public computers.',
         fix: 'Use session cookies (no Expires/Max-Age) for sensitive data. Set Secure, HttpOnly, and SameSite flags. Encrypt if persistence is required.',
+        via: 'structural',
       });
     }
   }
@@ -3516,6 +3622,7 @@ function verifyCWE539(map: NeuralMap): VerificationResult {
           description: `Remember-me cookie at ${node.label} lacks encryption or token rotation. ` +
             'Stolen remember-me cookies provide persistent unauthorized access.',
           fix: 'Use encrypted, single-use tokens for remember-me. Rotate tokens on each use. Store server-side token hash for validation.',
+          via: 'structural',
         });
       }
     }
@@ -3557,6 +3664,7 @@ function verifyCWE539(map: NeuralMap): VerificationResult {
                   description: `L${i + 1}: Cookie '${cookieVar}' created and made persistent with setMaxAge at L${j + 1}. ` +
                     'Persistent cookies survive browser restarts and are accessible on shared/public computers.',
                   fix: 'Use session cookies (setMaxAge(-1)) for sensitive data. Set Secure, HttpOnly, and SameSite flags.',
+                  via: 'source_line_fallback',
                 });
               }
               break;
@@ -3596,6 +3704,7 @@ function verifyCWE541(map: NeuralMap): VerificationResult {
         description: `Include/config file at ${node.label} contains hardcoded sensitive values. ` +
           'Include files are often world-readable, in VCS, and may be directly served by misconfigured web servers.',
         fix: 'Move secrets to environment variables or a secret manager. Include files should reference config sources, not contain credentials.',
+        via: 'structural',
       });
     }
   }
@@ -3612,6 +3721,7 @@ function verifyCWE541(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `File ${node.label} has an extension web servers may serve directly. Contains sensitive values that would be exposed.`,
             fix: 'Move files outside web root, or deny access to .inc/.conf/.ini files. Externalize secrets.',
+            via: 'structural',
           });
         }
       }
@@ -3645,6 +3755,7 @@ function verifyCWE543(map: NeuralMap): VerificationResult {
           description: `Singleton at ${node.label} uses lazy initialization without synchronization in a multithreaded context. ` +
             'Race condition: two threads can create separate instances, corrupting shared state or breaking security invariants.',
           fix: 'Use double-checked locking with volatile (Java), std::call_once (C++), dispatch_once (Swift), or eager initialization.',
+          via: 'structural',
         });
       }
     }
@@ -3662,6 +3773,7 @@ function verifyCWE543(map: NeuralMap): VerificationResult {
           description: `Security-critical singleton at ${node.label} (${SEC_SINGLETON_RE.exec(code)?.[0] || 'security manager'}) lacks synchronization. ` +
             'Unsynchronized access to security state can cause auth bypass or privilege escalation.',
           fix: 'Make security singletons thread-safe. Use synchronized access or immutable state. Consider dependency injection.',
+          via: 'structural',
         });
       }
     }
@@ -3721,6 +3833,7 @@ function verifyCWE544(map: NeuralMap): VerificationResult {
           description: `Application has ${inlineHandlerCount} scattered error handlers but no centralized mechanism. ` +
             `Error handler at ${node.label} handles errors ad-hoc. Inconsistent handling leads to information leaks.`,
           fix: 'Implement centralized error handling: app.use(errorHandler) (Express), @ControllerAdvice (Spring), ErrorBoundary (React).',
+          via: 'structural',
         });
       }
     }
@@ -3736,6 +3849,7 @@ function verifyCWE544(map: NeuralMap): VerificationResult {
           description: `Empty catch block at ${node.label} silently swallows errors. ` +
             'Swallowed errors hide failures, mask security issues, and make debugging impossible.',
           fix: 'At minimum, log caught errors. Better: propagate to a centralized error handler.',
+          via: 'structural',
         });
       }
     }
@@ -3773,6 +3887,7 @@ function verifyCWE612(map: NeuralMap): VerificationResult {
           fix: 'Exclude sensitive fields from search indexes, or implement field-level security. ' +
             'Use _source excludes, field-level security (Elasticsearch), or separate indexes with access controls. ' +
             'Never index PII/credentials in publicly searchable indexes.',
+          via: 'structural',
         });
       }
     }
@@ -3790,6 +3905,7 @@ function verifyCWE612(map: NeuralMap): VerificationResult {
             'Search APIs may return sensitive data in highlighted snippets or _source.',
           fix: 'Use _source excludes to prevent sensitive fields from appearing in search results. ' +
             'Configure field-level security or filtered aliases to restrict access.',
+          via: 'structural',
         });
       }
     }
@@ -3825,6 +3941,7 @@ function verifyCWE612(map: NeuralMap): VerificationResult {
             description: `Search endpoint at ${endpoint.label} lacks authorization but the codebase indexes sensitive data. ` +
               'Unauthenticated users could discover sensitive information through search queries.',
             fix: 'Add authentication and authorization to search endpoints. Implement query-time filtering to restrict results based on user permissions.',
+            via: 'structural',
           });
         }
       }
@@ -3872,6 +3989,7 @@ function verifyCWE549(map: NeuralMap): VerificationResult {
           `The password is visible on screen, enabling shoulder-surfing attacks.`,
         fix: 'Use type="password" for all password input fields. This masks the entered characters ' +
           'and prevents the password from being visible to bystanders.',
+        via: 'structural',
       });
     }
 
@@ -3884,6 +4002,7 @@ function verifyCWE549(map: NeuralMap): VerificationResult {
           `getText() returns a String which stays in memory until GC. getPassword() returns char[] that can be zeroed.`,
         fix: 'Use JPasswordField.getPassword() instead of getText(). After using the char[], ' +
           'zero it with Arrays.fill(password, \'\\0\') to minimize the time the password is in memory.',
+        via: 'structural',
       });
     }
 
@@ -3896,6 +4015,7 @@ function verifyCWE549(map: NeuralMap): VerificationResult {
           `GET puts the password in the URL, visible in browser history, server logs, and referrer headers.`,
         fix: 'Use method="post" for forms containing password fields. Never send passwords via GET — ' +
           'they appear in URLs, browser history, proxy logs, and HTTP Referer headers.',
+        via: 'structural',
       });
     }
   }

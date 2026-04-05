@@ -39,8 +39,9 @@ function verifyCWE119(map: NeuralMap): VerificationResult {
   const ingress = nodesOfType(map, 'INGRESS');
   for (const src of ingress) {
     for (const sink of memNodes) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-          sharesFunctionScope(map, src.id, sink.id)) {
+      const hasBfs119 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const hasScope119 = sharesFunctionScope(map, src.id, sink.id);
+      if (hasBfs119 || hasScope119) {
         if (!BOUNDS_SAFE_RE.test(stripComments(sink.analysis_snapshot || sink.code_snapshot))) {
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
@@ -51,6 +52,7 @@ function verifyCWE119(map: NeuralMap): VerificationResult {
             fix: 'Validate all buffer sizes and indices before memory operations. ' +
               'Use bounded functions: strncpy/snprintf instead of strcpy/sprintf. ' +
               'In Rust: avoid unsafe blocks or use checked indexing. In Go: validate slice indices against len().',
+            via: hasBfs119 ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -69,6 +71,7 @@ function verifyCWE119(map: NeuralMap): VerificationResult {
             `that has no built-in bounds checking. Vulnerable to buffer overflow regardless of input source.`,
           fix: 'Replace gets() with fgets(). Replace strcpy/strcat with strncpy/strlcat or std::string. ' +
             'Replace sprintf with snprintf.',
+          via: 'structural',
         });
       }
     }
@@ -106,6 +109,7 @@ function verifyCWE120(map: NeuralMap): VerificationResult {
             fix: 'Check source size before copying: if (strlen(src) >= sizeof(dest)) return error. ' +
               'Replace strcpy with strncpy/strlcpy. Replace strcat with strncat/strlcat. ' +
               'Always pass destination buffer size to copy functions.',
+            via: 'bfs',
           });
         }
       }
@@ -123,6 +127,7 @@ function verifyCWE120(map: NeuralMap): VerificationResult {
             `If the source ever exceeds the destination capacity, a buffer overflow occurs.`,
           fix: 'Replace strcpy/strcat with strncpy/strlcpy/strlcat. For memcpy, validate: n <= sizeof(dest). ' +
             'Use std::string/std::vector in C++ to avoid manual buffer management.',
+          via: 'structural',
         });
       }
     }
@@ -160,6 +165,7 @@ function verifyCWE125(map: NeuralMap): VerificationResult {
               `Out-of-bounds reads can leak sensitive memory contents (like Heartbleed) or cause crashes.`,
             fix: 'Validate read offsets against buffer length: if (offset + readSize > buf.length) return error. ' +
               'Use safe accessors: .at() in JS, .get() in Rust, bounds-checked slice in Go.',
+            via: 'bfs',
           });
         }
       }
@@ -200,6 +206,7 @@ function verifyCWE126(map: NeuralMap): VerificationResult {
             fix: 'Use Math.min(requestedLength, buffer.length - offset) to cap read size. ' +
               'Validate offset + length <= buffer.length before every read. ' +
               'Use strnlen() instead of strlen() for untrusted strings.',
+            via: 'bfs',
           });
         }
       }
@@ -240,6 +247,7 @@ function verifyCWE127(map: NeuralMap): VerificationResult {
             fix: 'Validate that indices are non-negative: if (index < 0) return error. ' +
               'Use unsigned types (size_t in C, usize in Rust, uint in Go). ' +
               'Use Math.max(0, index) as a floor in JavaScript.',
+            via: 'bfs',
           });
         }
       }
@@ -278,6 +286,7 @@ function verifyCWE131(map: NeuralMap): VerificationResult {
             fix: 'Use checked arithmetic (checked_mul in Rust, __builtin_mul_overflow in GCC). ' +
               'Always add +1 for null terminator. Use calloc(count, size) instead of malloc(count*size). ' +
               'Cap maximum allocation size.',
+            via: 'bfs',
           });
         }
       }
@@ -295,6 +304,7 @@ function verifyCWE131(map: NeuralMap): VerificationResult {
             `malloc(a*b) can overflow; strlen(s) without +1 forgets the null terminator.`,
           fix: 'Use calloc(count, size) instead of malloc(count*size). ' +
             'Always add 1 to strlen() for null-terminated string allocation.',
+          via: 'structural',
         });
       }
     }
@@ -361,8 +371,9 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of arithNodes) {
       if (src.id === sink.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-          sharesFunctionScope(map, src.id, sink.id)) {
+      const hasBfs190 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const hasScope190 = sharesFunctionScope(map, src.id, sink.id);
+      if (hasBfs190 || hasScope190) {
         // Check the sink AND the function scope for safety patterns.
         // Only count REAL bounds checks, not NumberFormatException catches or generic error handling.
         const scopeSafe = OVERFLOW_SAFE_RE.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) ||
@@ -381,6 +392,7 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
             fix: 'Use checked arithmetic: checked_add/checked_mul in Rust, __builtin_*_overflow in GCC. ' +
               'Validate input ranges before arithmetic. Use Number.isSafeInteger() in JS. ' +
               'Use int64 or BigInt for intermediate calculations.',
+            via: hasBfs190 ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -402,8 +414,9 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
         return true;
       });
       for (const funcNode of funcNodes) {
-        if (sharesFunctionScope(map, src.id, funcNode.id) ||
-            hasTaintedPathWithoutControl(map, src.id, funcNode.id)) {
+        const hasScope190f = sharesFunctionScope(map, src.id, funcNode.id);
+        const hasBfs190f = hasTaintedPathWithoutControl(map, src.id, funcNode.id);
+        if (hasScope190f || hasBfs190f) {
           const funcCode = stripComments(funcNode.analysis_snapshot || funcNode.code_snapshot);
           // Only count REAL bounds checks as overflow protection.
           // NumberFormatException catch is parse error handling, NOT overflow protection.
@@ -417,6 +430,7 @@ function verifyCWE190(map: NeuralMap): VerificationResult {
                 `Result exceeding the type's maximum wraps to small/negative value, causing buffer overflow or infinite loops.`,
               fix: 'Use checked arithmetic or validate input ranges before arithmetic. ' +
                 'Compare against MAX_VALUE/MIN_VALUE before operations that could overflow.',
+              via: hasBfs190f ? 'bfs' : 'scope_taint',
             });
           }
         }
@@ -470,8 +484,9 @@ function verifyCWE191(map: NeuralMap): VerificationResult {
   for (const src of ingress) {
     for (const sink of arithNodes) {
       if (src.id === sink.id) continue;
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-          sharesFunctionScope(map, src.id, sink.id)) {
+      const hasBfs191 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const hasScope191 = sharesFunctionScope(map, src.id, sink.id);
+      if (hasBfs191 || hasScope191) {
         const code = stripStrLit(stripComments(sink.analysis_snapshot || sink.code_snapshot));
         const scopeSafe = MUL_ADD_SAFE_RE.test(code) || UNDERFLOW_SAFE_RE.test(code) ||
           map.nodes.some(n =>
@@ -490,6 +505,7 @@ function verifyCWE191(map: NeuralMap): VerificationResult {
               `Unsigned wrap to huge value causes massive allocations or out-of-bounds access.`,
             fix: 'Check before subtracting: if (a < b) return error, else result = a - b. ' +
               'Use checked_sub/saturating_sub in Rust. Use Math.max(0, a - b) in JS.',
+            via: hasBfs191 ? 'bfs' : 'scope_taint',
           });
         }
         if (MUL_RE.test(code)) {
@@ -501,6 +517,7 @@ function verifyCWE191(map: NeuralMap): VerificationResult {
               `Multiplying a negative value can wrap past MIN_VALUE causing integer underflow.`,
             fix: 'Check before multiplying: if (data > (MIN_VALUE / N)) { result = data * N; }. ' +
               'Use Math.multiplyExact() in Java, checked_mul in Rust.',
+            via: hasBfs191 ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -521,8 +538,9 @@ function verifyCWE191(map: NeuralMap): VerificationResult {
         return true;
       });
       for (const funcNode of funcNodes) {
-        if (sharesFunctionScope(map, src.id, funcNode.id) ||
-            hasTaintedPathWithoutControl(map, src.id, funcNode.id)) {
+        const hasScope191f = sharesFunctionScope(map, src.id, funcNode.id);
+        const hasBfs191f = hasTaintedPathWithoutControl(map, src.id, funcNode.id);
+        if (hasScope191f || hasBfs191f) {
           const funcCode = stripComments(funcNode.analysis_snapshot || funcNode.code_snapshot);
           // Only count REAL bounds checks (MIN_VALUE/MAX_VALUE comparisons) as underflow protection.
           // NumberFormatException catch is parse error handling, NOT underflow protection.
@@ -536,6 +554,7 @@ function verifyCWE191(map: NeuralMap): VerificationResult {
                 `Arithmetic on narrow types (byte/short) without MIN_VALUE/MAX_VALUE bounds checks can wrap, causing integer underflow.`,
               fix: 'Check before arithmetic: if (data > (MIN_VALUE / N)) { result = data * N; }. ' +
                 'Use Math.multiplyExact/addExact/subtractExact in Java, checked_* in Rust.',
+              via: hasBfs191f ? 'bfs' : 'scope_taint',
             });
           }
         }
@@ -586,13 +605,14 @@ function verifyCWE192(map: NeuralMap): VerificationResult {
           `If the value controls allocation size or loop bounds, this causes buffer overflow.`,
         fix: 'Check the value fits in the target type before casting: if (val > TYPE_MAX || val < TYPE_MIN) error. ' +
           'Use safe_cast<> utilities or Rust\'s try_from() which returns Result.',
+        via: 'structural',
       });
     }
 
     if (JS_BITWISE_COERCE.test(code)) {
-      const isUserInput = node.attack_surface.includes('user_input') ||
-        nodesOfType(map, 'INGRESS').some(src => hasTaintedPathWithoutControl(map, src.id, node.id));
-      if (isUserInput) {
+      const isAttackSurface = node.attack_surface.includes('user_input');
+      const hasBfs192 = !isAttackSurface && nodesOfType(map, 'INGRESS').some(src => hasTaintedPathWithoutControl(map, src.id, node.id));
+      if (isAttackSurface || hasBfs192) {
         findings.push({
           source: nodeRef(node), sink: nodeRef(node),
           missing: 'CONTROL (validate numeric range before bitwise coercion to Int32)',
@@ -602,6 +622,7 @@ function verifyCWE192(map: NeuralMap): VerificationResult {
             `User-controlled values can overflow the 32-bit range.`,
           fix: 'Check Number.isSafeInteger() and validate range before bitwise operations. ' +
             'Consider BigInt for values that may exceed 32 bits.',
+          via: hasBfs192 ? 'bfs' : 'structural',
         });
       }
     }
@@ -689,6 +710,7 @@ function verifyCWE193(map: NeuralMap): VerificationResult {
         fix: 'Use < array.length (not <= array.length) for zero-indexed loop bounds. ' +
           'If you need to include the last element, use <= array.length - 1. ' +
           'Account for null terminators in C string buffers.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -732,6 +754,7 @@ function verifyCWE194(map: NeuralMap): VerificationResult {
           `producing 0xFFFFFFFF (-1) instead of 255. This corrupts buffer sizes and array indices.`,
         fix: 'Cast to unsigned first: (int)(unsigned char)c, or mask: (int)(c & 0xFF). ' +
           'Use uint8_t instead of char for byte data.',
+        via: 'structural',
       });
     }
 
@@ -744,6 +767,7 @@ function verifyCWE194(map: NeuralMap): VerificationResult {
           `to distinguish EOF (-1) from valid byte 0xFF. Storing in char makes EOF indistinguishable ` +
           `from a valid character, causing infinite loops or premature termination.`,
         fix: 'Use int to store the return value: int c = getchar(); then check for EOF before casting to char.',
+        via: 'structural',
       });
     }
   }
@@ -791,6 +815,7 @@ function verifyCWE195(map: NeuralMap): VerificationResult {
             `either allocation failure or massive over-allocation exploitable for heap overflow.`,
           fix: 'Validate: if (len < 0 || len > MAX_REASONABLE_SIZE) return error; before allocation. ' +
             'Use size_t for all size variables. Apply input validation at the boundary.',
+          via: 'structural',
         });
       }
     }
@@ -806,6 +831,7 @@ function verifyCWE195(map: NeuralMap): VerificationResult {
             `Negative values silently become very large positive values, bypassing bounds checks.`,
           fix: 'Check for negative values before conversion. Use unsigned types from the start for sizes. ' +
             'In Rust, use usize and TryFrom with error handling.',
+          via: 'structural',
         });
       }
     }
@@ -847,6 +873,7 @@ function verifyCWE196(map: NeuralMap): VerificationResult {
           `"if (size < MAX)" checks that assume positive values.`,
         fix: 'Validate before conversion: if (uval > INT_MAX) return error. ' +
           'Use same-signedness types throughout. In Rust, use TryFrom/TryInto.',
+        via: 'structural',
       });
     }
 
@@ -860,6 +887,7 @@ function verifyCWE196(map: NeuralMap): VerificationResult {
           `always false. This is a logic error that may hide a real bounds check.`,
         fix: 'Remove the tautological comparison. Check the actual upper bound instead, or convert ' +
           'to the correct signedness if negative values are expected.',
+        via: 'structural',
       });
     }
   }
@@ -906,6 +934,7 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
           `scientific code, this silent precision loss causes incorrect results.`,
         fix: 'Keep double precision throughout. If float is required, validate the value fits in float ' +
           'range and the precision loss is acceptable. Document the expected precision.',
+        via: 'structural',
       });
     }
 
@@ -919,6 +948,7 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
           `0x40000000 (1GB) — security checks on the truncated value are meaningless.`,
         fix: 'Validate before truncation: if (val > INT32_MAX) error. Use 64-bit types consistently. ' +
           'For IDs that may exceed 32 bits, use string representation.',
+        via: 'structural',
       });
     }
 
@@ -935,6 +965,7 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
           `user input) can be any value, making unchecked narrowing a truncation vulnerability.`,
         fix: `Validate before cast: if (val < ${targetType === 'byte' ? 'Byte' : targetType === 'short' ? 'Short' : 'Character'}.MIN_VALUE || val > ${targetType === 'byte' ? 'Byte' : targetType === 'short' ? 'Short' : 'Character'}.MAX_VALUE) error. ` +
           'Use the wider type throughout, or use Math.toIntExact() for long-to-int in Java.',
+        via: 'structural',
       });
     }
 
@@ -948,6 +979,7 @@ function verifyCWE197(map: NeuralMap): VerificationResult {
           `database bigints, and epoch-nanosecond timestamps lose precision above 2^53.`,
         fix: 'Use BigInt for arithmetic on large integers. Keep IDs as strings in JSON. ' +
           'Use Number.isSafeInteger() to validate before numeric operations.',
+        via: 'structural',
       });
     }
   }
@@ -998,6 +1030,7 @@ function verifyCWE198(map: NeuralMap): VerificationResult {
           `little-endian. A 32-bit value 0x01020304 reads as 0x04030201 — completely wrong.`,
         fix: 'Use ntohl/ntohs (network→host) or htonl/htons (host→network). ' +
           'In Rust, use from_be_bytes/from_le_bytes. In JS, use DataView with explicit endianness arg.',
+        via: 'structural',
       });
     }
 
@@ -1013,6 +1046,7 @@ function verifyCWE198(map: NeuralMap): VerificationResult {
             `integer value will be wrong.`,
           fix: 'After memcpy, convert: value = ntohl(value) for 32-bit, ntohs(value) for 16-bit. ' +
             'Or use struct packing/unpacking with explicit byte order.',
+          via: 'structural',
         });
       }
     }
@@ -1027,6 +1061,7 @@ function verifyCWE198(map: NeuralMap): VerificationResult {
           `Most binary file formats and protocols have specific endianness requirements.`,
         fix: 'Always pass the littleEndian parameter: view.getInt32(offset, true) for little-endian, ' +
           'view.getInt32(offset, false) for big-endian. Document which endianness the format uses.',
+        via: 'structural',
       });
     }
   }
@@ -1092,6 +1127,7 @@ function verifyCWE681(map: NeuralMap): VerificationResult {
       fix: 'Validate the value fits in the target type range before casting. ' +
         'For double-to-float: check val <= Float.MAX_VALUE && val >= Float.MIN_VALUE. ' +
         'For int narrowing: check against Byte/Short/Character MIN_VALUE and MAX_VALUE.',
+      via: 'scope_taint',
     });
   }
 

@@ -64,6 +64,7 @@ function verifyCWE306(map: NeuralMap): VerificationResult {
           fix: 'Add authentication middleware before sensitive routes. ' +
             'Use session tokens, JWTs, or API keys to verify identity. ' +
             'Example: app.delete("/users/:id", requireAuth, handler)',
+          via: 'bfs',
         });
       }
     }
@@ -176,6 +177,7 @@ function verifyCWE352(map: NeuralMap): VerificationResult {
             `An attacker can forge requests from a victim's browser to perform unauthorized actions.`,
           fix: 'Add CSRF token validation middleware. Use csurf (Express), CSRFProtect (Flask), ' +
             'or framework-provided CSRF protection. Ensure all state-changing endpoints verify the token.',
+          via: 'bfs',
         });
       }
     }
@@ -268,6 +270,7 @@ function verifyCWE384(map: NeuralMap): VerificationResult {
               'This creates a new session ID while preserving session data. ' +
               'Example: req.session.regenerate((err) => { req.session.userId = user.id; ... }). ' +
               'For Passport.js, add session regeneration in the login callback.',
+            via: 'structural',
           });
           break; // One finding per auth flow is sufficient
         }
@@ -345,6 +348,7 @@ function verifyCWE287(map: NeuralMap): VerificationResult {
           fix: 'Add server-side authentication middleware that validates credentials or session tokens. ' +
             'Use established libraries (passport.js, flask-login, Spring Security). ' +
             'Never rely on client-side authentication checks alone.',
+          via: 'bfs',
         });
       }
     }
@@ -374,6 +378,7 @@ function verifyCWE287(map: NeuralMap): VerificationResult {
           fix: 'Implement proper authentication: validate both username AND password against a secure store. ' +
             'Never derive authorization roles from user input. ' +
             'Never hardcode auth bypasses in production code.',
+          via: 'structural',
         });
         break;
       }
@@ -448,6 +453,7 @@ function verifyCWE288(map: NeuralMap): VerificationResult {
           fix: 'Ensure ALL paths to sensitive operations require authentication. ' +
             'Apply auth middleware at the operation/service layer, not just at individual routes. ' +
             'Audit debug endpoints, internal APIs, WebSocket handlers, and GraphQL resolvers.',
+          via: 'bfs',
         });
       }
     }
@@ -466,6 +472,7 @@ function verifyCWE288(map: NeuralMap): VerificationResult {
             fix: 'Remove debug/test endpoints from production builds. ' +
               'If internal APIs must exist, protect them with the same auth as primary endpoints. ' +
               'Use environment-based feature flags to disable debug routes.',
+            via: 'bfs',
           });
         }
       }
@@ -534,6 +541,7 @@ function verifyCWE290(map: NeuralMap): VerificationResult {
           fix: 'Never use IP addresses, DNS names, Referer headers, or Origin headers as the sole authentication mechanism. ' +
             'Use cryptographic tokens (JWT, session cookies with HMAC, mutual TLS) for identity verification. ' +
             'IP-based restrictions are acceptable as ADDITIONAL defense-in-depth but never as primary auth.',
+          via: 'structural',
         });
         break;
       }
@@ -564,6 +572,7 @@ function verifyCWE290(map: NeuralMap): VerificationResult {
               `An attacker can forge this header to bypass authentication.`,
             fix: 'Replace header-based auth with cryptographic authentication (JWT, session tokens, mutual TLS). ' +
               'If IP-based restrictions are needed, enforce them at the network/firewall level, not in application code.',
+            via: 'bfs',
           });
         }
       }
@@ -620,6 +629,7 @@ function verifyCWE294(map: NeuralMap): VerificationResult {
             fix: 'Use time-limited tokens with expiry (JWT with exp claim). ' +
               'Add nonce or challenge-response to prevent replay. ' +
               'Rotate API keys regularly. Use HTTPS to prevent capture.',
+            via: 'structural',
           });
           break;
         }
@@ -639,6 +649,7 @@ function verifyCWE294(map: NeuralMap): VerificationResult {
           fix: 'If Basic Auth is required, ensure HTTPS is enforced (redirect HTTP to HTTPS). ' +
             'Prefer token-based authentication (JWT, OAuth2) with expiry. ' +
             'Add rate limiting to slow brute-force attacks with captured credentials.',
+          via: 'structural',
         });
       }
     }
@@ -733,6 +744,7 @@ function verifyCWE295(map: NeuralMap): VerificationResult {
           fix: 'NEVER disable certificate validation in production. ' +
             'If connecting to services with self-signed certs, add the CA to the trust store instead. ' +
             'For development, use environment-specific configuration that is NEVER deployed to production.',
+          via: 'structural',
         });
         break;
       }
@@ -806,6 +818,7 @@ function verifyCWE296(map: NeuralMap): VerificationResult {
             'Do not implement custom TrustManagers unless you are adding certificate pinning. ' +
             'If self-signed certs are needed, add the specific CA to the trust store rather than disabling chain validation. ' +
             'Enable OCSP/CRL checking for revocation detection.',
+          via: 'structural',
         });
         break;
       }
@@ -873,6 +886,7 @@ function verifyCWE297(map: NeuralMap): VerificationResult {
           fix: 'Never disable hostname verification. Use the default TLS configuration which includes hostname checking. ' +
             'If custom TLS setup is needed, ensure checkServerIdentity (Node.js) or check_hostname (Python) remains enabled. ' +
             'For Java, use the default HostnameVerifier, never AllowAllHostnameVerifier.',
+          via: 'structural',
         });
         break;
       }
@@ -939,6 +953,7 @@ function verifyCWE521(map: NeuralMap): VerificationResult {
         fix: 'Require passwords of at least 8 characters (NIST SP 800-63B recommends 8+, 12+ is better). ' +
           'Use a password strength estimator (zxcvbn). ' +
           'Check passwords against known breached password lists (HaveIBeenPwned API).',
+        via: 'structural',
       });
       continue;
     }
@@ -961,6 +976,7 @@ function verifyCWE521(map: NeuralMap): VerificationResult {
               fix: 'Add password validation before storage: minimum 8 characters, ' +
                 'check against breached password lists, use a strength estimator. ' +
                 'NIST SP 800-63B: no composition rules (uppercase/special), but enforce minimum length and breach checking.',
+              via: 'bfs',
             });
             break;
           }
@@ -1027,6 +1043,7 @@ function verifyCWE522(map: NeuralMap): VerificationResult {
             fix: 'ALWAYS hash passwords before storage using bcrypt, scrypt, or argon2id. ' +
               'NEVER store plaintext passwords. NEVER use MD5/SHA1/SHA256 alone (use PBKDF2 with high iterations at minimum). ' +
               'Use a per-user salt (bcrypt includes this automatically).',
+            via: 'bfs',
           });
         }
       }
@@ -1051,6 +1068,7 @@ function verifyCWE522(map: NeuralMap): VerificationResult {
       fix: 'Send credentials in the request body (POST) or Authorization header, never in URL query strings. ' +
         'Use HTTPS to encrypt credentials in transit. ' +
         'Implement token-based auth where the token is sent in the Authorization header.',
+      via: 'structural',
     });
   }
 
@@ -1079,6 +1097,7 @@ function verifyCWE522(map: NeuralMap): VerificationResult {
             fix: 'Never log credentials. Redact sensitive fields before logging. ' +
               'Use structured logging with an automatic PII/credential filter. ' +
               'If debugging auth, log success/failure status only, never the actual credentials.',
+            via: 'bfs',
           });
         }
       }
@@ -1173,6 +1192,7 @@ function verifyCWE620(map: NeuralMap): VerificationResult {
           '(2) verify current password against stored hash (bcrypt.compare), ' +
           '(3) only then update to the new password. ' +
           'Exception: password RESET via email token is OK (user proves identity via email).',
+        via: 'structural',
       });
     }
   }
@@ -1227,6 +1247,7 @@ function verifyCWE434(map: NeuralMap): VerificationResult {
             severity: 'critical',
             description: `File upload at ${src.label} reaches storage at ${sink.label} without ${mp.join(' or ') || 'proper file type validation'}. Attackers can upload executable files (.php, .asp, .jsp) for RCE.`,
             fix: 'Validate with BOTH extension allowlist AND MIME/magic byte check. Use file-type or mmmagic. Store outside web root. Rename with random names.',
+            via: 'bfs',
           });
         }
       }
@@ -1243,6 +1264,7 @@ function verifyCWE434(map: NeuralMap): VerificationResult {
             severity: 'critical',
             description: `File upload at ${src.label} stored at ${sink.label} in same scope without complete file type validation.`,
             fix: 'Validate with BOTH extension allowlist AND MIME/magic byte check. Store outside web root.',
+            via: 'scope_taint',
           }); break;
         }
       }
@@ -1277,6 +1299,7 @@ function verifyCWE436(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `User input from ${src.label} in response at ${sink.label} without explicit Content-Type. Browsers may MIME-sniff and interpret content differently.`,
             fix: 'Set explicit Content-Type with charset. Add X-Content-Type-Options: nosniff. Use Content-Disposition: attachment for downloads.',
+            via: 'bfs',
           });
         }
       }
@@ -1314,6 +1337,7 @@ function verifyCWE470(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} controls reflection at ${sink.label}. Attacker can instantiate arbitrary classes or invoke unexpected methods.`,
             fix: 'Use a strict allowlist (Map/switch) to map input to permitted classes. Never use Class.forName/getattr/call_user_func with unsanitized input.',
+            via: 'bfs',
           });
         }
       }
@@ -1331,6 +1355,7 @@ function verifyCWE470(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} in scope with reflection at ${sink.label}. If input controls reflected name, arbitrary code invocation possible.`,
             fix: 'Use a strict allowlist mapping input to permitted class/method names.',
+            via: 'scope_taint',
           }); break;
         }
       }
@@ -1387,6 +1412,7 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} stored in ${st} at ${sink.label} without validation. Downstream code will treat it as pre-validated.`,
             fix: `Validate all input BEFORE storing in ${st}. Use schema validation (zod, joi). Never copy raw request data into session/global state.`,
+            via: 'bfs',
           });
         }
       }
@@ -1657,6 +1683,7 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
               `Downstream code will treat session data as pre-validated.`,
             fix: 'Validate all input BEFORE storing in session. Use type conversion (parseInt, parseLong), ' +
               'schema validation, or allowlist checks. Output encoding (htmlEscape) does NOT constitute validation for trust boundaries.',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -1772,8 +1799,9 @@ function verifyCWE862(map: NeuralMap): VerificationResult {
       //     the source and sink share a function scope with no auth in that scope
       //   - AND the containing scope (or its route_def wrapper) has NO authorization coverage
       // The scope check is the authoritative gate: if the scope has auth, suppress the finding.
-      const reachable = pathNoAuthz862(src.id, sink.id) ||
-        sharesFunctionScope(map, src.id, sink.id);
+      const bfsHit862 = pathNoAuthz862(src.id, sink.id);
+      const scopeHit862 = !bfsHit862 && sharesFunctionScope(map, src.id, sink.id);
+      const reachable = bfsHit862 || scopeHit862;
       const hasVulnPath = reachable && !scopeHasAuthz862(sink);
       if (hasVulnPath) {
         if (!AUTHZ862.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !AUTHZ862.test(stripComments(src.analysis_snapshot || src.code_snapshot))) {
@@ -1784,6 +1812,7 @@ function verifyCWE862(map: NeuralMap): VerificationResult {
             severity: 'critical',
             description: `Request at ${src.label} reaches state-changing operation at ${sink.label} without authorization. Any authenticated user could modify unauthorized resources.`,
             fix: 'Add authorization checks before state-changing ops. Use RBAC/ABAC. Verify req.user.id === resource.ownerId.',
+            via: bfsHit862 ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -1807,15 +1836,20 @@ function verifyCWE863(map: NeuralMap): VerificationResult {
   for (const az of authzCtrls863) {
     const c = stripComments(az.analysis_snapshot || az.code_snapshot);
     if (INSECURE863.test(c)) {
-      const src = ingress863.find(s =>
-        hasTaintedPathWithoutControl(map, s.id, az.id) || sharesFunctionScope(map, s.id, az.id));
-      if (src) {
+      let src863: typeof ingress863[0] | undefined;
+      let via863: 'bfs' | 'scope_taint' = 'bfs';
+      for (const s of ingress863) {
+        if (hasTaintedPathWithoutControl(map, s.id, az.id)) { src863 = s; via863 = 'bfs'; break; }
+        if (!src863 && sharesFunctionScope(map, s.id, az.id)) { src863 = s; via863 = 'scope_taint'; }
+      }
+      if (src863) {
         findings.push({
-          source: nodeRef(src), sink: nodeRef(az),
+          source: nodeRef(src863), sink: nodeRef(az),
           missing: 'CONTROL (secure authorization comparison -- strict equality with server-side data)',
           severity: 'high',
           description: `Authorization at ${az.label} uses insecure comparison (loose equality/type coercion). Attacker may bypass via type confusion.`,
           fix: 'Use strict equality (===). Compare against server-side role data. Use integer/UUID for IDs.',
+          via: via863,
         });
       }
     }
@@ -1829,6 +1863,7 @@ function verifyCWE863(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `Authorization at ${az.label} uses client-controlled data for privilege decisions. Attacker can set role=admin.`,
         fix: 'Get role from server-side session, verified JWT, or DB lookup. Never from req.body/query/headers.',
+        via: 'structural',
       });
     }
   }
@@ -1854,6 +1889,7 @@ function verifyCWE863(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `Resource ID from ${src.label} accesses data at ${sink.label} without ownership check. Attacker can access other users' resources.`,
             fix: 'Verify user owns the resource. Add WHERE user_id = req.user.id. Check resource.ownerId === req.user.id.',
+            via: 'bfs',
           });
         }
       }
@@ -1905,6 +1941,7 @@ function verifyCWE250(map: NeuralMap): VerificationResult {
           fix: 'Drop privileges immediately after performing privileged initialization (binding to port 80, reading config). ' +
             'Use setuid()/setgid() to switch to a non-root user. In containers, avoid --privileged and drop unnecessary capabilities. ' +
             'In Node.js: process.setuid("nobody") after binding.',
+          via: 'structural',
         });
       }
     }
@@ -1951,6 +1988,7 @@ function verifyCWE269(map: NeuralMap): VerificationResult {
             fix: 'Restrict privilege-modifying operations to admin-only endpoints. Verify the requesting user has privilege management permission. ' +
               'Never accept role/permission values from user input without validation against an allowlist. ' +
               'Log all privilege changes for audit.',
+            via: 'bfs',
           });
         }
       }
@@ -2015,6 +2053,7 @@ function verifyCWE270(map: NeuralMap): VerificationResult {
             'Windows: pair ImpersonateLoggedOnUser with RevertToSelf. ' +
             'POSIX: save original UID with getuid() before setuid(0), restore with setuid(saved_uid) in finally. ' +
             'AWS: use session tokens with expiry, not long-lived assumed roles.',
+          via: 'structural',
         });
       }
     }
@@ -2056,6 +2095,7 @@ function verifyCWE271(map: NeuralMap): VerificationResult {
         fix: 'Drop privileges in the correct order: (1) setgroups([]) to clear supplementary groups, ' +
           '(2) setgid(target_gid) to drop group, (3) setuid(target_uid) to drop user. ' +
           'Dropping UID first makes it impossible to drop GID afterward (unprivileged setgid fails).',
+        via: 'structural',
       });
     }
 
@@ -2068,6 +2108,7 @@ function verifyCWE271(map: NeuralMap): VerificationResult {
           `Process still runs as root/elevated user despite group change.`,
         fix: 'After dropping GID, also drop UID with setuid(target_uid). ' +
           'Verify drops succeeded by checking getuid() and getgid() return values.',
+        via: 'structural',
       });
     }
 
@@ -2083,6 +2124,7 @@ function verifyCWE271(map: NeuralMap): VerificationResult {
           `seteuid only changes the effective UID — the saved-set-user-ID remains root, allowing re-escalation via seteuid(0).`,
         fix: 'Use setuid() (not seteuid()) for permanent privilege drops. setuid() sets real, effective, AND saved UIDs. ' +
           'Or use setresuid(uid, uid, uid) to explicitly set all three.',
+        via: 'structural',
       });
     }
   }
@@ -2119,6 +2161,7 @@ function verifyCWE272(map: NeuralMap): VerificationResult {
         fix: 'Replace wildcard permissions with specific ones: IAM Action:"s3:GetObject" instead of "*". ' +
           'Use GRANT SELECT instead of GRANT ALL. Set file permissions to 0644 or 0600 instead of 0777. ' +
           'Drop unnecessary container capabilities. Request only necessary OAuth scopes.',
+        via: 'structural',
       });
     }
   }
@@ -2158,6 +2201,7 @@ function verifyCWE273(map: NeuralMap): VerificationResult {
         fix: 'Always check the return value: if (setuid(uid) != 0) { perror("setuid"); abort(); }. ' +
           'After dropping, verify with getuid() == target_uid. In security-critical code, call abort() — NOT continue — on failure. ' +
           'Note: on Linux, setuid() for root always sets all three UIDs, but can still fail due to RLIMIT_NPROC.',
+        via: 'structural',
       });
     }
   }
@@ -2197,6 +2241,7 @@ function verifyCWE274(map: NeuralMap): VerificationResult {
           fix: 'Handle EACCES/EPERM explicitly. Do NOT silently continue — either abort with a clear error message, ' +
             'or fail to a secure default (deny access, not allow it). Never fall back from HTTPS to HTTP or skip auth on permission errors. ' +
             'Log the failure for operational visibility.',
+          via: 'structural',
         });
       }
     }
@@ -2247,6 +2292,7 @@ function verifyCWE276(map: NeuralMap): VerificationResult {
           'Use umask(0077) before file creation to ensure restrictive defaults. ' +
           'For directories, use 0700 (owner only) or 0750 (owner + group). ' +
           'Never use 0777/0666 — even 0644 is too broad for secrets, keys, and configs.',
+        via: 'structural',
       });
     }
   }
@@ -2288,6 +2334,7 @@ function verifyCWE277(map: NeuralMap): VerificationResult {
           'Pass a minimal env dict instead of inheriting process.env. ' +
           'Windows: set bInheritHandles=FALSE in CreateProcess, or use PROC_THREAD_ATTRIBUTE_HANDLE_LIST. ' +
           'Use CreateRestrictedToken to limit child token privileges.',
+        via: 'structural',
       });
     }
   }
@@ -2331,6 +2378,7 @@ function verifyCWE279(map: NeuralMap): VerificationResult {
             'Windows: use asInvoker in manifest, elevate only specific operations via COM elevation moniker. ' +
             'Mobile: request permissions one at a time, at the moment they are needed, not at launch. ' +
             'Browser: only request permissions in response to user gestures.',
+          via: 'structural',
         });
       }
     }
@@ -2373,6 +2421,7 @@ function verifyCWE345(map: NeuralMap): VerificationResult {
             `Any window or frame can send messages to this handler, enabling data injection.`,
           fix: 'Always check event.origin against an allowlist of trusted origins before processing postMessage data. ' +
             'Example: if (event.origin !== "https://trusted.example.com") return;',
+          via: 'scope_taint',
         });
       }
     }
@@ -2400,6 +2449,7 @@ function verifyCWE345(map: NeuralMap): VerificationResult {
           fix: 'Verify data authenticity before processing: validate HMAC signatures for webhooks, ' +
             'check TLS certificate pinning for API calls, verify event.origin for postMessage, ' +
             'or use cryptographic signatures for deserialized data.',
+          via: 'scope_taint',
         });
       }
     }
@@ -2435,6 +2485,7 @@ function verifyCWE346(map: NeuralMap): VerificationResult {
           fix: 'Validate the Origin header against a strict allowlist of trusted domains. ' +
             'Never reflect the Origin header directly. ' +
             'Example: const allowed = ["https://app.example.com"]; if (allowed.includes(origin)) res.setHeader("Access-Control-Allow-Origin", origin);',
+          via: 'structural',
         });
         continue;
       }
@@ -2448,6 +2499,7 @@ function verifyCWE346(map: NeuralMap): VerificationResult {
         description: `CORS at ${node.label} uses wildcard origin (*) with credentials enabled. ` +
           `Browsers block this, but misconfigured proxies may not — and it signals broken CORS logic.`,
         fix: 'Replace wildcard "*" with specific trusted origins. Credentials require an exact origin, not a wildcard.',
+        via: 'structural',
       });
       continue;
     }
@@ -2462,6 +2514,7 @@ function verifyCWE346(map: NeuralMap): VerificationResult {
           `While browsers enforce same-origin policy, wildcard CORS exposes data to any website.`,
         fix: 'Restrict Access-Control-Allow-Origin to specific trusted domains for sensitive endpoints. ' +
           'Use an allowlist and validate Origin before reflecting it.',
+        via: 'structural',
       });
     }
   }
@@ -2498,6 +2551,7 @@ function verifyCWE348(map: NeuralMap): VerificationResult {
           `Clients can trivially modify request body fields to escalate privileges.`,
         fix: 'Never trust client-supplied role or permission claims. ' +
           'Look up the user role from a server-side session or database after authentication.',
+        via: 'structural',
       });
     }
 
@@ -2513,6 +2567,7 @@ function verifyCWE348(map: NeuralMap): VerificationResult {
               `Attackers can bypass rate limits by spoofing the header.`,
             fix: 'Configure trust proxy settings (Express: app.set("trust proxy", 1)) so the framework ' +
               'correctly parses the client IP from the proxy chain.',
+            via: 'scope_taint',
           });
         }
       }
@@ -2553,6 +2608,7 @@ function verifyCWE349(map: NeuralMap): VerificationResult {
               fix: 'Explicitly pick only expected fields from user input. ' +
                 'Use a DTO/schema validator (Joi, Zod, class-validator) to define accepted fields. ' +
                 'Never spread raw req.body into database models or config objects.',
+              via: 'bfs',
             });
           }
         }
@@ -2580,6 +2636,7 @@ function verifyCWE349(map: NeuralMap): VerificationResult {
               `Extra fields from the untrusted source contaminate the trusted object.`,
             fix: 'Destructure only known fields: const { name, email } = input; ' +
               'Or use a schema validator to strip unknown fields before merging.',
+            via: 'bfs',
           });
         }
       }
@@ -2614,6 +2671,7 @@ function verifyCWE350(map: NeuralMap): VerificationResult {
           fix: 'Never use reverse DNS for authentication or access control. ' +
             'Use cryptographic authentication (TLS client certificates, JWT, API keys) instead. ' +
             'Reverse DNS is acceptable for logging and diagnostics only.',
+          via: 'structural',
         });
         continue;
       }
@@ -2627,6 +2685,7 @@ function verifyCWE350(map: NeuralMap): VerificationResult {
             `DNS responses can be spoofed via cache poisoning, BGP hijacking, or rogue PTR records.`,
           fix: 'Replace DNS-based trust with cryptographic identity verification. ' +
             'If hostname checking is needed, use forward-confirmed reverse DNS as defense-in-depth only.',
+          via: 'structural',
         });
       }
     }
@@ -2665,6 +2724,7 @@ function verifyCWE353(map: NeuralMap): VerificationResult {
               description: `External resource loaded at ${node.label} without integrity checking. ` +
                 `If the CDN is compromised, malicious code will be silently loaded.`,
               fix: 'Add SRI attributes: <script src="..." integrity="sha384-..." crossorigin="anonymous">.',
+              via: 'scope_taint',
             });
           }
         }
@@ -2680,6 +2740,7 @@ function verifyCWE353(map: NeuralMap): VerificationResult {
           description: `File download at ${node.label} has no integrity check. ` +
             `A compromised mirror or MITM attacker could serve malicious content.`,
           fix: 'Verify downloaded file integrity against a known-good hash before use.',
+          via: 'structural',
         });
       }
     }
@@ -2694,6 +2755,7 @@ function verifyCWE353(map: NeuralMap): VerificationResult {
             `Compromised config server or MITM could inject malicious settings.`,
           fix: 'Sign configuration data and verify the signature before applying. ' +
             'Or pin the TLS certificate and verify response checksums.',
+          via: 'structural',
         });
       }
     }
@@ -2741,6 +2803,7 @@ function verifyCWE356(map: NeuralMap): VerificationResult {
           fix: `Add a confirmation step before ${actionType} operations: ` +
             'server-side confirmation token, re-authentication, or confirmation dialog. ' +
             'For high-value actions, require password re-entry or 2FA.',
+          via: 'scope_taint',
         });
       }
     }
@@ -2784,6 +2847,7 @@ function verifyCWE565(map: NeuralMap): VerificationResult {
           fix: 'Never trust raw cookie values for security decisions. Use signed cookies (cookie-parser with secret) ' +
             'or server-side sessions. For stateless auth, use JWTs with signature verification. ' +
             'Store roles and permissions server-side, not in client-modifiable cookies.',
+          via: 'structural',
         });
       }
 
@@ -2801,6 +2865,7 @@ function verifyCWE565(map: NeuralMap): VerificationResult {
                 `Client-controlled cookies should not be trusted without server-side validation.`,
               fix: 'Validate cookie values server-side. Use signed cookies or HMAC to ensure integrity. ' +
                 'Treat cookie data as untrusted user input requiring validation.',
+              via: 'bfs',
             });
             break;
           }
@@ -2852,6 +2917,7 @@ function verifyCWE566(map: NeuralMap): VerificationResult {
               fix: 'Add ownership verification: WHERE id = :id AND user_id = :currentUserId. ' +
                 'Use authorization middleware (e.g., CASL, Pundit, Spring Security) to enforce row-level access control. ' +
                 'Never rely on the client-supplied ID alone for access control.',
+              via: 'bfs',
             });
             break;
           }
@@ -2900,6 +2966,7 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
             fix: 'Set the Secure flag on all cookies containing session IDs, auth tokens, or sensitive data. ' +
               'For Express: res.cookie("session", value, { secure: true, httpOnly: true, sameSite: "strict" }). ' +
               'Also set HttpOnly to prevent XSS theft and SameSite to prevent CSRF.',
+            via: 'structural',
           });
         }
       }
@@ -2929,6 +2996,7 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
         description: `${node.label} explicitly sets cookie Secure flag to false. ` +
           `The cookie will be sent over unencrypted HTTP connections, exposing it to interception.`,
         fix: 'Set cookie.setSecure(true) to ensure cookies are only transmitted over HTTPS.',
+        via: 'structural',
       });
     }
   }
@@ -2959,6 +3027,7 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
             description: `${node.label} creates a Cookie and adds it to the response without calling setSecure(true). ` +
               `The cookie will be transmitted over unencrypted HTTP, exposing it to interception.`,
             fix: 'Call cookie.setSecure(true) before response.addCookie(cookie) to ensure the cookie is only sent over HTTPS.',
+            via: 'scope_taint',
           });
         }
       } else {
@@ -2971,6 +3040,7 @@ function verifyCWE614(map: NeuralMap): VerificationResult {
             description: `${node.label} creates a Cookie and adds it to the response without calling setSecure(true). ` +
               `The cookie will be transmitted over unencrypted HTTP, exposing it to interception.`,
             fix: 'Call cookie.setSecure(true) before response.addCookie(cookie) to ensure the cookie is only sent over HTTPS.',
+            via: 'structural',
           });
         }
       }
@@ -3028,6 +3098,7 @@ function verifyCWE602(map: NeuralMap): VerificationResult {
               ' An attacker can replay requests with arbitrary data using curl/Burp.',
             fix: 'Duplicate ALL client-side validation on the server. Use schema validation (zod, joi, express-validator). ' +
               'Never trust maxlength, disabled, hidden, or JS-only checks.',
+            via: 'bfs',
           });
         }
       }
@@ -3062,17 +3133,22 @@ function verifyCWE603(map: NeuralMap): VerificationResult {
   for (const auth of authNodes603) {
     const code = stripComments(auth.analysis_snapshot || auth.code_snapshot);
     if (CLIENT_AUTH603.test(code) && !SERVER_AUTH603.test(code)) {
-      const src = ingress603.find(s =>
-        hasTaintedPathWithoutControl(map, s.id, auth.id) || sharesFunctionScope(map, s.id, auth.id));
-      if (src) {
+      let src603: typeof ingress603[0] | undefined;
+      let via603: 'bfs' | 'scope_taint' = 'bfs';
+      for (const s of ingress603) {
+        if (hasTaintedPathWithoutControl(map, s.id, auth.id)) { src603 = s; via603 = 'bfs'; break; }
+        if (!src603 && sharesFunctionScope(map, s.id, auth.id)) { src603 = s; via603 = 'scope_taint'; }
+      }
+      if (src603) {
         findings.push({
-          source: nodeRef(src), sink: nodeRef(auth),
+          source: nodeRef(src603), sink: nodeRef(auth),
           missing: 'AUTH (server-side authentication verification -- never trust client-side auth state)',
           severity: 'critical',
           description: `Authentication at ${auth.label} relies on client-side state (localStorage, cookies, client SDK). ` +
             `An attacker can forge auth tokens or set isAuthenticated=true in devtools.`,
           fix: 'Verify authentication server-side on every request. Use jwt.verify() or session lookup in middleware. ' +
             'Client-side auth state is only for UX -- never for security decisions.',
+          via: via603,
         });
       }
     }
@@ -3098,6 +3174,7 @@ function verifyCWE603(map: NeuralMap): VerificationResult {
               description: `Route at ${src.label} uses client-side auth before accessing ${sink.label}. ` +
                 `Server never verifies identity. Attacker sends requests directly.`,
               fix: 'Add server-side auth middleware (passport, jwt.verify, session check) to protect this endpoint.',
+              via: 'bfs',
             });
           }
         }
@@ -3152,6 +3229,7 @@ function verifyCWE639(map: NeuralMap): VerificationResult {
               `Attacker can enumerate or access other users' resources by changing the ID (IDOR).`,
             fix: 'Add ownership check: WHERE user_id = req.user.id. Or verify resource.ownerId === req.user.id after fetch. ' +
               'Use UUIDs instead of sequential IDs to reduce enumeration risk. Apply ABAC/RBAC.',
+            via: 'bfs',
           });
         }
       }
@@ -3186,6 +3264,7 @@ function verifyCWE640(map: NeuralMap): VerificationResult {
           `Attacker can predict reset tokens and take over accounts.`,
         fix: 'Use crypto.randomBytes(32) or uuid.v4() for reset tokens. Add expiration (15-60 min). ' +
           'Hash tokens before storing in DB. Rate-limit reset requests.',
+        via: 'structural',
       });
     }
     if (SECURITY_QUESTION640.test(code)) {
@@ -3197,6 +3276,7 @@ function verifyCWE640(map: NeuralMap): VerificationResult {
           `Answers are often guessable or discoverable via social media.`,
         fix: 'Replace security questions with email/SMS OTP. Use TOTP-based recovery codes. ' +
           'Security questions are considered deprecated by NIST 800-63B.',
+        via: 'structural',
       });
     }
     if (PLAINTEXT_PWD640.test(code) && !SECURE_RESET640.test(code)) {
@@ -3208,6 +3288,7 @@ function verifyCWE640(map: NeuralMap): VerificationResult {
           `This implies passwords are stored reversibly (CWE-257) and exposes them in transit.`,
         fix: 'Never send existing passwords. Generate a one-time reset link with a cryptographic token. ' +
           'Force password change on use. Expire link after single use or timeout.',
+        via: 'structural',
       });
     }
   }
@@ -3227,6 +3308,7 @@ function verifyCWE640(map: NeuralMap): VerificationResult {
           `Attacker can enumerate valid emails and brute-force reset tokens.`,
         fix: 'Rate-limit reset requests by IP and email. Limit to 3-5 requests per hour per email. ' +
           'Return the same response for valid and invalid emails to prevent enumeration.',
+        via: 'scope_taint',
       });
     }
   }
@@ -3258,6 +3340,7 @@ function verifyCWE645(map: NeuralMap): VerificationResult {
         fix: 'Use progressive delay (exponential backoff) instead of hard lockout. ' +
           'If lockout is used, make it temporary (15-30 min). Add CAPTCHA after 3 failures. ' +
           'Lock by IP+account pair, not just account. Alert the user via secondary channel.',
+        via: 'structural',
       });
     }
     if (LOW_THRESHOLD645.test(code)) {
@@ -3269,6 +3352,7 @@ function verifyCWE645(map: NeuralMap): VerificationResult {
           `A single typo locks the user out. Attacker can trivially lock any account.`,
         fix: 'Set threshold to 5-10 attempts. Use progressive delay: 1s, 2s, 4s, 8s... ' +
           'Add CAPTCHA at attempt 3. Consider device/IP fingerprinting before locking.',
+        via: 'structural',
       });
     }
   }
@@ -3307,6 +3391,7 @@ function verifyCWE646(map: NeuralMap): VerificationResult {
           fix: 'Use file-type or mmmagic to inspect file content (magic bytes). ' +
             'Validate both extension AND content match. Store files with server-generated names. ' +
             'Serve uploads from a separate domain with Content-Disposition: attachment.',
+          via: 'scope_taint',
         });
       }
     }
@@ -3325,6 +3410,7 @@ function verifyCWE646(map: NeuralMap): VerificationResult {
           `Attacker can use path traversal in filename or overwrite critical files.`,
         fix: 'Generate a unique filename server-side (uuid + validated extension). ' +
           'Never use originalname directly. Sanitize and validate against an allowlist of extensions.',
+        via: 'structural',
       });
     }
   }
@@ -3360,6 +3446,7 @@ function verifyCWE649(map: NeuralMap): VerificationResult {
             `Base64 and encryption can be reversed; they are not access control.`,
           fix: 'Replace obfuscation with real authorization checks. Verify permissions server-side. ' +
             'Encoding hides data from casual inspection, not from attackers.',
+          via: 'scope_taint',
         });
       }
     }
@@ -3377,6 +3464,7 @@ function verifyCWE649(map: NeuralMap): VerificationResult {
           description: `Code at ${node.label} relies on obscurity (secret URLs, hidden endpoints) for security. ` +
             `URLs leak through logs, referer headers, browser history, and sharing.`,
           fix: 'Add proper authentication and authorization. Secret URLs can supplement but never replace access control.',
+          via: 'scope_taint',
         });
       }
     }
@@ -3411,6 +3499,7 @@ function verifyCWE650(map: NeuralMap): VerificationResult {
           fix: 'Apply auth and CSRF protection to ALL methods. GET is not inherently safe. ' +
             'Use SameSite cookies and check Origin/Referer for CSRF regardless of method. ' +
             'If skipping CSRF for GET, ensure the endpoint truly has no side effects.',
+          via: 'structural',
         });
       }
     }
@@ -3428,6 +3517,7 @@ function verifyCWE650(map: NeuralMap): VerificationResult {
             `GET requests can be triggered by img tags, link prefetching, and are logged in browser history.`,
           fix: 'Move state-changing operations to POST/PUT/DELETE. Apply CSRF protection. ' +
             'GET should only be used for idempotent read operations.',
+          via: 'structural',
         });
       }
     }
@@ -3472,6 +3562,7 @@ function verifyCWE653(map: NeuralMap): VerificationResult {
             fix: 'Isolate admin operations in separate modules/processes/containers. ' +
               'Use separate DB credentials with minimal privileges per component. ' +
               'Apply principle of least privilege at every boundary.',
+            via: 'scope_taint',
           });
         }
       }
@@ -3488,6 +3579,7 @@ function verifyCWE653(map: NeuralMap): VerificationResult {
           `Compromise of any component grants access to all shared resources.`,
         fix: 'Use separate credentials per service/component. Apply least-privilege DB grants. ' +
           'Separate read/write connection pools. Use service accounts with minimal permissions.',
+        via: 'structural',
       });
     }
   }
@@ -3519,8 +3611,9 @@ function verifyCWE654(map: NeuralMap): VerificationResult {
     if (SINGLE_FACTOR654.test(authCode) && !MULTI_FACTOR654.test(authCode)) {
       for (const sink of sensitiveOps654) {
         if (auth.id === sink.id) continue;
-        const connected = sharesFunctionScope(map, auth.id, sink.id) ||
-          hasTaintedPathWithoutControl(map, auth.id, sink.id);
+        const scopeHit654 = sharesFunctionScope(map, auth.id, sink.id);
+        const bfsHit654 = !scopeHit654 && hasTaintedPathWithoutControl(map, auth.id, sink.id);
+        const connected = scopeHit654 || bfsHit654;
         if (connected) {
           const hasMFA = map.nodes.some(n =>
             MULTI_FACTOR654.test(stripComments(n.analysis_snapshot || n.code_snapshot)) &&
@@ -3536,6 +3629,7 @@ function verifyCWE654(map: NeuralMap): VerificationResult {
               fix: 'Add step-up authentication for sensitive operations: require MFA/2FA. ' +
                 'Combine something you know (password) + something you have (TOTP/SMS) + something you are (biometric). ' +
                 'At minimum, require re-authentication for critical actions.',
+              via: scopeHit654 ? 'scope_taint' : 'bfs',
             });
           }
         }
@@ -3556,6 +3650,7 @@ function verifyCWE654(map: NeuralMap): VerificationResult {
           fix: 'Use IP restrictions as defense-in-depth, not as sole access control. ' +
             'Combine with authentication (JWT/session) + authorization (RBAC). ' +
             'Never trust X-Forwarded-For without trusted proxy configuration.',
+          via: 'structural',
         });
       }
     }
@@ -3603,6 +3698,7 @@ function verifyCWE913(map: NeuralMap): VerificationResult {
           description: `${node.label}: ${p.name}. ` +
             `Dynamically loading code from external input allows attackers to execute arbitrary code.`,
           fix: p.fix,
+          via: 'structural',
         });
         break;
       }
@@ -3624,6 +3720,7 @@ function verifyCWE913(map: NeuralMap): VerificationResult {
           severity: 'critical',
           description: `User input from ${src.label} reaches code loading at ${ext.label} without validation.`,
           fix: 'Implement an allowlist of permitted code resources. Verify integrity with checksums or signatures.',
+          via: 'bfs',
         });
       }
     }
@@ -3678,6 +3775,7 @@ function verifyCWE915(map: NeuralMap): VerificationResult {
           description: `${node.label}: ${p.name}. ` +
             `User input controls which properties are set. Attackers can add fields like "isAdmin: true".`,
           fix: p.fix,
+          via: 'structural',
         });
         break;
       }
@@ -3702,6 +3800,7 @@ function verifyCWE915(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `User input from ${src.label} reaches persistence at ${sink.label} without field filtering.`,
             fix: 'Add an explicit allowlist of mutable fields. Use schema validation (Joi, Zod, strong params) to reject unexpected fields.',
+            via: 'bfs',
           });
         }
       }
@@ -3741,6 +3840,7 @@ function verifyCWE1022(map: NeuralMap): VerificationResult {
           `The opened page can access window.opener and redirect the original tab (reverse-tabnabbing).`,
         fix: 'Add rel="noopener noreferrer" to all <a target="_blank"> links. ' +
           'For React 17+, the framework handles this automatically, but explicit is safer for SSR/older builds.',
+        via: 'structural',
       });
     }
 
@@ -3754,6 +3854,7 @@ function verifyCWE1022(map: NeuralMap): VerificationResult {
           `The opened window gets a reference to the opener via window.opener.`,
         fix: 'Pass "noopener,noreferrer" as the windowFeatures parameter: ' +
           'window.open(url, "_blank", "noopener,noreferrer")',
+        via: 'structural',
       });
     }
   }
@@ -3793,6 +3894,7 @@ function verifyCWE1023(map: NeuralMap): VerificationResult {
             `Partial matches can be bypassed: startsWith("admin") matches "administrator-evil".`,
           fix: 'Use exact equality for security-critical comparisons. If prefix/suffix matching is needed, ' +
             'combine with length checks or use allowlists instead of prefix patterns.',
+          via: 'structural',
         });
       }
     }
@@ -3807,6 +3909,7 @@ function verifyCWE1023(map: NeuralMap): VerificationResult {
         description: `${node.label}: uses loose equality (==) to compare security-sensitive values. ` +
           `Type coercion means "0" == 0 == false — an attacker can bypass checks with type confusion.`,
         fix: 'Use strict equality (===) for all security comparisons. In Python, use "is" for None/True/False checks.',
+        via: 'structural',
       });
     }
 
@@ -3821,6 +3924,7 @@ function verifyCWE1023(map: NeuralMap): VerificationResult {
           `Standard comparison short-circuits on first mismatch, leaking information via timing side-channels.`,
         fix: 'Use crypto.timingSafeEqual (Node.js), hmac.compare_digest (Python), ' +
           'MessageDigest.isEqual (Java), or constant_time_compare (Ruby).',
+        via: 'structural',
       });
     }
   }
@@ -3855,6 +3959,7 @@ function verifyCWE1024(map: NeuralMap): VerificationResult {
           `This can produce silently wrong results due to type coercion or special-case semantics (NaN !== NaN, null == undefined).`,
         fix: 'Ensure both sides of a comparison are the same type. Use explicit type conversion before comparing. ' +
           'Use linter rules like @typescript-eslint/no-unsafe-comparison.',
+        via: 'structural',
       });
     }
 
@@ -3867,6 +3972,7 @@ function verifyCWE1024(map: NeuralMap): VerificationResult {
         description: `${node.label}: directly compares a string literal with a number literal. ` +
           `In JS, "1" == 1 is true but "1" === 1 is false — inconsistent behavior depending on operator.`,
         fix: 'Convert to the same type explicitly before comparing: Number(str) === num or str === String(num).',
+        via: 'structural',
       });
     }
 
@@ -3879,6 +3985,7 @@ function verifyCWE1024(map: NeuralMap): VerificationResult {
         description: `${node.label}: PHP loose comparison (==) with a type-juggling-prone value. ` +
           `In PHP, "0e123" == "0e456" is true (both cast to 0 in scientific notation) — this breaks password hash comparison.`,
         fix: 'Use strict comparison (===) in PHP. For hash comparison, use hash_equals() which is also timing-safe.',
+        via: 'structural',
       });
     }
   }
@@ -3916,6 +4023,7 @@ function verifyCWE1025(map: NeuralMap): VerificationResult {
             `This is always true (===) or always false (!==) — likely a copy-paste bug where one side should be a different variable.`,
           fix: 'Review the comparison and use the correct variable on one side. ' +
             'If checking for NaN, use Number.isNaN(x) instead of x !== x.',
+          via: 'structural',
         });
       }
     }
@@ -3929,6 +4037,7 @@ function verifyCWE1025(map: NeuralMap): VerificationResult {
         description: `${node.label}: for-loop condition compares the counter variable to itself. ` +
           `This creates either an infinite loop or a never-executing loop.`,
         fix: 'Fix the loop condition to compare the counter to the correct bound variable.',
+        via: 'structural',
       });
     }
   }
@@ -3983,6 +4092,7 @@ function verifyCWE1036(map: NeuralMap): VerificationResult {
           `An attacker can specify arbitrary class names to instantiate dangerous classes or load malicious modules.`,
         fix: 'Use an allowlist of permitted class/module names. Map user input to a fixed set of known-safe values: ' +
           'const ALLOWED = { "csv": CsvParser, "json": JsonParser }; const Parser = ALLOWED[input];',
+        via: 'structural',
       });
     }
   }
@@ -4008,6 +4118,7 @@ function verifyCWE1036(map: NeuralMap): VerificationResult {
               `Without an allowlist, an attacker controls which code gets loaded and executed.`,
             fix: 'Validate the class/module name against an explicit allowlist before loading. ' +
               'Never pass raw user input to require(), import(), Class.forName(), or similar.',
+            via: 'bfs',
           });
         }
       }
@@ -4037,12 +4148,12 @@ function verifyCWE939(map: NeuralMap): VerificationResult {
         if (!AUTH939.test(allC)) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (authorization in URL scheme handler)', severity: 'high',
             description: `${sch.name} at ${node.label} processes requests without authorization. Any app can invoke this handler.`,
-            fix: 'Verify source app (iOS: sourceApplication, Android: callingPackage/getReferrer). Allowlist URL parameters.' });
+            fix: 'Verify source app (iOS: sourceApplication, Android: callingPackage/getReferrer). Allowlist URL parameters.', via: 'scope_taint' });
         }
         if (!INP939.test(allC)) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (input validation in URL scheme handler)', severity: 'medium',
             description: `${sch.name} at ${node.label} uses URL scheme data without input validation. Malicious apps can craft attack URLs.`,
-            fix: 'Parse and validate all URL components. Use URL/URLComponents. Allowlist expected hosts, paths, and parameters.' });
+            fix: 'Parse and validate all URL components. Use URL/URLComponents. Allowlist expected hosts, paths, and parameters.', via: 'scope_taint' });
         }
         break;
       }
@@ -4074,7 +4185,7 @@ function verifyCWE940(map: NeuralMap): VerificationResult {
       if (ch.pattern.test(code)) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: `CONTROL (source verification — ${ch.name})`, severity: ch.severity,
           description: `${node.label}: ${ch.name}. App may connect to or accept data from a spoofed server.`,
-          fix: 'Enable TLS certificate verification. Use certificate pinning for high-security channels. Never disable in production.' });
+          fix: 'Enable TLS certificate verification. Use certificate pinning for high-security channels. Never disable in production.', via: 'structural' });
         break;
       }
     }
@@ -4097,18 +4208,18 @@ function verifyCWE941(map: NeuralMap): VerificationResult {
       if (!SAFE941.test(code) && !sibs.some(n => SAFE941.test(stripComments(n.analysis_snapshot || n.code_snapshot)))) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (destination validation for outbound connection)', severity: 'high',
           description: `Outbound connection at ${node.label} uses user-controlled destination. Attacker can redirect to malicious server.`,
-          fix: 'Validate destination URLs against an allowlist of trusted hosts. Parse URL and check hostname.' });
+          fix: 'Validate destination URLs against an allowlist of trusted hosts. Parse URL and check hostname.', via: 'scope_taint' });
       }
     }
     if (REDIR941.test(code) && !SAFE941.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (redirect destination validation)', severity: 'medium',
         description: `Redirect at ${node.label} uses user-controlled destination, enabling open redirect.`,
-        fix: 'Validate redirect destinations against an allowlist. Use relative URLs where possible.' });
+        fix: 'Validate redirect destinations against an allowlist. Use relative URLs where possible.', via: 'structural' });
     }
     if (HTTP941.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (use HTTPS for remote destinations)', severity: 'medium',
         description: `${node.label} connects to remote host over plain HTTP. DNS hijacking can redirect without detection.`,
-        fix: 'Use HTTPS for all remote connections to ensure correct destination.' });
+        fix: 'Use HTTPS for all remote connections to ensure correct destination.', via: 'structural' });
     }
   }
   return { cwe: 'CWE-941', name: 'Incorrectly Specified Destination in a Communication Channel', holds: findings.length === 0, findings };
@@ -4129,29 +4240,29 @@ function verifyCWE942(map: NeuralMap): VerificationResult {
     if (XDOM942.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (restrictive cross-domain policy)', severity: 'high',
         description: `${node.label} has permissive crossdomain.xml or allowDomain("*") allowing any domain cross-origin access.`,
-        fix: 'Restrict to specific trusted domains. Remove crossdomain.xml if Flash/Silverlight not needed.' });
+        fix: 'Restrict to specific trusted domains. Remove crossdomain.xml if Flash/Silverlight not needed.', via: 'structural' });
     }
     if (REFL942.test(code) && CRED942.test(code) && !SAFE942.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (origin allowlist for CORS with credentials)', severity: 'critical',
         description: `${node.label} reflects Origin with credentials. Any website can make authenticated cross-origin requests.`,
-        fix: 'Validate Origin against a strict allowlist. Never reflect arbitrary origins with credentials.' });
+        fix: 'Validate Origin against a strict allowlist. Never reflect arbitrary origins with credentials.', via: 'structural' });
     } else if (WCORS942.test(code)) {
       const sens = node.node_type === 'AUTH' || node.node_type === 'STORAGE' || node.attack_surface.includes('sensitive_data') || /\b(user|account|payment|admin|internal|private)\b/i.test(node.label);
       if (sens) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (restrictive CORS on sensitive endpoint)', severity: 'high',
           description: `Sensitive endpoint ${node.label} has wildcard CORS. Any website can read responses.`,
-          fix: 'Use specific trusted origins instead of wildcard for sensitive endpoints.' });
+          fix: 'Use specific trusted origins instead of wildcard for sensitive endpoints.', via: 'structural' });
       }
     }
     if (PM942.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (specific target origin for postMessage)', severity: 'medium',
         description: `${node.label} sends postMessage with targetOrigin "*". Any window can receive these messages.`,
-        fix: 'Specify exact target origin: window.postMessage(data, "https://trusted.example.com").' });
+        fix: 'Specify exact target origin: window.postMessage(data, "https://trusted.example.com").', via: 'structural' });
     }
     if (CSP942.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (restrictive CSP)', severity: 'medium',
         description: `${node.label} sets permissive CSP with wildcard sources, defeating its purpose.`,
-        fix: 'Use specific origins in CSP. Avoid wildcards in default-src and script-src.' });
+        fix: 'Use specific origins in CSP. Avoid wildcards in default-src and script-src.', via: 'structural' });
     }
   }
   return { cwe: 'CWE-942', name: 'Permissive Cross-domain Policy with Untrusted Domains', holds: findings.length === 0, findings };
@@ -4186,7 +4297,7 @@ function verifyCWE943(map: NeuralMap): VerificationResult {
         if (!q.safeRe.test(code) && !sibs.some(n => q.safeRe.test(stripComments(n.analysis_snapshot || n.code_snapshot)))) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: `CONTROL (query parameterization — ${q.name})`, severity: q.severity,
             description: `${node.label}: ${q.name}. User input reaches data query without neutralization.`,
-            fix: 'Use parameterized queries. NoSQL: mongo-sanitize / express-mongo-sanitize. LDAP: ldap_escape. GraphQL: use variables.' });
+            fix: 'Use parameterized queries. NoSQL: mongo-sanitize / express-mongo-sanitize. LDAP: ldap_escape. GraphQL: use variables.', via: 'scope_taint' });
           break;
         }
       }
@@ -4217,7 +4328,7 @@ function verifyCWE943(map: NeuralMap): VerificationResult {
         if (!NOSQL_SAFE_RE.test(code) && !/\b(parameterized|prepared|sanitize|escape|bind|placeholder)\b/i.test(code)) {
           findings.push({ source: nodeRef(s), sink: nodeRef(sk), missing: 'CONTROL (query neutralization)', severity: 'critical',
             description: `User input from ${s.label} reaches NoSQL query at ${sk.label} without sanitization.`,
-            fix: 'Add input sanitization: mongo-sanitize, express-mongo-sanitize, or validate/whitelist query fields.' });
+            fix: 'Add input sanitization: mongo-sanitize, express-mongo-sanitize, or validate/whitelist query fields.', via: 'bfs' });
         }
       }
     }
@@ -4238,18 +4349,18 @@ function verifyCWE1004(map: NeuralMap): VerificationResult {
       if (isSens && !HO1004.test(code)) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (httpOnly flag on sensitive cookie)', severity: 'high',
           description: `Sensitive cookie at ${node.label} set without HttpOnly. XSS can steal it via document.cookie.`,
-          fix: 'Set httpOnly: true. Express: res.cookie("session", val, { httpOnly: true, secure: true, sameSite: "strict" }).' });
+          fix: 'Set httpOnly: true. Express: res.cookie("session", val, { httpOnly: true, secure: true, sameSite: "strict" }).', via: 'structural' });
       }
     }
     if (SCFG1004.test(code) && /\bhttpOnly\s*[:=]\s*false\b|\bhttp_only\s*[:=]\s*(?:false|False|0)\b/i.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (httpOnly explicitly disabled)', severity: 'high',
         description: `Session config at ${node.label} explicitly disables httpOnly, exposing cookies to XSS.`,
-        fix: 'Remove httpOnly: false. Most frameworks default to httpOnly: true.' });
+        fix: 'Remove httpOnly: false. Most frameworks default to httpOnly: true.', via: 'structural' });
     }
     if (/\bdocument\.cookie\s*=/.test(code) && SENS1004.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (server-side cookie setting)', severity: 'high',
         description: `${node.label} sets sensitive cookie via document.cookie. JS cookies cannot have HttpOnly.`,
-        fix: 'Set sensitive cookies server-side with Set-Cookie header and HttpOnly flag.' });
+        fix: 'Set sensitive cookies server-side with Set-Cookie header and HttpOnly flag.', via: 'structural' });
     }
   }
   return { cwe: 'CWE-1004', name: 'Sensitive Cookie Without HttpOnly Flag', holds: findings.length === 0, findings };
@@ -4270,7 +4381,7 @@ function verifyCWE1007(map: NeuralMap): VerificationResult {
         if (sec) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (Unicode normalization/homoglyph detection)', severity: 'medium',
             description: `${node.label} displays user-controlled identifiers in security context without homoglyph detection. Attackers can impersonate via confusable Unicode.`,
-            fix: 'Normalize Unicode (NFKC). Use ICU confusable detection for usernames. Convert IDN to Punycode.' });
+            fix: 'Normalize Unicode (NFKC). Use ICU confusable detection for usernames. Convert IDN to Punycode.', via: 'scope_taint' });
         }
       }
     }
@@ -4281,7 +4392,7 @@ function verifyCWE1007(map: NeuralMap): VerificationResult {
     if (!UN1007.test(code) && /\b(display|show|render|href|src)\b/i.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (IDN homoglyph detection for URLs)', severity: 'medium',
         description: `${node.label} displays URLs without IDN normalization. Homoglyphs can mimic trusted domains.`,
-        fix: 'Convert IDN domains to Punycode for display. Show xn-- form for non-ASCII domains.' });
+        fix: 'Convert IDN domains to Punycode for display. Show xn-- form for non-ASCII domains.', via: 'structural' });
     }
   }
   return { cwe: 'CWE-1007', name: 'Insufficient Visual Distinction of Homoglyphs', holds: findings.length === 0, findings };
@@ -4327,7 +4438,7 @@ function verifyCWE1021(map: NeuralMap): VerificationResult {
       if (!FR1021.test(allC) && !GD1021.test(allC) && !BU1021.test(allC)) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (X-Frame-Options or CSP frame-ancestors)', severity: 'medium',
           description: `Sensitive page ${node.label} has no clickjacking protection. Attacker can embed in iframe for click hijacking.`,
-          fix: 'Set X-Frame-Options: DENY globally. Better: CSP frame-ancestors \'self\'. Express: app.use(helmet()).' });
+          fix: 'Set X-Frame-Options: DENY globally. Better: CSP frame-ancestors \'self\'. Express: app.use(helmet()).', via: 'scope_taint' });
       }
     }
     if (sP1021.length === 0) {
@@ -4337,7 +4448,7 @@ function verifyCWE1021(map: NeuralMap): VerificationResult {
         if (tgt) {
           findings.push({ source: nodeRef(tgt), sink: nodeRef(tgt), missing: 'CONTROL (global clickjacking protection)', severity: 'medium',
             description: `App has state-changing endpoints but no global clickjacking protection.`,
-            fix: 'Add X-Frame-Options: DENY or CSP frame-ancestors \'self\' as global middleware.' });
+            fix: 'Add X-Frame-Options: DENY or CSP frame-ancestors \'self\' as global middleware.', via: 'structural' });
         }
       }
     }
@@ -4388,6 +4499,7 @@ function verifyCWE305(map: NeuralMap): VerificationResult {
         fix: 'Replace IP-based authentication with a proper mechanism (JWT, session tokens, API keys). ' +
           'IP-based checks can supplement but should never be the primary authentication factor. ' +
           'Use IP allowlisting only as defense-in-depth alongside strong auth.',
+        via: 'structural',
       });
     }
 
@@ -4401,6 +4513,7 @@ function verifyCWE305(map: NeuralMap): VerificationResult {
           `The Referer header is user-controlled and trivially spoofed by attackers.`,
         fix: 'Never use Referer for authentication. Use CSRF tokens, session-based auth, or JWTs instead. ' +
           'Referer checking is acceptable only as a supplementary CSRF defense, not as primary auth.',
+        via: 'structural',
       });
     }
 
@@ -4414,6 +4527,7 @@ function verifyCWE305(map: NeuralMap): VerificationResult {
           `User-Agent is trivially spoofed. An attacker can impersonate any client.`,
         fix: 'Replace User-Agent checking with proper authentication (API keys, OAuth tokens, client certificates). ' +
           'User-Agent strings are not credentials and must not gate access to resources.',
+        via: 'structural',
       });
     }
   }
@@ -4498,6 +4612,7 @@ function verifyCWE307(map: NeuralMap): VerificationResult {
           'Implement progressive delays or account lockout after N failed attempts. ' +
           'Example: app.post("/login", rateLimit({ windowMs: 15*60*1000, max: 5 }), loginHandler). ' +
           'Consider CAPTCHA after failed attempts.',
+        via: 'structural',
       });
     }
   }
@@ -4570,6 +4685,7 @@ function verifyCWE308(map: NeuralMap): VerificationResult {
       fix: 'Implement MFA for sensitive operations. Use TOTP (speakeasy/otplib), WebAuthn/FIDO2, or SMS verification. ' +
         'At minimum: admin panels, financial operations, password changes, and account deletion should require 2FA. ' +
         'Example: require TOTP verification before allowing fund transfers.',
+      via: 'structural',
     });
   }
 
@@ -4617,6 +4733,7 @@ function verifyCWE309(map: NeuralMap): VerificationResult {
       fix: 'Use API keys, OAuth2 client credentials, mutual TLS, or JWT-based auth for service accounts. ' +
         'Passwords should be reserved for human interactive login. ' +
         'Example: use Bearer tokens with short expiration for API-to-API calls.',
+      via: 'structural',
     });
   }
 
@@ -4650,6 +4767,7 @@ function verifyCWE280(map: NeuralMap): VerificationResult {
             `When a privilege check fails, the code proceeds as though it succeeded.`,
           fix: 'When permission checks fail, propagate the error or deny the operation. ' +
             'Never catch permission errors with empty handlers. Log the failure and return an appropriate error response.',
+          via: 'structural',
         });
       }
     }
@@ -4665,6 +4783,7 @@ function verifyCWE280(map: NeuralMap): VerificationResult {
             `If the permission change fails silently, the application may operate with incorrect access controls.`,
           fix: 'Always check return values or catch errors from permission-setting operations. ' +
             'If chmod/chown/setACL fails, the operation that depends on those permissions must not proceed.',
+          via: 'structural',
         });
       }
     }
@@ -4678,6 +4797,7 @@ function verifyCWE280(map: NeuralMap): VerificationResult {
           description: `Code at ${node.label} has an empty catch block in permission-related context. ` +
             `Permission failures are silently ignored.`,
           fix: 'Populate the catch block with proper error handling. For permission failures, deny the operation or escalate the error.',
+          via: 'structural',
         });
       }
     }
@@ -4717,6 +4837,7 @@ function verifyCWE282(map: NeuralMap): VerificationResult {
           `Without ownership, authorization checks on the resource cannot determine who should have access.`,
         fix: 'Set an owner field (e.g., ownerId: req.user.id) when creating resources. ' +
           'Use the authenticated user identity from the server-side session/token, not from client input.',
+        via: 'structural',
       });
     }
   }
@@ -4735,6 +4856,7 @@ function verifyCWE282(map: NeuralMap): VerificationResult {
               `An attacker can claim ownership of any resource by supplying an arbitrary owner ID.`,
             fix: 'Never allow ownership to be set from request body/params. Derive ownership from the authenticated session. ' +
               'Ownership transfers should require admin approval or the current owner\'s verified consent.',
+            via: 'bfs',
           });
         }
       }
@@ -4787,6 +4909,7 @@ function verifyCWE283(map: NeuralMap): VerificationResult {
                 `An attacker can access or modify other users' resources by changing the ID parameter.`,
               fix: 'Add an ownership check: WHERE user_id = req.user.id, or verify resource.ownerId === req.user.id before access. ' +
                 'Use row-level security policies if your database supports them.',
+              via: 'bfs',
             });
           }
         }
@@ -4836,6 +4959,7 @@ function verifyCWE284(map: NeuralMap): VerificationResult {
             fix: 'Add access control: (1) Authentication — verify identity via session/token, ' +
               '(2) Authorization — verify permissions via RBAC/ABAC, ' +
               '(3) Ownership — verify the user has rights to the specific resource.',
+            via: 'bfs',
           });
         }
       }
@@ -4895,10 +5019,14 @@ function verifyCWE285(map: NeuralMap): VerificationResult {
     const code = stripComments(az.analysis_snapshot || az.code_snapshot);
     for (const { pattern, desc, sev } of flawPatterns285) {
       if (pattern.test(code)) {
-        const src = ingress285.find(s =>
-          hasTaintedPathWithoutControl(map, s.id, az.id) || sharesFunctionScope(map, s.id, az.id));
+        let src285: typeof ingress285[0] | undefined;
+        let via285: 'bfs' | 'scope_taint' | 'structural' = 'structural';
+        for (const s of ingress285) {
+          if (hasTaintedPathWithoutControl(map, s.id, az.id)) { src285 = s; via285 = 'bfs'; break; }
+          if (!src285 && sharesFunctionScope(map, s.id, az.id)) { src285 = s; via285 = 'scope_taint'; }
+        }
         findings.push({
-          source: src ? nodeRef(src) : nodeRef(az),
+          source: src285 ? nodeRef(src285) : nodeRef(az),
           sink: nodeRef(az),
           missing: 'CONTROL (correct authorization implementation)',
           severity: sev,
@@ -4907,6 +5035,7 @@ function verifyCWE285(map: NeuralMap): VerificationResult {
           fix: 'Fix the authorization implementation: (1) Always check and act on the result of authorization calls. ' +
             '(2) Derive roles from server-side session/JWT, never from request body. ' +
             '(3) Use strict equality (===). (4) Return/throw on authorization failure.',
+          via: via285,
         });
         break;
       }
@@ -4950,6 +5079,7 @@ function verifyCWE286(map: NeuralMap): VerificationResult {
               `A regular user could create/delete/modify other user accounts or elevate privileges.`,
             fix: 'Require admin or superuser role for all user management operations. ' +
               'Use middleware like requireRole("admin"). Never allow users to modify their own role via request body.',
+            via: 'bfs',
           });
         }
       }
@@ -4967,6 +5097,7 @@ function verifyCWE286(map: NeuralMap): VerificationResult {
           `An attacker can escalate their own privileges by setting role=admin in the request.`,
         fix: 'Never accept role assignments from client input. ' +
           'Roles must be assigned by authorized admins through a separate, protected operation.',
+        via: 'bfs',
       });
     }
   }
@@ -5003,6 +5134,7 @@ function verifyCWE289(map: NeuralMap): VerificationResult {
           fix: 'Canonicalize paths before comparing: use path.resolve/realpath, decodeURIComponent, toLowerCase(). ' +
             'Compare canonical forms only. Reject requests with encoded separators (../, %2e, %2f). ' +
             'Use allowlists of canonical resource names rather than denylists.',
+          via: 'structural',
         });
       }
     }
@@ -5023,6 +5155,7 @@ function verifyCWE289(map: NeuralMap): VerificationResult {
                 `The attacker can encode or alias the resource name to bypass the check.`,
               fix: 'Normalize and canonicalize all user-supplied paths/names before any security decision. ' +
                 'Apply decoding, case normalization, and path resolution before comparison.',
+              via: 'bfs',
             });
           }
         }
@@ -5062,6 +5195,7 @@ function verifyCWE291(map: NeuralMap): VerificationResult {
             `IP addresses can be spoofed via X-Forwarded-For headers and are unreliable behind NAT/proxies.`,
           fix: 'Use cryptographic authentication (JWT, session tokens, mutual TLS, API keys) as the PRIMARY auth mechanism. ' +
             'IP-based restrictions are acceptable as ADDITIONAL defense-in-depth but never as the sole authentication factor.',
+          via: 'structural',
         });
       }
     }
@@ -5122,6 +5256,7 @@ function verifyCWE302(map: NeuralMap): VerificationResult {
             fix: 'Never trust client-supplied authentication/authorization state. ' +
               'Maintain auth state server-side (sessions, signed JWTs). ' +
               'If auth data must be in cookies, sign them with HMAC and verify server-side.',
+            via: 'structural',
           });
           break;
         }
@@ -5143,6 +5278,7 @@ function verifyCWE302(map: NeuralMap): VerificationResult {
                 severity: 'high',
                 description: `Client-controlled ${desc} from ${src.label} flows to auth decision at ${auth.label} without signature verification.`,
                 fix: 'Sign auth data with server-side secret (HMAC, JWT). Verify the signature before trusting the data.',
+                via: 'bfs',
               });
             }
             break;
@@ -5191,6 +5327,7 @@ function verifyCWE304(map: NeuralMap): VerificationResult {
             `Any user who knows a valid username can authenticate without the correct password.`,
           fix: 'Always verify both the identity (username/email) AND the credential (password, token, certificate). ' +
             'Use bcrypt.compare or equivalent for password verification.',
+          via: 'structural',
         });
       }
     }
@@ -5204,6 +5341,7 @@ function verifyCWE304(map: NeuralMap): VerificationResult {
           `An attacker can forge tokens that pass the format check but contain arbitrary claims.`,
         fix: 'Always verify token signatures using jwt.verify() or equivalent with the server-side secret/public key. ' +
           'Checking token format, length, or presence is NOT authentication.',
+        via: 'structural',
       });
     }
 
@@ -5218,6 +5356,7 @@ function verifyCWE304(map: NeuralMap): VerificationResult {
             `Stolen or leaked tokens remain valid indefinitely.`,
           fix: 'Include an "exp" claim in tokens and verify it. Use libraries that check expiration automatically. ' +
             'Implement token rotation and short-lived access tokens with refresh tokens.',
+          via: 'structural',
         });
       }
     }
@@ -5241,6 +5380,7 @@ function verifyCWE304(map: NeuralMap): VerificationResult {
             `This allows session fixation attacks.`,
           fix: 'Regenerate the session ID on successful login (req.session.regenerate()). ' +
             'Invalidate old sessions before creating new ones.',
+          via: 'structural',
         });
       }
     }
@@ -5283,6 +5423,7 @@ function verifyCWE266(map: NeuralMap): VerificationResult {
           'chmod 750 instead of 777. Assign specific roles, not "admin" by default. ' +
           'Use GRANT SELECT ON specific_table instead of GRANT ALL. ' +
           'In containers, drop ALL capabilities and add back only what is needed.',
+        via: 'structural',
       });
     }
 
@@ -5297,6 +5438,7 @@ function verifyCWE266(map: NeuralMap): VerificationResult {
         fix: 'Default to the minimum privilege level (e.g., "viewer" or "user" role). ' +
           'Require explicit, authenticated, authorized action to elevate privileges. ' +
           'Follow principle of fail-safe defaults: absence of access should mean denial.',
+        via: 'structural',
       });
     }
   }
@@ -5321,6 +5463,7 @@ function verifyCWE266(map: NeuralMap): VerificationResult {
             fix: 'Never accept privilege/role values directly from user input. Use server-side lookup to map user actions ' +
               'to privilege levels. Validate against an allowlist of assignable roles. ' +
               'Require existing admin authorization to assign elevated roles.',
+            via: 'bfs',
           });
         }
       }
@@ -5359,6 +5502,7 @@ function verifyCWE268(map: NeuralMap): VerificationResult {
           'not just "is authenticated." Implement step-up authentication for sensitive operations. ' +
           'Use RBAC/ABAC with explicit role checks at each privilege boundary. ' +
           'Never derive higher privileges from lower ones.',
+        via: 'structural',
       });
     }
 
@@ -5373,6 +5517,7 @@ function verifyCWE268(map: NeuralMap): VerificationResult {
         fix: 'Validate privileges on every request against a server-side authority (database, LDAP, IAM). ' +
           'Do not trust client-side role claims. Use signed, server-verified tokens (JWT with server-side validation). ' +
           'Implement privilege separation: each privilege domain should have its own verification.',
+        via: 'structural',
       });
     }
   }
@@ -5399,6 +5544,7 @@ function verifyCWE268(map: NeuralMap): VerificationResult {
             fix: 'Each authorization level must independently verify the principal has the required privilege. ' +
               'Use separate auth middleware for each privilege tier. Require step-up authentication (MFA, password re-entry) ' +
               'for privilege-escalating operations.',
+            via: 'bfs',
           });
         }
       }
@@ -5446,6 +5592,7 @@ function verifyCWE351(map: NeuralMap): VerificationResult {
             `An attacker can rename malicious.php to malicious.jpg to bypass upload filters.`,
           fix: 'Validate content type by inspecting magic bytes (file-type library, libmagic). ' +
             'Never trust file extensions for security decisions. Check both extension AND content.',
+          via: 'structural',
         });
       }
     }
@@ -5461,6 +5608,7 @@ function verifyCWE351(map: NeuralMap): VerificationResult {
           `homoglyphs can bypass checks without compiler/type-system detection.`,
         fix: 'Use typed enums or constant objects for roles/permissions. ' +
           'This ensures the type system catches invalid values at compile time.',
+        via: 'structural',
       });
     }
   }
@@ -5497,6 +5645,7 @@ function verifyCWE355(map: NeuralMap): VerificationResult {
           `Shoulder surfing, screen recording, or screenshots can capture secrets.`,
         fix: 'Mask sensitive values in the UI: show only last 4 chars of tokens, use type="password" for secrets, ' +
           'implement copy-to-clipboard instead of displaying.',
+        via: 'structural',
       });
     }
 
@@ -5510,6 +5659,7 @@ function verifyCWE355(map: NeuralMap): VerificationResult {
           `Credentials and personal data are visible to network observers.`,
         fix: 'Use HTTPS for all form submissions containing sensitive data. ' +
           'Set form action to relative URLs or HTTPS absolute URLs.',
+        via: 'structural',
       });
     }
   }
@@ -5559,6 +5709,7 @@ function verifyCWE357(map: NeuralMap): VerificationResult {
       fix: 'Show an explicit warning dialog explaining the consequences before executing. ' +
         'For high-impact operations, require re-authentication or a typed confirmation phrase ' +
         '(e.g., "type DELETE to confirm").',
+      via: 'scope_taint',
     });
   }
   return { cwe: 'CWE-357', name: 'Insufficient UI Warning of Dangerous Operations', holds: findings.length === 0, findings };
@@ -5600,6 +5751,7 @@ function verifyCWE358(map: NeuralMap): VerificationResult {
           `skips signature verification, algorithm validation, expiry checks, and claim validation.`,
         fix: 'Use a standard JWT library (jsonwebtoken, jose, PyJWT) that handles signature verification, ' +
           'algorithm whitelisting, and claim validation correctly.',
+        via: 'structural',
       });
     }
 
@@ -5613,6 +5765,7 @@ function verifyCWE358(map: NeuralMap): VerificationResult {
           `Fast hashes are trivially brute-forced — GPU rigs crack billions of SHA-256 hashes per second.`,
         fix: 'Use bcrypt, argon2id, or scrypt for password storage. These algorithms are deliberately slow ' +
           'and include built-in salting.',
+        via: 'structural',
       });
     }
 
@@ -5626,6 +5779,7 @@ function verifyCWE358(map: NeuralMap): VerificationResult {
           `This allows man-in-the-middle attacks — any certificate, including self-signed attacker certs, is accepted.`,
         fix: 'Enable certificate verification. Use proper CA bundles. If using self-signed certs in development, ' +
           'use environment-conditional configuration, not blanket disabling.',
+        via: 'structural',
       });
     }
 
@@ -5641,6 +5795,7 @@ function verifyCWE358(map: NeuralMap): VerificationResult {
             `Missing CSRF protection in OAuth flow allows login CSRF attacks.`,
           fix: 'Use an established OAuth2 library (passport, oauthlib, Spring Security OAuth2) that handles ' +
             'state parameter generation, PKCE, token validation, and CSRF protection.',
+          via: 'structural',
         });
       }
     }
@@ -5685,6 +5840,7 @@ function verifyCWE360(map: NeuralMap): VerificationResult {
           fix: 'Never use spoofable headers for security decisions without a trusted proxy configuration. ' +
             'Use the direct connection IP (req.socket.remoteAddress) and configure trust proxy settings. ' +
             'Validate X-Forwarded-For only from known proxy IPs.',
+          via: 'structural',
         });
       }
     }
@@ -5702,6 +5858,7 @@ function verifyCWE360(map: NeuralMap): VerificationResult {
             `An attacker can forge webhook events to trigger actions (payments, account changes, deployments).`,
           fix: 'Verify webhook signatures using HMAC-SHA256 with a shared secret. ' +
             'Use timing-safe comparison (crypto.timingSafeEqual). Most providers (Stripe, GitHub, Slack) send signatures.',
+          via: 'scope_taint',
         });
       }
     }
@@ -5719,6 +5876,7 @@ function verifyCWE360(map: NeuralMap): VerificationResult {
             `they can disable authentication or enable debug mode in production.`,
           fix: 'Guard security-sensitive environment checks with NODE_ENV/ENVIRONMENT checks. ' +
             'Better: remove bypass flags entirely in production builds. Use feature flags with proper auth instead.',
+          via: 'scope_taint',
         });
       }
     }
@@ -5771,6 +5929,7 @@ function verifyCWE419(map: NeuralMap): VerificationResult {
           fix: 'Enforce HTTPS on all channels handling sensitive data. Use HSTS headers. ' +
             'Redirect HTTP to HTTPS. Node: https.createServer({key, cert}). ' +
             'Express: app.use(helmet.hsts()). Set Secure flag on cookies.',
+          via: 'structural',
         });
       }
     }
@@ -5816,6 +5975,7 @@ function verifyCWE420(map: NeuralMap): VerificationResult {
         fix: 'Apply the same authentication and encryption to ALL channels. ' +
           'Disable debug/admin endpoints in production. Bind internal services to localhost. ' +
           'Apply auth middleware: app.use("/admin", requireAuth, adminRouter).',
+        via: 'structural',
       });
     }
   }
@@ -5856,6 +6016,7 @@ function verifyCWE421(map: NeuralMap): VerificationResult {
           fix: 'Initialize all security middleware BEFORE calling listen(). ' +
             'Use app.use(authMiddleware) before app.listen(). ' +
             'In frameworks with lifecycle hooks, register guards in the setup phase.',
+          via: 'structural',
         });
       }
     }
@@ -5871,6 +6032,7 @@ function verifyCWE421(map: NeuralMap): VerificationResult {
           description: `Multi-channel server at ${startup.label} starts without any auth setup. ` +
             `All channels are unprotected from the moment they begin accepting connections.`,
           fix: 'Register auth middleware before listen(). Apply to all server instances.',
+          via: 'structural',
         });
       }
     }
@@ -5915,6 +6077,7 @@ function verifyCWE424(map: NeuralMap): VerificationResult {
               `present on the main path. Attackers can trigger the fallback/error/default path to bypass security.`,
             fix: 'Apply authentication and authorization on ALL code paths, including error handlers, ' +
               'catch blocks, default cases, and fallback routes. Never assume only the happy path is reachable.',
+            via: 'structural',
           });
         }
       }
@@ -5967,6 +6130,7 @@ function verifyCWE425(map: NeuralMap): VerificationResult {
             fix: 'Apply auth middleware to ALL sensitive routes, not just the navigation paths. ' +
               'Use router-level middleware: router.use(requireAuth). ' +
               'Never rely on client-side navigation as an access control mechanism.',
+            via: 'bfs',
           });
           break; // one finding per route
         }
@@ -5990,6 +6154,7 @@ function verifyCWE425(map: NeuralMap): VerificationResult {
           `without authentication. Any user can directly browse to these files.`,
         fix: 'Do not serve sensitive directories as static files. Move them outside the web root. ' +
           'Serve files through authenticated route handlers with access checks.',
+        via: 'structural',
       });
     }
   }
@@ -6034,6 +6199,7 @@ function verifyCWE430(map: NeuralMap): VerificationResult {
         fix: 'Ensure the handler matches the HTTP method semantics. ' +
           'GET = read-only. POST/PUT = create/update. DELETE = removal. ' +
           'Review route-handler mappings for accidental misassignment.',
+        via: 'scope_taint',
       });
     }
 
@@ -6047,6 +6213,7 @@ function verifyCWE430(map: NeuralMap): VerificationResult {
           `The wrong handler may be deployed, or the route definition is incorrect.`,
         fix: 'Verify the handler function matches the route intent. ' +
           'Check for copy-paste errors in route definitions.',
+        via: 'scope_taint',
       });
     }
   }
@@ -6085,6 +6252,7 @@ function verifyCWE431(map: NeuralMap): VerificationResult {
         fix: 'Register an error-handling middleware: app.use((err, req, res, next) => { ... }). ' +
           'Log the error server-side; return a generic message to clients. ' +
           'In Express, this must be a 4-argument middleware registered LAST.',
+        via: 'structural',
       });
     }
   }
@@ -6105,6 +6273,7 @@ function verifyCWE431(map: NeuralMap): VerificationResult {
           `Unhandled rejections crash Node.js (v15+) or silently swallow errors.`,
         fix: 'Add .catch() to all promise chains. Use try/catch with async/await. ' +
           'Register process.on("unhandledRejection") as a safety net.',
+        via: 'structural',
       });
     }
   }
@@ -6124,6 +6293,7 @@ function verifyCWE431(map: NeuralMap): VerificationResult {
           `Abrupt termination can leave connections dangling, data uncommitted, or resources leaked.`,
         fix: 'Register signal handlers: process.on("SIGTERM", () => server.close(...)). ' +
           'Drain connections, flush logs, and close DB connections before exit.',
+        via: 'structural',
       });
     }
   }
@@ -6160,6 +6330,7 @@ function verifyCWE432(map: NeuralMap): VerificationResult {
           fix: 'Use only async-signal-safe functions in signal handlers (set a flag, then handle in main loop). ' +
             'Block signals during critical sections. In Node.js, keep signal handlers minimal — ' +
             'set a flag and let the event loop handle cleanup.',
+          via: 'structural',
         });
       }
     }
@@ -6207,6 +6378,7 @@ function verifyCWE433(map: NeuralMap): VerificationResult {
             fix: 'Always set an explicit Content-Type header. Add X-Content-Type-Options: nosniff. ' +
               'Use res.json() for JSON, res.type("text/plain") for text. ' +
               'Use helmet middleware: app.use(helmet.noSniff()).',
+            via: 'bfs',
           });
         }
       }
@@ -6244,6 +6416,7 @@ function verifyCWE439(map: NeuralMap): VerificationResult {
           fix: 'Never disable security controls based on environment variables. ' +
             'If dev convenience is needed, use explicit feature flags with safe defaults. ' +
             'Default to production security: if (env !== "production") warn, but still enforce.',
+          via: 'structural',
         });
       }
     }
@@ -6261,6 +6434,7 @@ function verifyCWE439(map: NeuralMap): VerificationResult {
           fix: 'Add explicit version checks for version-dependent features. ' +
             'Use engines field in package.json. Test across supported versions in CI. ' +
             'Document minimum version requirements.',
+          via: 'structural',
         });
       }
     }
@@ -6303,6 +6477,7 @@ function verifyCWE440(map: NeuralMap): VerificationResult {
           `Callers expect it to reject bad input, but it silently accepts everything.`,
         fix: 'Ensure validation functions throw, return false, or set an error status for invalid input. ' +
           'A validator that always succeeds is worse than no validator — it creates false confidence.',
+        via: 'structural',
       });
     }
 
@@ -6316,6 +6491,7 @@ function verifyCWE440(map: NeuralMap): VerificationResult {
         description: `Function at ${node.label} is named as a deletion operation but performs no delete action. ` +
           `Data the caller expects to be destroyed may persist, violating data retention policies.`,
         fix: 'Ensure delete/remove functions perform the actual deletion or name soft-delete clearly (archiveX).',
+        via: 'structural',
       });
     }
 
@@ -6329,6 +6505,7 @@ function verifyCWE440(map: NeuralMap): VerificationResult {
           `A failed auth/encryption/validation is indistinguishable from success.`,
         fix: 'Never swallow errors in security-critical code. Log and propagate failure. ' +
           'For auth/crypto operations, a swallowed error means the security check is bypassed.',
+        via: 'structural',
       });
     }
   }
@@ -6374,6 +6551,7 @@ function verifyCWE441(map: NeuralMap): VerificationResult {
                 'Attacker leverages the server\'s trust relationships and network position.',
               fix: 'Validate and allowlist target URLs/hosts. Strip auth headers when forwarding. ' +
                 'Use separate credentials for internal service calls -- never forward user-supplied auth tokens.',
+              via: 'bfs',
             });
           }
         }
@@ -6417,6 +6595,7 @@ function verifyCWE444(map: NeuralMap): VerificationResult {
             `A frontend proxy uses one while the backend uses the other, allowing request smuggling.`,
           fix: 'Never set both Transfer-Encoding and Content-Length. Use a well-tested HTTP library. ' +
             'If proxying, normalize these headers. Prefer HTTP/2 end-to-end.',
+          via: 'structural',
         });
       }
     }
@@ -6429,6 +6608,7 @@ function verifyCWE444(map: NeuralMap): VerificationResult {
         description: `Raw socket HTTP construction at ${node.label}. Manual HTTP framing is extremely ` +
           `prone to smuggling -- any RFC 7230 deviation creates a proxy/backend interpretation gap.`,
         fix: 'Use a proper HTTP client library (axios, node-fetch, urllib3) instead of raw sockets.',
+        via: 'structural',
       });
     }
 
@@ -6444,6 +6624,7 @@ function verifyCWE444(map: NeuralMap): VerificationResult {
           (userControlled ? ' User input influences proxy routing, increasing exploitability.' : ''),
         fix: 'Normalize requests in proxy: reject ambiguous Transfer-Encoding, strip duplicate Content-Length. ' +
           'Use HTTP/2 between proxy and backend. Consider disabling keep-alive as defense-in-depth.',
+        via: 'structural',
       });
     }
 
@@ -6456,6 +6637,7 @@ function verifyCWE444(map: NeuralMap): VerificationResult {
           `Attacker-controlled TE/CL values enable smuggling that bypasses all frontend security.`,
         fix: 'Never allow user input to influence Transfer-Encoding or Content-Length. ' +
           'Let the HTTP framework calculate Content-Length automatically. Rewrite headers when proxying.',
+        via: 'structural',
       });
     }
   }
@@ -6490,6 +6672,7 @@ function verifyCWE446(map: NeuralMap): VerificationResult {
             (isHardcoded ? 'The indicator appears hardcoded. ' : '') +
             'Users rely on security indicators to make trust decisions; a false indicator is actively dangerous.',
           fix: 'Derive security indicators from actual state checks. Never hardcode security indicators.',
+          via: 'structural',
         });
       }
     }
@@ -6524,6 +6707,7 @@ function verifyCWE449(map: NeuralMap): VerificationResult {
           `An attacker who controls the action attribute redirects form submission to their server.`,
         fix: 'Use static form action URLs. Validate dynamic actions against an allowlist. ' +
           'Include CSRF tokens. Use CSP form-action directive to restrict submission targets.',
+        via: 'structural',
       });
     }
 
@@ -6536,6 +6720,7 @@ function verifyCWE449(map: NeuralMap): VerificationResult {
         description: `UI event handler at ${node.label} redirects to a user-influenced URL. ` +
           `A button or link can be manipulated to navigate the user to a malicious page.`,
         fix: 'Validate redirect targets against an allowlist. Use relative URLs where possible.',
+        via: 'structural',
       });
     }
 
@@ -6550,6 +6735,7 @@ function verifyCWE449(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `UI element at ${node.label} labeled "${safeLabel}" but performs "${dangerAction}" action.`,
           fix: 'Ensure labels match actions. Add confirmation dialogs for destructive operations.',
+          via: 'structural',
         });
       }
     }
@@ -6585,6 +6771,7 @@ function verifyCWE450(map: NeuralMap): VerificationResult {
             (isFinancial ? 'Financial calculations can be off by orders of magnitude.' :
             'Permission thresholds can be misinterpreted, granting unintended access.'),
           fix: 'Specify locale explicitly. Use canonical numeric format at the API boundary. Validate ranges.',
+          via: 'structural',
         });
       }
     }
@@ -6598,6 +6785,7 @@ function verifyCWE450(map: NeuralMap): VerificationResult {
         description: `Unicode string comparison at ${node.label} without normalization. ` +
           'Same visual character can have multiple representations -- attacker registers visually identical username.',
         fix: 'Apply String.prototype.normalize("NFC") before comparing. Use NFKC for identifiers.',
+        via: 'structural',
       });
     }
   }
@@ -6630,6 +6818,7 @@ function verifyCWE451(map: NeuralMap): VerificationResult {
         description: `User-controlled HTML in system UI context at ${node.label}. ` +
           'Attacker injects content impersonating system dialogs, tricking users into entering credentials.',
         fix: 'Use textContent instead of innerHTML. If HTML needed, sanitize with DOMPurify.',
+        via: 'structural',
       });
     }
 
@@ -6641,6 +6830,7 @@ function verifyCWE451(map: NeuralMap): VerificationResult {
         description: `URL display truncated at ${node.label}. ` +
           'Subdomain spoofing: "https://legitimate-bank.com.evil.com/..." truncated to "https://legitimate-bank.com..."',
         fix: 'Always display the full domain. If truncating, truncate the path, never the domain.',
+        via: 'structural',
       });
     }
 
@@ -6653,6 +6843,7 @@ function verifyCWE451(map: NeuralMap): VerificationResult {
         description: `Filename without extension at ${node.label} in download context. ` +
           '"report.pdf.exe" displayed as "report.pdf" tricks users into executing malware.',
         fix: 'Always display full filename with all extensions. Warn on multiple extensions.',
+        via: 'structural',
       });
     }
   }
@@ -6684,6 +6875,7 @@ function verifyCWE453(map: NeuralMap): VerificationResult {
         description: `Security flag "${boolMatch[1]}" defaults to true at ${node.label}. ` +
           'If check fails silently, the default grants access. Flags must default to deny.',
         fix: 'Default all security booleans to false/deny. Only set true after explicit verification.',
+        via: 'structural',
       });
     }
 
@@ -6696,6 +6888,7 @@ function verifyCWE453(map: NeuralMap): VerificationResult {
         description: `Security config "${configMatch[1]}" defaults to insecure at ${node.label}. ` +
           'Production deployments inheriting defaults will be silently vulnerable.',
         fix: 'Default to most restrictive. Require explicit opt-out for insecure settings with logging.',
+        via: 'structural',
       });
     }
 
@@ -6707,6 +6900,7 @@ function verifyCWE453(map: NeuralMap): VerificationResult {
         description: `Permissive file permissions at ${node.label}. ` +
           'World-readable/writable permissions allow any local user to read or modify files.',
         fix: 'Use 0600 for secrets, 0640 for config, 0750 for directories.',
+        via: 'structural',
       });
     }
 
@@ -6718,6 +6912,7 @@ function verifyCWE453(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Rate limiting "${rateMatch[1]}" defaults to unlimited at ${node.label}.`,
         fix: 'Set reasonable defaults: 5-10 auth attempts/min, 100-1000 API requests/min.',
+        via: 'structural',
       });
     }
   }
@@ -6749,6 +6944,7 @@ function verifyCWE454(map: NeuralMap): VerificationResult {
         description: `Security variable "${trustVar}" from environment at ${node.label} without validation. ` +
           'Misconfigured deployment can set ADMIN=true. Note: "false" is truthy in JS.',
         fix: 'Validate against allowlist. Use typed config libraries. Never use string truthiness for env vars.',
+        via: 'structural',
       });
     }
 
@@ -6761,6 +6957,7 @@ function verifyCWE454(map: NeuralMap): VerificationResult {
         description: `Security variable "${trustVar}" from URL parameter at ${node.label}. ` +
           'Anyone can add "?admin=true" -- this is a direct privilege escalation vector.',
         fix: 'Never derive security flags from user input. Use server-side sources (session, JWT, database).',
+        via: 'structural',
       });
     }
 
@@ -6772,6 +6969,7 @@ function verifyCWE454(map: NeuralMap): VerificationResult {
         description: `Security decision at ${node.label} based on custom HTTP header. ` +
           'Headers are user-controlled unless stripped by a trusted reverse proxy.',
         fix: 'Only trust headers set by your proxy that strips them from incoming requests.',
+        via: 'structural',
       });
     }
   }
@@ -6804,6 +7002,7 @@ function verifyCWE455(map: NeuralMap): VerificationResult {
         description: `Security initialization at ${node.label} continues after failure. ` +
           'Failed crypto key = no protection. Failed auth connection = bypassed authentication.',
         fix: 'Call process.exit(1) or throw fatal error on security init failure. Use health checks.',
+        via: 'structural',
       });
     }
 
@@ -6818,6 +7017,7 @@ function verifyCWE455(map: NeuralMap): VerificationResult {
           description: `Security at ${node.label} falls back to permissive on init failure. ` +
             'Fail-open: attacker can DoS the auth service to bypass all security.',
           fix: 'Fail closed. Return 503 when security systems unavailable. Alert operations.',
+          via: 'structural',
         });
       }
     }
@@ -6830,6 +7030,7 @@ function verifyCWE455(map: NeuralMap): VerificationResult {
         description: `Auth service connection at ${node.label} logs error but continues. ` +
           'Application may run without authentication, silently admitting all users.',
         fix: 'Exit process or enter safe no-service mode. Use readiness probes and circuit breakers.',
+        via: 'structural',
       });
     }
   }
@@ -6881,6 +7082,7 @@ function verifyCWE551(map: NeuralMap): VerificationResult {
             fix: 'Canonicalize and fully parse/decode the input BEFORE performing authorization checks. ' +
               'Apply path.normalize(), decodeURIComponent(), and URL resolution before any access control decision. ' +
               'Reject requests containing encoded path separators or null bytes.',
+            via: 'bfs',
           });
         }
       }
@@ -6919,6 +7121,7 @@ function verifyCWE523(map: NeuralMap): VerificationResult {
             'Passwords/tokens sent in cleartext can be intercepted by any network observer (WiFi sniffing, ISP, middlebox).',
           fix: 'Use HTTPS (TLS) for all credential transmission. Set HSTS headers. ' +
             'Redirect HTTP to HTTPS at the server/load-balancer level. Use Secure flag on cookies.',
+          via: 'structural',
         });
       }
     }
@@ -6931,6 +7134,7 @@ function verifyCWE523(map: NeuralMap): VerificationResult {
         description: `Login form at ${node.label} submits credentials over HTTP. ` +
           'The username and password are visible to anyone on the network path.',
         fix: 'Change form action to HTTPS. Better: use relative URLs and enforce HTTPS site-wide via HSTS.',
+        via: 'structural',
       });
     }
   }
@@ -6951,6 +7155,7 @@ function verifyCWE523(map: NeuralMap): VerificationResult {
           description: `Credential from ${src.label} flows to unencrypted egress at ${sink.label}. ` +
             'Credentials transmitted in cleartext are trivially interceptable.',
           fix: 'Ensure all credential egress uses TLS. Configure the HTTP client for HTTPS only.',
+          via: 'bfs',
         });
       }
     }

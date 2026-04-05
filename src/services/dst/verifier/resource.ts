@@ -68,6 +68,7 @@ function verifyCWE400(map: NeuralMap): VerificationResult {
                 : subtypeLabel === 'file_descriptors'
                 ? 'Limit concurrent file operations. Close files in finally blocks.'
                 : 'Add appropriate resource limits and rate limiting.'),
+            via: 'bfs',
           });
         }
       }
@@ -97,6 +98,7 @@ function verifyCWE400(map: NeuralMap): VerificationResult {
                 severity: 'medium',
                 description: `User input from ${src.label} is accessible in the same scope as ${subtypeLabel} resource allocation at ${res.label} without bounds checking.`,
                 fix: 'Add input validation or resource limits between user input and resource allocation.',
+                via: 'scope_taint',
               });
             }
           }
@@ -162,6 +164,7 @@ function verifyCWE400(map: NeuralMap): VerificationResult {
             `An attacker can exhaust server CPU resources causing denial of service.`,
           fix: 'Validate and limit user input before using in loop condition. ' +
             'Add upper bound: if (count > MAX_ALLOWED) count = MAX_ALLOWED. Always enforce maximum iteration limits.',
+          via: 'scope_taint',
         });
       }
     }
@@ -216,6 +219,7 @@ function verifyCWE770(map: NeuralMap): VerificationResult {
   // Count how many INGRESS paths reach each RESOURCE
   for (const res of resources) {
     const reachingIngress: NeuralMapNode[] = [];
+    let reachedViaBfs770 = false;
     for (const src of ingress) {
       // Check if there's any path (tainted or not) from ingress to resource
       const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
@@ -236,7 +240,7 @@ function verifyCWE770(map: NeuralMap): VerificationResult {
           if (!visited.has(edge.target)) queue.push(edge.target);
         }
       }
-      if (found) reachingIngress.push(src);
+      if (found) { reachingIngress.push(src); reachedViaBfs770 = true; }
     }
 
     // Also check via function scope proximity
@@ -259,6 +263,7 @@ function verifyCWE770(map: NeuralMap): VerificationResult {
           `An attacker can send many requests to exhaust the resource pool.`,
         fix: 'Add rate limiting middleware (e.g., express-rate-limit) to endpoints that consume shared resources. ' +
           'Set per-IP and global request limits. Use connection pool limits.',
+        via: reachedViaBfs770 ? 'bfs' : 'scope_taint',
       });
     }
   }
@@ -443,6 +448,7 @@ function verifyCWE1333(map: NeuralMap): VerificationResult {
           '(2) Use the RE2 library (Node: "re2" package, Python: "google-re2") which guarantees O(n) matching. ' +
           '(3) Set a hard timeout on regex execution. ' +
           '(4) Validate and limit input length before applying the regex.',
+        via: 'structural',
       });
       break; // One finding per node — most dangerous pattern is enough
     }
@@ -473,6 +479,7 @@ function verifyCWE1333(map: NeuralMap): VerificationResult {
             '(2) Escape user input with escapeRegExp() before constructing. ' +
             '(3) Set a timeout on regex execution. ' +
             '(4) Limit input length before regex construction.',
+          via: 'bfs',
         });
       }
     }
@@ -490,8 +497,9 @@ function verifyCWE1333(map: NeuralMap): VerificationResult {
 
     for (const regNode of regexNodes) {
       for (const src of ingress) {
-        if (hasTaintedPathWithoutControl(map, src.id, regNode.id) ||
-            sharesFunctionScope(map, src.id, regNode.id)) {
+        const bfsHit1333 = hasTaintedPathWithoutControl(map, src.id, regNode.id);
+        const scopeHit1333 = !bfsHit1333 && sharesFunctionScope(map, src.id, regNode.id);
+        if (bfsHit1333 || scopeHit1333) {
           // Check scope snapshots so sanitization on prior lines is visible
           const scopeSnapshots1333 = getContainingScopeSnapshots(map, regNode.id);
           const combinedScope1333 = stripComments(scopeSnapshots1333.join('\n') || regNode.analysis_snapshot || regNode.code_snapshot);
@@ -509,6 +517,7 @@ function verifyCWE1333(map: NeuralMap): VerificationResult {
               description: `User input from ${src.label} may reach regex construction at ${regNode.label}. ` +
                 `Crafted patterns can cause catastrophic backtracking (ReDoS).`,
               fix: 'Escape user input before passing to new RegExp(), or use the re2 library for safe regex.',
+              via: bfsHit1333 ? 'bfs' : 'scope_taint',
             });
             break;
           }
@@ -603,6 +612,7 @@ function verifyCWE404(map: NeuralMap): VerificationResult {
         fix: `Ensure resources are released in a finally block or using a try-with-resources pattern. ` +
           `For connections: always call release() or end() in a finally block. ` +
           `For files: use fs.promises with try/finally, or streams that auto-close.`,
+        via: 'structural',
       });
     }
   }
@@ -647,6 +657,7 @@ function verifyCWE404(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Method ${node.label} opens ${resourceType} but does not close it in a finally block. If an exception occurs, the resource will leak.`,
             fix: 'Move resource close() calls to a finally block, or use try-with-resources (Java 7+) for automatic cleanup.',
+            via: 'structural',
           });
         }
       }
@@ -712,6 +723,7 @@ function verifyCWE405(map: NeuralMap): VerificationResult {
               'bound fan-out counts (e.g., max 100 recipients for broadcast), ' +
               'use pagination/chunking for bulk operations, and add rate limiting on amplifiable endpoints. ' +
               'For recursive expansion: set a max depth. For Promise.all: limit concurrency with p-limit or similar.',
+            via: 'bfs',
           });
         }
       }
@@ -784,6 +796,7 @@ function verifyCWE406(map: NeuralMap): VerificationResult {
               'Use a message queue with bounded throughput rather than synchronous send-all. ' +
               'For webhooks: add circuit breakers and exponential backoff. ' +
               'For notifications: deduplicate and batch.',
+            via: 'bfs',
           });
         }
       }
@@ -811,6 +824,7 @@ function verifyCWE406(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `User input from ${src.label} triggers network message sending at ${sink.label} without volume controls.`,
             fix: 'Add rate limiting, quotas, or message queue with bounded throughput for outbound network messages.',
+            via: 'bfs',
           });
         }
       }
@@ -887,6 +901,7 @@ function verifyCWE407(map: NeuralMap): VerificationResult {
               'For regex: use RE2 or validate patterns with safe-regex. ' +
               'For string matching: use hash-based lookups (Set/Map) instead of nested iteration. ' +
               'For JSON/XML parsing: limit depth and size. Add timeouts as a safety net.',
+            via: 'bfs',
           });
         }
       }
@@ -939,9 +954,9 @@ function verifyCWE409(map: NeuralMap): VerificationResult {
 
   for (const src of ingress) {
     for (const sink of decompressNodes) {
-      const reachable = hasTaintedPathWithoutControl(map, src.id, sink.id) ||
-                        sharesFunctionScope(map, src.id, sink.id);
-      if (!reachable) continue;
+      const bfsHit409 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const scopeHit409 = !bfsHit409 && sharesFunctionScope(map, src.id, sink.id);
+      if (!bfsHit409 && !scopeHit409) continue;
 
       const code = stripComments(sink.analysis_snapshot || sink.code_snapshot);
       const containingFunc = findContainingFunction(map, sink.id);
@@ -964,6 +979,7 @@ function verifyCWE409(map: NeuralMap): VerificationResult {
             'Check the compression ratio — legitimate data rarely exceeds 100:1. ' +
             'For zip archives: limit total extracted size AND number of entries. ' +
             'Use streaming decompression with highWaterMark/backpressure rather than buffering entire output.',
+          via: bfsHit409 ? 'bfs' : 'scope_taint',
         });
       }
     }
@@ -1013,9 +1029,9 @@ function verifyCWE410(map: NeuralMap): VerificationResult {
     for (const res of resources) {
       if (!POOL_PATTERN.test(res.analysis_snapshot || res.code_snapshot) && !res.node_subtype.includes('pool') && !res.node_subtype.includes('connections')) continue;
 
-      const reachable = hasTaintedPathWithoutControl(map, src.id, res.id) ||
-                        sharesFunctionScope(map, src.id, res.id);
-      if (!reachable) continue;
+      const bfsHit410 = hasTaintedPathWithoutControl(map, src.id, res.id);
+      const scopeHit410 = !bfsHit410 && sharesFunctionScope(map, src.id, res.id);
+      if (!bfsHit410 && !scopeHit410) continue;
 
       const code = stripComments(res.analysis_snapshot || res.code_snapshot);
       const containingFunc = findContainingFunction(map, res.id);
@@ -1039,6 +1055,7 @@ function verifyCWE410(map: NeuralMap): VerificationResult {
             'For DB pools: set max connections, connectionTimeout, idleTimeout. ' +
             'For thread pools: use bounded pools with rejection policies. ' +
             'Always set an acquire timeout to fail fast when pool is exhausted.',
+          via: bfsHit410 ? 'bfs' : 'scope_taint',
         });
       }
     }
@@ -1105,8 +1122,9 @@ function verifyCWE362(map: NeuralMap): VerificationResult {
     for (const use of useNodes) {
       if (check.id === use.id) continue;
       // Check must flow to use, or share scope with check before use
-      const flows = check.edges.some(e => e.target === use.id) || sharesFunctionScope(map, check.id, use.id);
-      if (flows) {
+      const edgeHit362 = check.edges.some(e => e.target === use.id);
+      const scopeHit362 = !edgeHit362 && sharesFunctionScope(map, check.id, use.id);
+      if (edgeHit362 || scopeHit362) {
         const allCode = stripComments(check.analysis_snapshot || check.code_snapshot + ' ' + use.code_snapshot);
         if (!TOCTOU_SAFE.test(allCode)) {
           findings.push({
@@ -1115,6 +1133,7 @@ function verifyCWE362(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `TOCTOU: check at ${check.label} then use at ${use.label}. Resource state can change between check and use, creating a race window.`,
             fix: 'Use atomic operations: open() with O_CREAT|O_EXCL, flock() for locking, or try/catch with specific error codes instead of check-then-act.',
+            via: edgeHit362 ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -1145,10 +1164,10 @@ function verifyCWE362(map: NeuralMap): VerificationResult {
   for (const src of concurrentSources) {
     for (const shared of sharedState) {
       if (src.id === shared.id) continue;
-      const flows = src.edges.some(e => e.target === shared.id) ||
-                    hasTaintedPathWithoutControl(map, src.id, shared.id) ||
-                    sharesFunctionScope(map, src.id, shared.id);
-      if (flows) {
+      const edgeHit362b = src.edges.some(e => e.target === shared.id);
+      const bfsHit362b = !edgeHit362b && hasTaintedPathWithoutControl(map, src.id, shared.id);
+      const scopeHit362b = !edgeHit362b && !bfsHit362b && sharesFunctionScope(map, src.id, shared.id);
+      if (edgeHit362b || bfsHit362b || scopeHit362b) {
         const allCode = stripComments(
           (src.analysis_snapshot || src.code_snapshot) + ' ' + (shared.analysis_snapshot || shared.code_snapshot) + ' ' +
           nodesOfType(map, 'CONTROL').filter(c => sharesFunctionScope(map, c.id, shared.id)).map(c => c.analysis_snapshot || c.code_snapshot).join(' ')
@@ -1160,6 +1179,7 @@ function verifyCWE362(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Shared state ${shared.label} accessed from ${src.label} without synchronization. Concurrent access can corrupt data.`,
             fix: 'Protect shared state with a mutex/lock, use atomic operations, or move state to request-scoped storage (DB transaction, local variable).',
+            via: edgeHit362b || bfsHit362b ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -1209,6 +1229,7 @@ function verifyCWE366(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Non-atomic read-modify-write on ${store.label} inside async context ${async.label}. Interleaving across await points can cause lost updates.`,
             fix: 'Use atomic operations (AtomicInteger, Interlocked.Increment), or hold a lock across the entire read-modify-write sequence. Avoid splitting read and write across await.',
+            via: 'scope_taint',
           });
           break;
         }
@@ -1262,6 +1283,7 @@ function verifyCWE367(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Check at ${check.label} (line ${check.line_start}) followed by use at ${use.label} (line ${use.line_start}). File state can change between check and use.`,
             fix: 'Use atomic operations: open() with O_CREAT|O_EXCL, flock() for locking, or try/catch with specific error codes (ENOENT/EEXIST) instead of check-then-act.',
+            via: 'scope_taint',
           });
         }
       }
@@ -1328,6 +1350,7 @@ function verifyCWE363(map: NeuralMap): VerificationResult {
               `An attacker can replace the target with a symlink between the check and use, redirecting the operation to an arbitrary file.`,
             fix: 'Use O_NOFOLLOW flag with open(), openat() with AT_FDCWD for directory-relative access, or operate on file descriptors ' +
               'obtained during the check rather than re-resolving the path. Avoid separate check-then-use on symlink status.',
+            via: 'scope_taint',
           });
         }
       }
@@ -1376,6 +1399,7 @@ function verifyCWE364(map: NeuralMap): VerificationResult {
         fix: 'In signal handlers, only call async-signal-safe functions (write(), _exit(), sig_atomic_t flag set). ' +
           'Use the self-pipe trick or signalfd() to defer processing to the main loop. ' +
           'Set a volatile sig_atomic_t flag in the handler and check it in the main code.',
+        via: 'structural',
       });
     }
 
@@ -1391,6 +1415,7 @@ function verifyCWE364(map: NeuralMap): VerificationResult {
           fix: 'Use volatile sig_atomic_t for any state shared between signal handlers and main code. ' +
             'For complex shared data, block signals with sigprocmask() during critical sections, or ' +
             'use signalfd()/self-pipe to convert signals into I/O events handled synchronously.',
+          via: 'structural',
         });
       }
     }
@@ -1438,6 +1463,7 @@ function verifyCWE365(map: NeuralMap): VerificationResult {
         fix: 'Cache the value in a local const/final variable before the switch: ' +
           'const action = req.body.action; switch(action) { ... }. This ensures the dispatched value ' +
           'matches the value used inside the case body.',
+        via: 'structural',
       });
     }
   }
@@ -1488,6 +1514,7 @@ function verifyCWE368(map: NeuralMap): VerificationResult {
               `double-spend, or negative-balance bugs (e.g., two threads both see balance=100, both deduct).`,
             fix: 'Wrap the entire check-then-act in a mutex/lock, use atomic compare-and-swap (CAS), ' +
               'or use database-level SERIALIZABLE transactions. The check and the modification must be indivisible.',
+            via: 'structural',
           });
         }
       }
@@ -1533,6 +1560,7 @@ function verifyCWE377(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Insecure temporary file usage at ${node.label}. Predictable temp filenames enable symlink attacks and file hijacking.`,
         fix: 'Use mkstemp() (C), tempfile.NamedTemporaryFile (Python), fs.mkdtemp (Node.js), or Files.createTempFile (Java) which create files with random names and secure permissions.',
+        via: 'structural',
       });
     }
   }
@@ -1577,6 +1605,7 @@ function verifyCWE378(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Temporary file at ${node.label} created with overly permissive permissions. Other users on the system can read or modify it.`,
         fix: 'Set permissions to 0600 (owner read/write only) or 0700 (owner only). Use umask(0077) before creation. In Python, use NamedTemporaryFile which defaults to 0600.',
+        via: 'structural',
       });
       continue;
     }
@@ -1603,6 +1632,7 @@ function verifyCWE378(map: NeuralMap): VerificationResult {
           `Default permissions may allow other users on the system to read or modify it.`,
         fix: 'After creating the temp file, call setReadable(true, true), setWritable(true, true), and setExecutable(false) ' +
           'to restrict to owner-only. Or use Files.createTempFile with PosixFilePermissions, or set umask(0077) before creation.',
+        via: 'structural',
       });
     }
   }
@@ -1645,6 +1675,7 @@ function verifyCWE379(map: NeuralMap): VerificationResult {
         severity: 'low',
         description: `File operation at ${node.label} uses a shared temp directory. Other users can manipulate files via symlink or race attacks.`,
         fix: 'Use mkdtemp() to create a private subdirectory, or use XDG_RUNTIME_DIR / app-specific directories. Set sticky bit is not sufficient — use per-user dirs.',
+        via: 'structural',
       });
       continue;
     }
@@ -1659,6 +1690,7 @@ function verifyCWE379(map: NeuralMap): VerificationResult {
           `default temp directory. This directory is shared and other users may manipulate files via symlink or race attacks.`,
         fix: 'Use the 3-arg form File.createTempFile(prefix, suffix, secureDir) with a directory that has owner-only permissions, ' +
           'or use Files.createTempFile(dir, prefix, suffix, attrs) with PosixFilePermissions.',
+        via: 'structural',
       });
       continue;
     }
@@ -1694,6 +1726,7 @@ function verifyCWE379(map: NeuralMap): VerificationResult {
           `Other users can manipulate the directory contents via symlink or race attacks.`,
         fix: 'Set directory permissions (setWritable(true, true), setReadable(true, true)) before mkdir, ' +
           'or use a per-user private directory.',
+        via: 'structural',
       });
     }
   }
@@ -1739,6 +1772,7 @@ function verifyCWE426(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Command execution at ${node.label} uses a bare command name without an absolute path. Attacker can plant a malicious binary in the search path.`,
         fix: 'Use absolute paths to executables (e.g., /usr/bin/git). If PATH must be used, validate PATH entries, or use which/lookpath and verify the result is in a trusted directory.',
+        via: 'structural',
       });
     }
   }
@@ -1781,6 +1815,7 @@ function verifyCWE427(map: NeuralMap): VerificationResult {
               severity: 'high',
               description: `User input from ${src.label} influences search path at ${node.label}. Attacker can inject malicious libraries or executables.`,
               fix: 'Never let user input modify PATH/LD_LIBRARY_PATH/NODE_PATH. Hardcode trusted paths. If dynamic paths are needed, validate against an allowlist of trusted directories.',
+              via: 'bfs',
             });
           }
         }
@@ -1791,6 +1826,7 @@ function verifyCWE427(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Search path variable modified at ${node.label} without validation. Environment manipulation could redirect execution.`,
             fix: 'Use absolute paths instead of relying on PATH. If PATH must be modified, prepend trusted dirs and validate entries.',
+            via: 'structural',
           });
         }
       }
@@ -1834,6 +1870,7 @@ function verifyCWE428(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Unquoted path in command execution at ${node.label}. On Windows, spaces in paths cause incorrect binary resolution. In shells, unquoted variables enable injection.`,
         fix: 'Always quote paths containing spaces: "C:\\Program Files\\...". Quote shell variables: "$var". Use arrays for subprocess args instead of string concatenation.',
+        via: 'structural',
       });
     }
   }
@@ -1875,6 +1912,7 @@ function verifyCWE668(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Resource at ${node.label} exposed to a wider sphere than intended. Binding to 0.0.0.0, CORS *, or debug mode in production exposes internal functionality.`,
         fix: 'Bind to 127.0.0.1 or specific interfaces. Use explicit CORS origins, not *. Disable debug/verbose errors in production. Use network segmentation for internal services.',
+        via: 'structural',
       });
     }
   }
@@ -1943,9 +1981,9 @@ function verifyCWE662(map: NeuralMap): VerificationResult {
       if (entry.id === shared.id) continue;
       if (!WRITE_PATTERN.test(shared.analysis_snapshot || shared.code_snapshot)) continue;
 
-      const reachable = hasTaintedPathWithoutControl(map, entry.id, shared.id) ||
-                        sharesFunctionScope(map, entry.id, shared.id);
-      if (!reachable) continue;
+      const bfsHit662 = hasTaintedPathWithoutControl(map, entry.id, shared.id);
+      const scopeHit662 = !bfsHit662 && sharesFunctionScope(map, entry.id, shared.id);
+      if (!bfsHit662 && !scopeHit662) continue;
 
       const allCode = stripComments(entry.analysis_snapshot || entry.code_snapshot + ' ' + shared.code_snapshot);
       // Also check CONTROL nodes in the same scope
@@ -1965,6 +2003,7 @@ function verifyCWE662(map: NeuralMap): VerificationResult {
           fix: 'Protect shared state with a mutex/lock, use atomic operations, or restructure to use message-passing (channels). ' +
             'In Node.js, use atomic operations or serialize access through a queue. ' +
             'In Go, use sync.Mutex or channels. In Java, use synchronized blocks or java.util.concurrent.',
+          via: bfsHit662 ? 'bfs' : 'scope_taint',
         });
       }
     }
@@ -2056,6 +2095,7 @@ function verifyCWE667(map: NeuralMap): VerificationResult {
           `If an exception occurs between acquire and release, the lock is never released, causing deadlock.`,
         fix: 'Always release locks in a finally block (try/finally), defer statement (Go), or use a context manager (Python with statement). ' +
           'In Java, use try-with-resources with AutoCloseable locks.',
+        via: 'structural',
       });
     }
 
@@ -2068,6 +2108,7 @@ function verifyCWE667(map: NeuralMap): VerificationResult {
         description: `Lock acquired at ${lockNode.label} has no corresponding release in the same function. ` +
           `The lock will be held indefinitely, blocking all other threads/goroutines.`,
         fix: 'Add a matching unlock/release call. Always pair lock() with unlock() in a finally/defer block.',
+        via: 'structural',
       });
     }
 
@@ -2087,6 +2128,7 @@ function verifyCWE667(map: NeuralMap): VerificationResult {
             `tries to re-acquire or when another coroutine on the same thread needs the lock.`,
           fix: 'Restructure to release the lock before await/yield, or use async-aware locks (asyncio.Lock, tokio::sync::Mutex). ' +
             'Alternatively, gather all data needed under the lock, release it, then await.',
+          via: 'structural',
         });
       }
     }
@@ -2119,6 +2161,7 @@ function verifyCWE764(map: NeuralMap): VerificationResult {
         description: `Function ${node.label} calls lock() ${lockCount} times but unlock() only ${unlockCount} times. ` +
           `The lock is never fully released, blocking other threads permanently.`,
         fix: 'Ensure each lock() call has a matching unlock() in a finally block.',
+        via: 'structural',
       });
     }
   }
@@ -2149,6 +2192,7 @@ function verifyCWE765(map: NeuralMap): VerificationResult {
         description: `Function ${node.label} calls unlock() ${unlockCount} times but lock() only ${lockCount} times. ` +
           `The extra unlock() will throw IllegalMonitorStateException at runtime.`,
         fix: 'Ensure each lock() has exactly one matching unlock() in a finally block.',
+        via: 'structural',
       });
     }
   }
@@ -2179,6 +2223,7 @@ function verifyCWE832(map: NeuralMap): VerificationResult {
         description: `Function ${node.label} calls unlock() ${unlockCount} times but never calls lock(). ` +
           `Unlocking a resource you don't hold throws IllegalMonitorStateException.`,
         fix: 'Only call unlock() on locks you currently hold. Use lock(); try { ... } finally { unlock(); }.',
+        via: 'structural',
       });
     }
   }
@@ -2409,6 +2454,7 @@ function verifyCWE833(map: NeuralMap): VerificationResult {
                   `If these methods run concurrently, each thread can hold one lock while waiting for the other, causing deadlock.`,
                 fix: `Enforce a global lock ordering: always acquire ${displayLock1} before ${displayLock2} (or vice versa, but consistently). ` +
                   `Alternatively, use tryLock() with timeouts to break potential deadlocks.`,
+                via: 'source_line_fallback',
               });
             }
           }
@@ -2464,6 +2510,7 @@ function verifyCWE833(map: NeuralMap): VerificationResult {
               fix: `Release your own lock before calling synchronized methods on other objects. ` +
                 `Use a synchronized block instead of synchronized method, and release before the cross-object call. ` +
                 `Or use a global lock ordering strategy.`,
+              via: 'source_line_fallback',
             });
           }
         }
@@ -2514,6 +2561,7 @@ function verifyCWE382(map: NeuralMap): VerificationResult {
           `This terminates the entire JVM, killing all active sessions and servlets in the container.`,
         fix: 'Never call System.exit() or Runtime.halt() in servlet/EJB code. Use proper exception handling ' +
           'and return appropriate HTTP error codes.',
+        via: 'structural',
       });
     }
   }
@@ -2547,6 +2595,7 @@ function verifyCWE383(map: NeuralMap): VerificationResult {
         description: `Direct thread management at ${node.label} in a servlet/J2EE context. ` +
           `Creating threads directly bypasses the container thread management and security context propagation.`,
         fix: 'Use container-managed thread pools: ExecutorService, ManagedExecutorService, or @Asynchronous EJB methods.',
+        via: 'structural',
       });
     }
   }
@@ -2639,6 +2688,7 @@ function verifyCWE672(map: NeuralMap): VerificationResult {
             fix: 'Either restructure code to not use the resource after release, re-acquire it before use, ' +
               'or add a validity check (isOpen, isConnected, isValid) before each use. ' +
               'Consider using RAII/try-with-resources patterns to scope resource lifetime.',
+            via: 'structural',
           });
           break; // One finding per release is enough
         }
@@ -2761,6 +2811,7 @@ function verifyCWE674(map: NeuralMap): VerificationResult {
       fix: 'Add an explicit depth parameter with a maximum limit, or convert to iterative approach. ' +
         'Example: function process(data, depth = 0) { if (depth > MAX_DEPTH) throw new Error("too deep"); ... process(child, depth + 1); }. ' +
         'For user-controlled input: always validate nesting depth before processing.',
+      via: 'structural',
     });
   }
 
@@ -2831,6 +2882,7 @@ function verifyCWE676(map: NeuralMap): VerificationResult {
           severity: df.severity,
           description: `${df.name} used at ${node.label}. This function is inherently unsafe and has known safer alternatives.`,
           fix: df.fix,
+          via: 'structural',
         });
       }
     }
@@ -2918,6 +2970,7 @@ function verifyCWE694(map: NeuralMap): VerificationResult {
         `Duplicate identifiers cause ambiguity — the wrong resource may be used, leading to data leaks or logic errors.`,
       fix: 'Ensure each resource has a unique identifier. Use namespacing (e.g., "db.primary" vs "db.replica") ' +
         'or explicit aliasing. Review resource registries for accidental overwrites.',
+      via: 'structural',
     });
   }
 
@@ -2994,6 +3047,7 @@ function verifyCWE771(map: NeuralMap): VerificationResult {
       fix: 'Always capture the return value of resource allocation into a variable. ' +
         'Store references in a scope where cleanup can happen (try/finally, RAII, context manager). ' +
         'For servers/connections: const server = createServer(...); process.on("SIGTERM", () => server.close());',
+      via: 'structural',
     });
   }
 
@@ -3114,6 +3168,7 @@ function verifyCWE772(map: NeuralMap): VerificationResult {
             ap.resourceType.includes('timer') ? 'store the timer ID and call clearInterval/clearTimeout in cleanup.' :
             'ensure the resource is released when no longer needed.'
           }`,
+          via: 'structural',
         });
       }
     }
@@ -3147,6 +3202,7 @@ function verifyCWE772(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `Method ${node.label} creates ${resourceType} but never calls close(). Unreleased resources accumulate over time, causing exhaustion.`,
             fix: 'Close resources in a finally block or use try-with-resources. For DB connections, always close Connection, PreparedStatement, and ResultSet.',
+            via: 'structural',
           });
         }
       }
@@ -3206,7 +3262,8 @@ function verifyCWE775(map: NeuralMap): VerificationResult {
         const handleType = match ? match[1] : 'file handle';
         findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (file descriptor release)', severity: 'high',
           description: `Method ${node.label} opens ${handleType} but never closes it.`,
-          fix: 'Close file handles in a finally block or use try-with-resources.' });
+          fix: 'Close file handles in a finally block or use try-with-resources.',
+          via: 'structural' });
       }
     }
   }
@@ -3224,7 +3281,8 @@ function verifyCWE775(map: NeuralMap): VerificationResult {
         if (!findings.some(f => f.source.id === node.id)) {
           findings.push({ source: nodeRef(node), sink: nodeRef(node), missing: 'CONTROL (file descriptor release)', severity: 'high',
             description: `Method ${node.label} opens ${handleType} but never closes it.`,
-            fix: 'Close file handles in a finally block. Use try-with-resources for automatic cleanup.' });
+            fix: 'Close file handles in a finally block. Use try-with-resources for automatic cleanup.',
+            via: 'structural' });
         }
       }
     }
@@ -3271,6 +3329,7 @@ function verifyCWE401(map: NeuralMap): VerificationResult {
               fix: 'Free allocated memory on ALL exit paths — use goto cleanup pattern in C, ' +
                 'RAII/smart pointers in C++ (std::unique_ptr, std::shared_ptr), or ' +
                 'try/finally in languages that support it.',
+              via: 'structural',
             });
           }
         }
@@ -3292,6 +3351,7 @@ function verifyCWE401(map: NeuralMap): VerificationResult {
             `alive, preventing garbage collection of potentially large object graphs.`,
           fix: 'Remove event listeners in cleanup: componentWillUnmount, useEffect return function, ' +
             'ngOnDestroy, or explicit removeEventListener. Store listener references for later removal.',
+          via: 'structural',
         });
       }
     }
@@ -3312,6 +3372,7 @@ function verifyCWE401(map: NeuralMap): VerificationResult {
             fix: 'Use a bounded cache with eviction: LRU cache with maxSize, TTL-based expiry, ' +
               'WeakMap/WeakRef for object caches. For Node.js: lru-cache package. ' +
               'For Java: Caffeine or Guava Cache. Monitor cache size in production.',
+            via: 'structural',
           });
         }
       }
@@ -3350,6 +3411,7 @@ function verifyCWE403(map: NeuralMap): VerificationResult {
           'For existing FDs: fcntl(fd, F_SETFD, FD_CLOEXEC). For sockets: SOCK_CLOEXEC flag. ' +
           'In Python: subprocess with close_fds=True (default in 3.x). ' +
           'In Node.js: child_process.spawn with stdio: "pipe" (not "inherit").',
+        via: 'structural',
       });
     }
     if (CHILD_SPAWN.test(code) && !FD_PROTECTED.test(code) && !INTENTIONAL_PASS.test(code) &&
@@ -3370,6 +3432,7 @@ function verifyCWE403(map: NeuralMap): VerificationResult {
               `exposing them to an unintended control sphere.`,
             fix: 'Use close_fds=True in subprocess calls (Python), set O_CLOEXEC on all FDs (C/C++), ' +
               'or use stdio: "pipe" in Node.js child_process.',
+            via: 'structural',
           });
         }
       }
@@ -3439,6 +3502,7 @@ function verifyCWE459(map: NeuralMap): VerificationResult {
           fix: 'Zero/overwrite buffers containing sensitive data immediately after use: buffer.fill(0). ' +
             'Use SecureString equivalents where available. Consider crypto.timingSafeEqual for comparisons. ' +
             'Set variables to null after use to help GC. Avoid string types for secrets (strings are immutable and interned).',
+          via: 'structural',
         });
       }
     }
@@ -3455,6 +3519,7 @@ function verifyCWE459(map: NeuralMap): VerificationResult {
           fix: 'Delete temp files in a finally block. Use os.tmpdir() with unique names and register cleanup via ' +
             'process exit handlers. In tests: use afterAll/afterEach hooks. ' +
             'Consider using streams instead of temp files where possible.',
+          via: 'structural',
         });
       }
     }
@@ -3470,6 +3535,7 @@ function verifyCWE459(map: NeuralMap): VerificationResult {
           `Temp files accumulate, wasting disk space and potentially exposing sensitive data.`,
         fix: 'Delete temporary files explicitly in a finally block using file.delete(). ' +
           'Do not rely on deleteOnExit() in long-running applications like servlets.',
+        via: 'structural',
       });
     }
 
@@ -3485,6 +3551,7 @@ function verifyCWE459(map: NeuralMap): VerificationResult {
           fix: 'Always set TTL/maxAge on session and cache entries. Implement explicit logout/invalidation. ' +
             'For Redis: use EXPIRE or SETEX. For in-memory caches: use LRU with max size. ' +
             'For sessions: set cookie maxAge and server-side session timeout.',
+          via: 'structural',
         });
       }
     }
@@ -3550,6 +3617,7 @@ function verifyCWE460(map: NeuralMap): VerificationResult {
           `If an exception occurs after acquisition but before release, the resource leaks.`,
         fix: 'Add a finally block that releases the resource, or use try-with-resources (Java), ' +
           'context managers (Python with statement), or RAII (C++/Rust) to guarantee cleanup.',
+        via: 'structural',
       });
       continue;
     }
@@ -3567,6 +3635,7 @@ function verifyCWE460(map: NeuralMap): VerificationResult {
             `The resource will leak if an exception is thrown between acquire and release.`,
           fix: 'Move the resource release (close/end/release/destroy) into the finally block ' +
             'to ensure it runs on both success and error paths.',
+          via: 'structural',
         });
       }
     } else if (hasCatch) {
@@ -3581,6 +3650,7 @@ function verifyCWE460(map: NeuralMap): VerificationResult {
             `On exception, the acquired resource leaks. Using finally is preferred over catch for cleanup.`,
           fix: 'Add a finally block for resource cleanup (preferred), or add release calls to the catch block. ' +
             'The finally block runs on both success and error paths, making it more reliable than catch-only cleanup.',
+          via: 'structural',
         });
       }
     }
@@ -3636,7 +3706,9 @@ function verifyCWE462(map: NeuralMap): VerificationResult {
   // Check 1: User input used as dictionary/map keys without dedup
   for (const src of ingress) {
     for (const sink of storage) {
-      if (hasTaintedPathWithoutControl(map, src.id, sink.id) || sharesFunctionScope(map, src.id, sink.id)) {
+      const bfsHit462 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const scopeHit462 = !bfsHit462 && sharesFunctionScope(map, src.id, sink.id);
+      if (bfsHit462 || scopeHit462) {
         const code = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (INPUT_AS_KEY.test(code) && !DEDUP_SAFE.test(code)) {
           findings.push({
@@ -3651,6 +3723,7 @@ function verifyCWE462(map: NeuralMap): VerificationResult {
               'For user-provided key-value pairs: validate uniqueness, reject or merge duplicates explicitly. ' +
               'For HTTP headers: be aware that duplicate headers have framework-specific behavior (first-wins vs last-wins). ' +
               'For config: use a schema validator that rejects duplicate keys.',
+            via: bfsHit462 ? 'bfs' : 'scope_taint',
           });
         }
       }
@@ -3670,6 +3743,7 @@ function verifyCWE462(map: NeuralMap): VerificationResult {
           `In security contexts (CORS, CSP, permissions), this can inadvertently weaken policies.`,
         fix: 'Enable the no-dupe-keys ESLint rule. Review object literals for duplicate keys. ' +
           'For generated configs: add a post-generation duplicate-key check.',
+        via: 'structural',
       });
     }
   }
@@ -3740,6 +3814,7 @@ function verifyCWE463(map: NeuralMap): VerificationResult {
               're-validate boundaries after transformation. For null bytes: reject input containing \\0 ' +
               'unless the protocol explicitly allows it. For protocol delimiters: use length-prefixed ' +
               'framing instead of delimiter-based parsing.',
+            via: 'bfs',
           });
         }
       }
@@ -3760,6 +3835,7 @@ function verifyCWE463(map: NeuralMap): VerificationResult {
           `Overwriting the null terminator or boundary marker causes buffer over-reads or protocol confusion.`,
         fix: 'Never write past the allocated buffer length. Use safe string functions that guarantee null termination. ' +
           'In C: use strlcpy/snprintf instead of strcpy/sprintf. In binary protocols: validate offset before write.',
+        via: 'structural',
       });
     }
   }
@@ -3849,6 +3925,7 @@ function verifyCWE464(map: NeuralMap): VerificationResult {
                 'Modern frameworks (Express 4.x+, etc.) reject CRLF in headers automatically — ensure you\'re on a current version.'
               : 'Reject input containing null bytes (\\0), carriage returns (\\r), and line feeds (\\n) ' +
                 'before passing to sensitive operations. Use allowlist validation where possible.',
+            via: 'bfs',
           });
         }
       }
@@ -3907,6 +3984,7 @@ function verifyCWE370(map: NeuralMap): VerificationResult {
             'In Java: use PKIXRevocationChecker with PKIXParameters. ' +
             'In Python: set ssl_context.check_revocation = True. ' +
             'In Node.js: use a custom agent with OCSP verification.',
+          via: 'structural',
         });
       }
     }
@@ -3920,6 +3998,7 @@ function verifyCWE370(map: NeuralMap): VerificationResult {
           `Long-lived connections may continue using a certificate that has been revoked since the initial handshake.`,
         fix: 'Set a maximum connection lifetime in the pool (e.g., maxLifetimeMillis). ' +
           'Enable OCSP stapling on the server side. Periodically rotate pool connections to force re-handshake and revocation recheck.',
+        via: 'structural',
       });
     }
   }
@@ -3969,6 +4048,7 @@ function verifyCWE372(map: NeuralMap): VerificationResult {
             fix: 'Replace boolean state flags with an enum or state machine that encodes the specific transition path. ' +
               'Example: instead of isAuthenticated=true, use authState = AuthState.PASSWORD_VERIFIED or AuthState.OAUTH_VERIFIED. ' +
               'This prevents state confusion attacks where achieving one state grants access intended for another.',
+            via: 'structural',
           });
         }
       }
@@ -4023,6 +4103,7 @@ function verifyCWE374(map: NeuralMap): VerificationResult {
         fix: 'Pass a defensive copy: callback([...this._items]) (JS), callback(list(self._data)) (Python), ' +
           'callback(Collections.unmodifiableList(this.items)) (Java). For deep structures, use structuredClone() ' +
           'or Object.freeze() to prevent nested mutations.',
+        via: 'structural',
       });
     }
   }
@@ -4074,6 +4155,7 @@ function verifyCWE375(map: NeuralMap): VerificationResult {
       fix: 'Return a defensive copy or immutable view: return [...this._items] (JS), ' +
         'return Collections.unmodifiableList(this.items) (Java), return list(self._data) (Python). ' +
         'For security-sensitive state (credentials, tokens), never expose the backing store directly.',
+      via: 'structural',
     });
   }
 
@@ -4131,6 +4213,7 @@ function verifyCWE385(map: NeuralMap): VerificationResult {
           fix: 'Use crypto.timingSafeEqual() (Node.js), hmac.compare_digest() (Python), ' +
             'MessageDigest.isEqual() (Java), ConstantTimeCompare() (Go), or rack.utils.secure_compare (Ruby). ' +
             'Never use == or === for comparing secrets, tokens, or HMAC digests.',
+          via: 'structural',
         });
       }
     }
@@ -4177,6 +4260,7 @@ function verifyCWE386(map: NeuralMap): VerificationResult {
         fix: 'Never trust hostnames for authorization. Use mutual TLS (mTLS) with certificate pinning, ' +
           'DNSSEC for verified resolution, or authenticate the peer via cryptographic tokens/signatures. ' +
           'For IP-based filtering, resolve once and verify the certificate matches the expected identity.',
+        via: 'structural',
       });
     }
 
@@ -4195,6 +4279,7 @@ function verifyCWE386(map: NeuralMap): VerificationResult {
           fix: 'Use absolute paths for security-critical modules. In Node.js: require(path.resolve(__dirname, "module")). ' +
             'In Python: use importlib with explicit paths. In C: use absolute paths for dlopen(). ' +
             'Verify loaded module integrity with checksums or signatures.',
+          via: 'structural',
         });
       }
     }

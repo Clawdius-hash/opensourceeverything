@@ -50,6 +50,7 @@ function verifyCWE415(map: NeuralMap): VerificationResult {
         fix: 'Set pointer to NULL immediately after free: free(ptr); ptr = NULL. ' +
           'Use RAII (unique_ptr/shared_ptr in C++, Box/Rc in Rust) to automate lifetime management. ' +
           'In C, adopt a convention: always NULL pointers after freeing.',
+        via: 'structural',
       });
       continue;
     }
@@ -70,6 +71,7 @@ function verifyCWE415(map: NeuralMap): VerificationResult {
                 `Pointer is not set to NULL after first free, enabling double-free.`,
               fix: 'Set pointer to NULL immediately after free. Use smart pointers (unique_ptr/shared_ptr) ' +
                 'or Rust ownership to prevent double-free at compile time.',
+              via: 'scope_taint',
             });
           }
         }
@@ -127,6 +129,7 @@ function verifyCWE416(map: NeuralMap): VerificationResult {
           `The freed memory may be reallocated, causing data corruption or code execution.`,
         fix: 'Set pointer to NULL immediately after free. Use smart pointers (unique_ptr/shared_ptr). ' +
           'In Rust, the borrow checker prevents this at compile time — consider porting critical code.',
+        via: 'structural',
       });
     }
   }
@@ -171,6 +174,7 @@ function verifyCWE416(map: NeuralMap): VerificationResult {
           fix: 'Set pointer/reference to null immediately after free/destroy. ' +
             'Use RAII/smart pointers to tie object lifetime to scope. ' +
             'In Rust, the ownership system prevents use-after-free at compile time.',
+          via: 'scope_taint',
         });
       }
     }
@@ -200,6 +204,7 @@ function verifyCWE416(map: NeuralMap): VerificationResult {
             `Accessing a destroyed object causes undefined behavior or runtime errors.`,
           fix: 'Set reference to null immediately after destroy/release. Do not call methods on closed resources. ' +
             'Restructure code so the resource is not used after it is freed.',
+          via: 'structural',
         });
         break;
       }
@@ -246,6 +251,7 @@ function verifyCWE416(map: NeuralMap): VerificationResult {
                 description: `Resource '${subject}' freed/destroyed at line ${i + 1} is accessed at line ${j + 1}. ` +
                   `Accessing a destroyed/closed object leads to undefined behavior or runtime errors.`,
                 fix: 'Set reference to null immediately after free/destroy. Restructure code so the resource is not used after it is freed.',
+                via: 'source_line_fallback',
               });
               break;
             }
@@ -296,6 +302,7 @@ function verifyCWE475(map: NeuralMap): VerificationResult {
         fix: 'Cast the argument to unsigned char: isalpha((unsigned char)c). ' +
           'Or mask with 0xFF: isalpha(c & 0xFF). ' +
           'Never pass signed char values directly to ctype functions.',
+        via: 'structural',
       });
     }
 
@@ -309,6 +316,7 @@ function verifyCWE475(map: NeuralMap): VerificationResult {
           `This is undefined behavior per the C standard and will typically cause a segfault.`,
         fix: 'Check pointers for NULL before passing to string/memory functions. ' +
           'Add assertions: assert(ptr != NULL). Use static analysis attributes: __attribute__((nonnull)).',
+        via: 'structural',
       });
     }
 
@@ -323,6 +331,7 @@ function verifyCWE475(map: NeuralMap): VerificationResult {
         fix: 'Validate inputs are within the documented valid range before calling. ' +
           'For abs(): check that input != INT_MIN. For memcpy(): ensure non-NULL and non-overlapping. ' +
           'Use compiler sanitizers (-fsanitize=undefined) to catch these at runtime.',
+        via: 'structural',
       });
     }
   }
@@ -348,6 +357,7 @@ function verifyCWE475(map: NeuralMap): VerificationResult {
               `The API has undefined behavior for certain input values, and user input is untrusted.`,
             fix: 'Validate and sanitize user input before passing to APIs with restricted input domains. ' +
               'Cast to appropriate types, check ranges, and verify non-NULL.',
+            via: 'bfs',
           });
         }
       }
@@ -409,6 +419,7 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
               `NULL dereference causes segfaults in C/C++, NullPointerException in Java, TypeError in JS.`,
             fix: 'Check for null before dereferencing. Use optional chaining (?.) in JS/TS. ' +
               'Use if-let/match in Rust instead of .unwrap(). In Go: check err != nil before using value.',
+            via: 'scope_taint',
           });
         }
       }
@@ -455,6 +466,7 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
                         `evaluated, so the dereference executes even when the variable is null. Use && instead.`,
                       fix: 'Use && (short-circuit AND) instead of & (bitwise AND) in null checks. With &&, the right side ' +
                         'is only evaluated if the left side is true, preventing null dereference.',
+                    via: 'source_line_fallback',
                     });
                   }
                 }
@@ -500,6 +512,7 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
                           `(the if at L${i + 1} checks ${varName} == null). This always causes a NullPointerException.`,
                         fix: `Do not dereference '${varName}' inside the null branch. Either handle the null case without ` +
                           `dereferencing, or move the dereference to the else branch (where it is known non-null).`,
+                        via: 'source_line_fallback',
                       });
                     }
                   }
@@ -544,6 +557,7 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
                     severity: 'medium',
                     description: `L${j + 1}: Variable '${varName}' was assigned null at L${i + 1} and is dereferenced without a null check.`,
                     fix: 'Add a null check before dereferencing. Ensure the variable is assigned a non-null value before use.',
+                    via: 'source_line_fallback',
                   });
                 }
               }
@@ -567,6 +581,7 @@ function verifyCWE476(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} uses .unwrap() which panics on None/Err. If the value can be None/Err at runtime, this crashes.`,
         fix: 'Replace .unwrap() with .unwrap_or(default), .unwrap_or_else(|| ...), or pattern matching (match/if-let).',
+        via: 'structural',
       });
     }
   }
@@ -615,6 +630,7 @@ function verifyCWE129(map: NeuralMap): VerificationResult {
               `A negative value bypasses an upper-bound-only check and causes ArrayIndexOutOfBoundsException.`,
             fix: 'Always validate array indices with BOTH bounds: if (index >= 0 && index < array.length). ' +
               'An upper-bound check alone does NOT prevent negative indices.',
+            via: 'bfs',
           });
         }
       }
@@ -674,6 +690,7 @@ function verifyCWE129(map: NeuralMap): VerificationResult {
               description: `Array index "${vn}" has only an upper-bound check at line ${li + 1}: "${tr.slice(0, 80)}". ` +
                 `The lower-bound check (>= 0) is missing. Negative values pass and cause ArrayIndexOutOfBoundsException.`,
               fix: `Add a lower-bound check: if (${vn} >= 0 && ${vn} < array.length). Both bounds must be checked.`,
+              via: 'source_line_fallback',
             });
           }
         }
@@ -732,6 +749,7 @@ function verifyCWE129(map: NeuralMap): VerificationResult {
               description: `Array index "${vn}" from external input is used at line ${li + 1}: "${tr3.slice(0, 80)}" with NO bounds validation. ` +
                 `Any value including negative numbers will be accepted, causing ArrayIndexOutOfBoundsException.`,
               fix: `Add bounds validation: if (${vn} >= 0 && ${vn} < array.length) before accessing array[${vn}].`,
+              via: 'source_line_fallback',
             });
           }
         }
@@ -941,6 +959,7 @@ function verifyCWE690(map: NeuralMap): VerificationResult {
               `(which may return null) is dereferenced without a null check: ${derefCode.slice(0, 120)}`,
             fix: `Check the return value for null before dereferencing. ` +
               `Add: if (${varName} != null) { ... } or use Optional/Objects.requireNonNull().`,
+            via: 'source_line_fallback',
           });
         }
       }
@@ -982,6 +1001,7 @@ function verifyCWE690(map: NeuralMap): VerificationResult {
                 severity: 'high',
                 description: `Potentially-null value from ${src.label} is dereferenced at ${sink.label} without a null check.`,
                 fix: 'Check the return value for null before dereferencing. Use if (result != null) or Optional.',
+                via: 'scope_taint',
               });
               break;
             }
@@ -1038,6 +1058,7 @@ function verifyCWE696(map: NeuralMap): VerificationResult {
               `validation at ${ctrl.label} (line ${ctrl.line_start}). The security check exists but runs too late.`,
             fix: 'Move validation/authorization BEFORE the action. Security checks must gate access, not audit after the fact. ' +
               'Restructure: validate -> authorize -> act -> respond.',
+            via: 'bfs',
           });
           break; // One finding per src-sink pair
         }
@@ -1061,6 +1082,7 @@ function verifyCWE696(map: NeuralMap): VerificationResult {
         description: `${node.label} encodes data before validating it. Validation on encoded data may miss attack payloads ` +
           `that only become dangerous after decoding.`,
         fix: 'Validate first, then encode for the output context. The canonical order is: decode -> validate -> process -> encode.',
+        via: 'structural',
       });
     }
 
@@ -1118,6 +1140,7 @@ function verifyCWE834(map: NeuralMap): VerificationResult {
           fix: 'Enforce max iteration: const items = req.body.items.slice(0, MAX_ITEMS). ' +
             'Validate array lengths: if (items.length > 1000) return res.status(400). ' +
             'Use pagination. Set request body size limits.',
+          via: 'structural',
         });
         break;
       }
@@ -1161,6 +1184,7 @@ function verifyCWE186(map: NeuralMap): VerificationResult {
         description: `${node.label} validates names with ASCII-only regex, rejecting accented characters ` +
           `(e.g., Jose, Muller, Bjork). Users whose names are rejected may bypass validation entirely.`,
         fix: 'Use Unicode-aware patterns: /^[\\p{L}\\p{M}\' -]+$/u or accept broader input and sanitize output.',
+        via: 'structural',
       });
     }
 
@@ -1174,6 +1198,7 @@ function verifyCWE186(map: NeuralMap): VerificationResult {
           `subdomains, dots in local part, plus addressing (user+tag@), or long TLDs (.museum, .company).`,
         fix: 'Use a well-tested email validation library or RFC 5322 regex. ' +
           'Consider simply checking for @ and a dot, then verifying via confirmation email.',
+        via: 'structural',
       });
     }
 
@@ -1189,6 +1214,7 @@ function verifyCWE186(map: NeuralMap): VerificationResult {
           description: `${node.label} requires exactly ${len} characters, rejecting shorter or longer valid inputs. ` +
             `Users who can't match the exact length may seek unvalidated input paths.`,
           fix: 'Use a min/max range: {1,100} instead of {' + len + '}.',
+          via: 'structural',
         });
       }
     }
@@ -1235,6 +1261,7 @@ function verifyCWE188(map: NeuralMap): VerificationResult {
           `8-byte alignment will be misinterpreted by a 32-bit system with 4-byte alignment.`,
         fix: 'Use a serialization format (protobuf, JSON, msgpack) or explicitly serialize each field. ' +
           'If raw memory is required, use #pragma pack(1) and fixed-width integer types (uint32_t).',
+        via: 'structural',
       });
     }
 
@@ -1248,6 +1275,7 @@ function verifyCWE188(map: NeuralMap): VerificationResult {
           `This can cause data corruption, information disclosure, or crashes from misaligned access.`,
         fix: 'Deserialize each field individually with explicit offsets and byte-order conversion. ' +
           'Use ntohl/ntohs for network data. Consider a serialization library.',
+        via: 'structural',
       });
     }
   }
@@ -1287,6 +1315,7 @@ function verifyCWE369(map: NeuralMap): VerificationResult {
               `Division by zero causes crashes (SIGFPE in C/C++), exceptions, or NaN/Infinity propagation.`,
             fix: 'Check divisor before dividing: if (divisor === 0) return error or default value. ' +
               'Use || 1 or ?? 1 as fallback. In Rust: checked_div(). In Go: explicit if divisor == 0.',
+            via: 'bfs',
           });
         }
       }
@@ -1306,6 +1335,7 @@ function verifyCWE369(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `Division at ${node.label} uses tainted data as divisor without zero check.`,
           fix: 'Always validate divisors are non-zero before division.',
+          via: 'sink_tainted',
         });
       }
     }
@@ -1372,6 +1402,7 @@ function verifyCWE369(map: NeuralMap): VerificationResult {
               `Division by zero causes crashes (SIGFPE in C/C++), exceptions, or NaN/Infinity propagation.`,
             fix: 'Check divisor before dividing: if (divisor != 0) or if (Math.abs(divisor) > epsilon). ' +
               'Use || 1 or ?? 1 as fallback. In Rust: checked_div(). In Go: explicit if divisor == 0.',
+            via: 'source_line_fallback',
           });
           break; // one finding per function is sufficient
         }

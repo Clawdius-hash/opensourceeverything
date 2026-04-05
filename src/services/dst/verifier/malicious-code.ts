@@ -41,6 +41,7 @@ function verifyCWE494(map: NeuralMap): VerificationResult {
               `An attacker who compromises the remote source or performs MITM can inject arbitrary code.`,
             fix: 'Verify integrity before execution: compare SHA-256 hash against a pinned value, validate a cryptographic signature, ' +
               'or use Subresource Integrity (SRI) for browser scripts. Pin dependencies by hash (npm integrity, pip --require-hashes).',
+            via: 'bfs',
           });
           break;
         }
@@ -78,6 +79,7 @@ function verifyCWE506(map: NeuralMap): VerificationResult {
         description: `${node.label} contains obfuscated code execution (eval of decoded/encoded content). ` +
           `Runtime-decoded payloads evade static review — the primary pattern of embedded malicious code.`,
         fix: 'Remove obfuscated eval. If legitimate, refactor to clear readable logic. If a dependency, audit or replace it.',
+        via: 'source_line_fallback',
       });
     } else if (BASE64_PAYLOAD_RE.test(code) && EXEC_NEAR_RE.test(code)) {
       findings.push({
@@ -87,6 +89,7 @@ function verifyCWE506(map: NeuralMap): VerificationResult {
         description: `${node.label} contains a large base64-encoded string near code execution primitives. ` +
           `Encoded payloads combined with eval/exec are a strong indicator of embedded malicious code.`,
         fix: 'Decode and review the base64 content. If legitimate (embedded font/image), move to a separate asset file. Never eval decoded content.',
+        via: 'source_line_fallback',
       });
     } else if (HEX_PAYLOAD_RE.test(code)) {
       findings.push({
@@ -95,6 +98,7 @@ function verifyCWE506(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} contains a long hex-encoded byte sequence, commonly used for shellcode or obfuscated payloads.`,
         fix: 'Review the hex content. If binary data (image, key), store in a separate file, not inline code.',
+        via: 'source_line_fallback',
       });
     } else if (HIDDEN_NET_RE.test(code)) {
       findings.push({
@@ -103,6 +107,7 @@ function verifyCWE506(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} decodes content and passes it to a network API. Hiding network destinations behind encoding is a common malware obfuscation technique.`,
         fix: 'Use plaintext URLs. If dynamic routing is needed, use a configuration file, not encoded strings.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -146,6 +151,7 @@ function verifyCWE507(map: NeuralMap): VerificationResult {
           description: `Function "${fn.label}" appears to be a utility/helper but contains ${node.node_type === 'EXTERNAL' ? 'network calls' : 'system operations'} at ${node.label}. ` +
             `Trojan horse code hides malicious operations inside trusted-looking functions.`,
           fix: 'Review this function. If the operation is intentional, rename to reflect its true purpose. If unexpected, remove — it may be injected malicious code.',
+          via: 'structural',
         });
       }
     }
@@ -185,6 +191,7 @@ function verifyCWE508(map: NeuralMap): VerificationResult {
         description: `${node.label} contains destructive operations (mass file deletion, database wiping) outside a recognized admin/cleanup context. ` +
           `Non-replicating malicious code destroys data without spreading.`,
         fix: 'Review this destructive operation. If legitimate, wrap in admin-authenticated endpoint with confirmation. Add scope guards (never delete from root). If unexpected, may be planted malicious code.',
+        via: 'source_line_fallback',
       });
     } else if (SHUTDOWN_RE.test(code) && !ADMIN_CONTEXT_RE.test(code)) {
       findings.push({
@@ -193,6 +200,7 @@ function verifyCWE508(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} contains system shutdown/kill commands outside a graceful shutdown handler. Unauthorized process termination can cause data loss and denial of service.`,
         fix: 'Move shutdown logic to a dedicated graceful shutdown handler. Ensure it is only triggered by legitimate signals.',
+        via: 'source_line_fallback',
       });
     } else if (CORRUPT_RE.test(code)) {
       findings.push({
@@ -201,6 +209,7 @@ function verifyCWE508(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} writes random/garbage data to storage, a pattern consistent with data corruption malware.`,
         fix: 'Review why random data is being written. If test data generation, limit scope. If unexpected, investigate as possible malicious code.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -240,6 +249,7 @@ function verifyCWE509(map: NeuralMap): VerificationResult {
               severity: 'critical',
               description: `Code at ${node.label} reads its own source and the content flows to file modification at ${target.label}. Self-replicating code (virus) copies itself into other files to spread.`,
               fix: 'Remove self-replication logic. If a legitimate build tool/installer, ensure it only modifies intended targets and is code-signed.',
+              via: 'bfs',
             });
             break;
           }
@@ -254,6 +264,7 @@ function verifyCWE509(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} uses process injection primitives (ptrace, WriteProcessMemory, LD_PRELOAD). These APIs inject code into other processes — a core virus/malware propagation technique.`,
         fix: 'Remove process injection calls unless this is a legitimate debugger/profiler. Use IPC instead of memory injection.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -264,6 +275,7 @@ function verifyCWE509(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} contains patterns suggesting network self-propagation (copying self to remote hosts). This is the defining characteristic of a worm/virus.`,
         fix: 'Remove network propagation logic. Legitimate deployment should use CI/CD pipelines, not self-replicating code.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -332,6 +344,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
             `a hidden branch that only activates for a known identity, bypassing normal access controls.`,
           fix: 'Remove hostname/IP-based conditional logic. All clients should receive the same behavior through the same access control path. ' +
             'If host-based access control is needed, use a configurable allowlist loaded from a secure config store, not hardcoded in source.',
+          via: 'source_line_fallback',
         });
         continue;
       }
@@ -348,6 +361,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
           `a developer backdoor that activates only for the author's identity.`,
         fix: 'Remove hardcoded user identity checks. Use role-based access control (RBAC) with proper authentication, ' +
           'not checks against specific usernames embedded in source code.',
+        via: 'source_line_fallback',
       });
       continue;
     }
@@ -360,6 +374,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} contains references to backdoor/master/bypass credentials. Trapdoor code provides hidden authentication bypass outside normal access controls.`,
         fix: 'Remove hardcoded backdoor credentials. All authentication must go through the same verified path. Use feature flags with proper access control for debug access, not hardcoded secrets.',
+        via: 'source_line_fallback',
       });
     } else if (AUTH_BYPASS_RE.test(code)) {
       const parentId = findContainingFunction(map, node.id);
@@ -375,6 +390,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
           description: `${node.label} has a hardcoded string comparison inside authentication logic at ${parentNode?.label || 'unknown'}. ` +
             `Comparing against hardcoded values in auth is the classic trapdoor — a secret value that always grants access.`,
           fix: 'Remove hardcoded auth comparisons. All credentials must be verified against a proper credential store with hashing.',
+          via: 'source_line_fallback',
         });
       }
     } else if (HIDDEN_ENDPOINT_RE.test(code)) {
@@ -384,6 +400,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} registers a hidden endpoint with a debug/backdoor-style path. Undocumented endpoints that bypass normal routing are a common trapdoor mechanism.`,
         fix: 'Remove hidden endpoints. If debug endpoints are needed in dev, gate them behind NODE_ENV checks and disable in production.',
+        via: 'source_line_fallback',
       });
     } else if (ENV_BYPASS_RE.test(code)) {
       findings.push({
@@ -392,6 +409,7 @@ function verifyCWE510(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} uses an environment variable to bypass authentication. Env-based auth bypass can be exploited if the environment is compromised.`,
         fix: 'Remove auth bypass env variables. Use proper feature flags with access control if conditional auth is needed for testing.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -429,6 +447,7 @@ function verifyCWE511(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} contains a ${triggerType} that triggers destructive operations. Logic/time bombs wait for a specific condition before executing their payload.`,
         fix: 'Review the conditional logic. If legitimate (license expiration, trial limit), ensure graceful degradation (disable features, not destroy data). Remove destructive operations from timer callbacks.',
+        via: 'source_line_fallback',
       });
       continue;
     }
@@ -445,6 +464,7 @@ function verifyCWE511(map: NeuralMap): VerificationResult {
           severity: 'critical',
           description: `A ${triggerType} at ${node.label} flows to destructive operation at ${target.label}. Time bombs use delayed triggers to execute destructive payloads at a predetermined moment.`,
           fix: 'Separate timer/counter logic from destructive operations. Scheduled tasks should be in cron/scheduler configs, not embedded in code with hardcoded dates.',
+          via: 'bfs',
         });
         break;
       }
@@ -503,6 +523,7 @@ function verifyCWE512(map: NeuralMap): VerificationResult {
               severity: 'critical',
               description: `${name} at ${node.label} flows to network transmission at ${target.label} without consent verification. Spyware covertly collects and transmits user data without informed consent.`,
               fix: 'Add explicit user consent before collecting surveillance data. Show a clear privacy dialog. Use platform permission APIs (requestPermission). Provide opt-out. Comply with GDPR/CCPA.',
+              via: 'bfs',
             });
             break;
           }
@@ -523,6 +544,7 @@ function verifyCWE512(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `${node.label} performs ${name} outside of a recognized input-handling context. Review whether this data collection is necessary and properly disclosed.`,
             fix: 'Ensure keystroke/screen capture has a clear legitimate purpose (input handling, accessibility). If collecting for analytics, add explicit consent and minimize data.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -558,6 +580,7 @@ function verifyCWE514(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} combines data encoding with DNS queries. DNS exfiltration encodes stolen data as subdomains (e.g., "secret-data.evil.com") to bypass firewalls that allow DNS.`,
         fix: 'Review DNS usage. Legitimate DNS calls should not encode application data into hostnames. Monitor DNS query patterns for anomalous subdomain lengths.',
+        via: 'source_line_fallback',
       });
     } else if (STEGO_RE.test(code)) {
       findings.push({
@@ -566,6 +589,7 @@ function verifyCWE514(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} manipulates individual pixels or uses steganographic techniques. Covert storage channels hide data in image LSBs or media files to evade content inspection.`,
         fix: 'Review pixel manipulation code. If legitimate image processing, document it. If hiding data in images, consider whether this bypasses security controls.',
+        via: 'source_line_fallback',
       });
     } else if (TIMING_CHANNEL_RE.test(code) && /\b(data|secret|token|key|char|byte|bit|password|payload)\b/i.test(code)) {
       findings.push({
@@ -574,6 +598,7 @@ function verifyCWE514(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} uses data-dependent delays, potentially encoding information in timing. Covert timing channels modulate response delays to transmit bits of information.`,
         fix: 'Use constant-time operations for security-sensitive comparisons. Do not vary delays based on secret data. Use crypto.timingSafeEqual.',
+        via: 'source_line_fallback',
       });
     } else if (HEADER_EXFIL_RE.test(code)) {
       findings.push({
@@ -582,6 +607,7 @@ function verifyCWE514(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} encodes data into HTTP headers. Custom headers can serve as covert storage channels to exfiltrate data past content-inspecting firewalls/WAFs.`,
         fix: 'Review what data is placed in headers. Avoid encoding sensitive data in custom headers. Use standard headers for intended purpose only.',
+        via: 'source_line_fallback',
       });
     } else if (ERROR_CHANNEL_RE.test(code)) {
       findings.push({
@@ -590,6 +616,7 @@ function verifyCWE514(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} encodes data into error/exception messages. Error messages carrying encoded payloads can serve as a covert channel for data exfiltration.`,
         fix: 'Error messages should contain diagnostic information, not encoded data. Use structured logging with appropriate access controls.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -623,6 +650,7 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} encodes data into file metadata (timestamps, permissions, extended attributes). File metadata as a communication channel bypasses content-level security monitoring.`,
         fix: 'Do not encode application data into file metadata. Use proper IPC mechanisms (message queues, pipes) for inter-process communication.',
+        via: 'source_line_fallback',
       });
     } else if (FILE_META_RE.test(code) && /\b(data|payload|secret|message|signal|flag|bit|encode)\b/i.test(code)) {
       findings.push({
@@ -631,6 +659,7 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} modifies file metadata in a pattern consistent with covert storage channels (timestamps, permissions, or extended attributes encoding data).`,
         fix: 'Review why file metadata is set based on data values. Legitimate file operations set metadata for its intended purpose (access control, timestamps).',
+        via: 'source_line_fallback',
       });
     } else if (DB_SIGNAL_RE.test(code)) {
       findings.push({
@@ -639,6 +668,7 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} writes encoded data to auxiliary database fields (metadata, notes, description). Using database fields not designed for communication as covert storage bypasses access controls.`,
         fix: 'Store data in purpose-built columns/tables with appropriate access controls. Do not encode covert messages in metadata or description fields.',
+        via: 'source_line_fallback',
       });
     } else if (SHARED_MEM_RE.test(code) && /\b(encode|decode|charCode|fromCharCode|btoa|atob|Buffer|secret|password|token|key)\b/i.test(code)) {
       findings.push({
@@ -647,6 +677,7 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} writes encoded sensitive data to shared memory. Shared memory regions accessible to multiple processes can serve as covert storage channels.`,
         fix: 'If shared memory is needed for IPC, use it explicitly with proper access controls. Do not use shared memory to circumvent process isolation.',
+        via: 'source_line_fallback',
       });
     } else if (REGISTRY_RE.test(code) && /\b(encode|decode|base64|hex|payload|data|hidden|secret)\b/i.test(code)) {
       findings.push({
@@ -655,6 +686,7 @@ function verifyCWE515(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} writes encoded data to the Windows registry. Registry keys can serve as covert storage channels, persisting hidden data that survives reboots.`,
         fix: 'Use the registry only for legitimate configuration. Store application data in proper databases or config files.',
+        via: 'source_line_fallback',
       });
     }
   }

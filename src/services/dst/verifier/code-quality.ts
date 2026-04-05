@@ -49,6 +49,7 @@ function verifyCWE456(map: NeuralMap): VerificationResult {
         fix: 'Always initialize variables at declaration: int x = 0; char buf[256] = {0}; ' +
           'Use calloc() instead of malloc() for zero-initialized memory. ' +
           'In C++, use {} initialization: int x{}; std::string s{};',
+          via: 'structural',
       });
     }
 
@@ -63,6 +64,7 @@ function verifyCWE456(map: NeuralMap): VerificationResult {
         fix: 'Use calloc() instead of malloc() for zero-initialized memory. ' +
           'Or call memset(ptr, 0, size) immediately after malloc(). ' +
           'In C++, prefer std::vector or std::make_unique which zero-initialize.',
+          via: 'structural',
       });
     }
   }
@@ -118,6 +120,7 @@ function verifyCWE457(map: NeuralMap): VerificationResult {
           `indeterminate and may leak stack data or cause wrong branching.`,
         fix: 'Initialize all variables at declaration. Enable -Wuninitialized and -Wmaybe-uninitialized compiler flags. ' +
           'Use AddressSanitizer/MemorySanitizer in testing. In C++, use {} initialization.',
+          via: 'structural',
       });
     }
 
@@ -131,6 +134,7 @@ function verifyCWE457(map: NeuralMap): VerificationResult {
           `If the condition is false, the variable remains uninitialized when used later.`,
         fix: 'Ensure all code paths initialize the variable. Add an else branch with a default value. ' +
           'Or initialize the variable at declaration before the conditional.',
+          via: 'structural',
       });
     }
   }
@@ -179,6 +183,7 @@ function verifyCWE467(map: NeuralMap): VerificationResult {
             fix: 'Use sizeof(*ptr) to get the size of the pointed-to type, or use the original allocation size. ' +
               'For arrays passed as pointers, pass the size as a separate parameter. ' +
               'Example: memset(buf, 0, buf_size) instead of memset(buf, 0, sizeof(buf)).',
+              via: 'structural',
           });
           continue;
         }
@@ -197,6 +202,7 @@ function verifyCWE467(map: NeuralMap): VerificationResult {
             `sizeof(pointer) gives the pointer size (4/8 bytes), not the allocated buffer size.`,
           fix: 'Track buffer sizes separately. Use sizeof(*ptr) for the element size, and multiply by count. ' +
             'Or use sizeof(type) * count for the total allocation size.',
+            via: 'structural',
         });
       }
     }
@@ -236,6 +242,7 @@ function verifyCWE468(map: NeuralMap): VerificationResult {
         fix: 'Remove the manual sizeof multiplication: use ptr + index, not ptr + index * sizeof(type). ' +
           'If you need byte-level arithmetic, cast to char* first: ((char*)ptr) + byte_offset. ' +
           'Use array indexing (ptr[index]) instead of manual pointer arithmetic when possible.',
+          via: 'structural',
       });
     }
 
@@ -250,6 +257,7 @@ function verifyCWE468(map: NeuralMap): VerificationResult {
         fix: 'Be explicit about whether offsets are in bytes or elements. ' +
           'Use offsetof() for struct member offsets. Use container_of() for container access. ' +
           'Document whether arithmetic is byte-level or element-level.',
+          via: 'structural',
       });
     }
   }
@@ -292,6 +300,7 @@ function verifyCWE469(map: NeuralMap): VerificationResult {
         fix: 'Validate that both pointers reference the same allocation before subtracting. ' +
           'Check that the result is non-negative before using as a size. ' +
           'Prefer explicit size tracking: pass buffer + size instead of start + end pointers.',
+          via: 'structural',
       });
     } else if (PTR_SUB_SIZE_RE.test(code) && !SAFE_SIZE_RE.test(code) && !VALIDATED_RE.test(code)) {
       findings.push({
@@ -304,6 +313,7 @@ function verifyCWE469(map: NeuralMap): VerificationResult {
         fix: 'Assert that end >= start before computing size. Use size_t for sizes, not pointer subtraction. ' +
           'Consider std::distance() in C++ which works with iterators safely. ' +
           'Track buffer sizes explicitly alongside pointers.',
+          via: 'structural',
       });
     }
   }
@@ -347,6 +357,7 @@ function verifyCWE478(map: NeuralMap): VerificationResult {
           'default: throw new Error("Unexpected value"); or default: return -EINVAL; ' +
           'For enums in C++, use -Wswitch-enum to catch missing cases at compile time. ' +
           'In Rust, use _ => pattern in match expressions.',
+          via: 'structural',
       });
     }
   }
@@ -398,6 +409,7 @@ function verifyCWE480(map: NeuralMap): VerificationResult {
             fix: 'Change = to == for comparison. Enable -Wparentheses or -Wconditional-assignment compiler warnings. ' +
               'Use Yoda conditions (if (5 == x)) to catch this at compile time. ' +
               'In C++, declare variables const where possible.',
+              via: 'structural',
           });
         }
       }
@@ -420,6 +432,7 @@ function verifyCWE480(map: NeuralMap): VerificationResult {
               `check and the right side dereferences, this causes null pointer dereference.`,
             fix: 'Use && for logical AND and || for logical OR. Bitwise & and | do not short-circuit. ' +
               'If bitwise operation is intentional, add a comment and parenthesize for clarity.',
+              via: 'structural',
           });
         }
       }
@@ -493,6 +506,7 @@ function verifyCWE561(map: NeuralMap): VerificationResult {
               `Unused methods increase the attack surface and maintenance burden.`,
             fix: 'Remove the unused private method, or add a call to it if it was meant to be used. ' +
               'Dead code increases attack surface and makes the codebase harder to audit.',
+              via: 'structural',
           });
           break;
         }
@@ -530,6 +544,7 @@ function verifyCWE561(map: NeuralMap): VerificationResult {
         fix: 'Remove unreachable code. If the code was meant to execute, fix the control flow ' +
           '(e.g., move it before the return statement, or fix the always-false condition). ' +
           'Use a linter with no-unreachable and no-constant-condition rules.',
+          via: 'structural',
       });
     }
   }
@@ -599,6 +614,7 @@ function verifyCWE562(map: NeuralMap): VerificationResult {
         fix: 'Allocate on the heap (malloc/new/Box) and return the heap pointer. ' +
           'Or return by value (copy the struct/array). ' +
           'In Go, the compiler escape-analyzes, but beware of loop variable capture — copy first.',
+          via: 'structural',
       });
     }
   }
@@ -643,6 +659,7 @@ function verifyCWE563(map: NeuralMap): VerificationResult {
             `The first assignment is wasted — this may indicate a logic error.`,
           fix: 'Remove the dead store or use the value before reassigning. ' +
             'If the first assignment has side effects, extract them.',
+            via: 'structural',
         });
       }
     }
@@ -664,6 +681,7 @@ function verifyCWE563(map: NeuralMap): VerificationResult {
               `If this is a security check, the result is being ignored — the check runs but has no effect.`,
             fix: 'Use the return value in a conditional: if (!isValid) { throw new Error(...); } ' +
               'Or remove the assignment if the function is called only for side effects.',
+              via: 'structural',
           });
         }
       }
@@ -724,6 +742,7 @@ function verifyCWE563(map: NeuralMap): VerificationResult {
             missing: 'EGRESS (variable should be used after assignment)', severity: 'low',
             description: `L${i + 1}: Variable '${vn563}' is assigned but never used in its scope.`,
             fix: 'Remove unused variable assignments. They may indicate logic errors or incomplete implementation.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -787,6 +806,7 @@ function verifyCWE570(map: NeuralMap): VerificationResult {
         fix: 'Fix the condition to reflect the actual intent. If the dead branch is intentional ' +
           '(feature flag), use a named constant or config value instead of a literal false. ' +
           'Run static analysis (ESLint no-constant-condition, gcc -Wtype-limits) to catch these.',
+          via: 'structural',
       });
     }
   }
@@ -823,6 +843,7 @@ function verifyCWE570(map: NeuralMap): VerificationResult {
               severity: 'low',
               description: `L${i + 1}: Expression always evaluates to false: ${pat.desc}. Dead code follows.`,
               fix: 'Fix always-false expressions. They indicate logic errors or dead code.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -853,6 +874,7 @@ function verifyCWE570(map: NeuralMap): VerificationResult {
                 severity: 'low',
                 description: `L${i + 1}: getClass().equals() comparison between ${type1} and ${type2} is always false — different concrete types.`,
                 fix: 'Fix always-false expressions. Comparing getClass() of different types always returns false.',
+                via: 'source_line_fallback',
               });
             }
           }
@@ -919,6 +941,7 @@ function verifyCWE571(map: NeuralMap): VerificationResult {
         fix: 'Fix the condition to test what was actually intended. ' +
           'If used as a feature flag, replace with a named constant from config. ' +
           'If used as an intentional infinite loop, add a break condition and timeout.',
+          via: 'structural',
       });
     }
   }
@@ -954,6 +977,7 @@ function verifyCWE571(map: NeuralMap): VerificationResult {
               severity: 'low',
               description: `L${i + 1}: Expression always evaluates to true: ${pat.desc}. The else branch is dead code.`,
               fix: 'Fix always-true expressions. They indicate logic errors or dead branches.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -983,6 +1007,7 @@ function verifyCWE571(map: NeuralMap): VerificationResult {
                 severity: 'low',
                 description: `L${i + 1}: !getClass().equals() comparison between ${type1} and ${type2} is always true — different concrete types.`,
                 fix: 'Fix always-true expressions. Negated getClass() comparison of different types always returns true.',
+                via: 'source_line_fallback',
               });
             }
           }
@@ -1030,6 +1055,7 @@ function verifyCWE572(map: NeuralMap): VerificationResult {
         fix: 'Replace .run() with .start() to spawn a new thread. ' +
           'Or use ExecutorService.submit() for managed thread pools. ' +
           'If synchronous execution is truly intended, document it clearly.',
+          via: 'structural',
       });
     }
 
@@ -1044,6 +1070,7 @@ function verifyCWE572(map: NeuralMap): VerificationResult {
           `Use .start() to spawn a new thread. .run() executes synchronously.`,
         fix: 'Replace thread.run() with thread.start(). ' +
           'Or use concurrent.futures.ThreadPoolExecutor for managed parallelism.',
+          via: 'structural',
       });
     }
   }
@@ -1082,6 +1109,7 @@ function verifyCWE583(map: NeuralMap): VerificationResult {
         fix: 'Declare finalize() as protected: "protected void finalize() throws Throwable". ' +
           'Better yet, avoid finalize() entirely — use try-with-resources (AutoCloseable) or ' +
           'java.lang.ref.Cleaner (Java 9+). finalize() is deprecated since Java 9.',
+          via: 'structural',
       });
     }
   }
@@ -1138,6 +1166,7 @@ function verifyCWE585(map: NeuralMap): VerificationResult {
         fix: 'Either add the code that needs synchronization inside the block, or remove the ' +
           'empty block entirely. If you need a memory barrier, use volatile (Java), ' +
           'Interlocked (C#), or threading.Event/Condition (Python).',
+          via: 'structural',
       });
     }
   }
@@ -1185,6 +1214,7 @@ function verifyCWE586(map: NeuralMap): VerificationResult {
           `release resources twice, or throw unexpected exceptions during GC.`,
         fix: 'Never call finalize() explicitly. Use try-with-resources with AutoCloseable for ' +
           'deterministic cleanup. For GC-time cleanup, use java.lang.ref.Cleaner (Java 9+).',
+          via: 'structural',
       });
     }
 
@@ -1199,6 +1229,7 @@ function verifyCWE586(map: NeuralMap): VerificationResult {
           `call __del__ again. Use context managers (with statement) for deterministic cleanup.`,
         fix: 'Use "with" statements and context managers for resource cleanup. ' +
           'Implement __enter__/__exit__ instead of relying on __del__.',
+          via: 'structural',
       });
     }
 
@@ -1213,6 +1244,7 @@ function verifyCWE586(map: NeuralMap): VerificationResult {
           `calling a destructor explicitly leads to double-free when the object goes out of scope.`,
         fix: 'Use RAII (unique_ptr, shared_ptr) for automatic resource management. ' +
           'Explicit destructor calls are only valid after placement new.',
+          via: 'structural',
       });
     }
   }
@@ -1280,6 +1312,7 @@ function verifyCWE587(map: NeuralMap): VerificationResult {
         fix: 'Use dynamic allocation (malloc/new/Box) instead of fixed addresses. ' +
           'If this is for memory-mapped I/O in embedded systems, mark it volatile and ' +
           'use platform-provided register definitions. Never use fixed addresses in application code.',
+          via: 'structural',
       });
     }
   }
@@ -1329,6 +1362,7 @@ function verifyCWE481(map: NeuralMap): VerificationResult {
           description: `${node.label} uses assignment (=) inside a conditional expression where comparison (== or ===) was likely intended. ` +
             `This always evaluates to the assigned value's truthiness, not whether values are equal.`,
           fix: 'Replace = with == or === in the conditional. If assignment is intentional, wrap in extra parentheses: if ((x = getValue())) { ... } to signal intent.',
+          via: 'structural',
         });
         break;
       }
@@ -1380,6 +1414,7 @@ function verifyCWE482(map: NeuralMap): VerificationResult {
           description: `${node.label} contains a comparison expression (== or ===) used as a standalone statement. ` +
             `The comparison result is discarded — this likely should be an assignment (=) instead.`,
           fix: 'Replace == or === with = if assignment was intended. If the comparison is intentional (side-effect check), store or use the result.',
+          via: 'structural',
         });
         break;
       }
@@ -1407,6 +1442,7 @@ function verifyCWE482(map: NeuralMap): VerificationResult {
               severity: 'medium',
               description: `L${i + 1}: Comparison (==) used where assignment (=) was likely intended inside if-condition.`,
               fix: 'Use = for assignment, == for comparison. The == operator does not modify the variable.',
+              via: 'source_line_fallback',
             });
           }
           break;
@@ -1449,6 +1485,7 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
           description: `${node.label} has a control statement (${semicolonMatch[1].split('(')[0].trim()}) immediately followed by a semicolon. ` +
             `The semicolon acts as an empty body — the block that follows always executes regardless of the condition.`,
           fix: 'Remove the erroneous semicolon and use braces: `if (cond) { ... }`. The semicolon after a control statement creates an empty body.',
+          via: 'structural',
         });
         found = true;
         break;
@@ -1471,6 +1508,7 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
               description: `${node.label} has a control statement (${singleLineMatch[1].split('(')[0].trim()}) on a single line with multiple statements. ` +
                 `Only the first statement is controlled — subsequent statements always execute regardless of the condition.`,
               fix: 'Always use braces {} with control flow statements. Separate statements onto their own lines inside a block.',
+              via: 'structural',
             });
             found = true;
             break;
@@ -1506,6 +1544,7 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
             `followed by multiple statements at the same indentation level. Only the first statement is controlled — ` +
             `subsequent statements always execute regardless of the condition.`,
           fix: 'Always use braces {} with control flow statements, even for single-line bodies. This prevents misleading indentation bugs.',
+          via: 'structural',
         });
         found = true;
         break;
@@ -1537,6 +1576,7 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
               severity: 'medium',
               description: `L${i + 1}: Control statement followed by semicolon creates empty body.`,
               fix: 'Remove the erroneous semicolon and use braces: if (cond) { ... }.',
+              via: 'source_line_fallback',
             });
           }
           break;
@@ -1571,6 +1611,7 @@ function verifyCWE483(map: NeuralMap): VerificationResult {
               description: `L${i + 1}: Control statement (${controlMatch[1].split('(')[0].trim()}) without braces, ` +
                 `followed by multiple indented statements. Only the first is controlled.`,
               fix: 'Always use braces {} with control flow statements.',
+              via: 'source_line_fallback',
             });
           }
           break;
@@ -1617,6 +1658,7 @@ function verifyCWE484(map: NeuralMap): VerificationResult {
             description: `${node.label} has a switch case "${caseLabel}" that falls through to "${caseMatch[1]}" without ` +
               `a break, return, or throw statement. If fallthrough is intentional, add a "// fallthrough" comment.`,
             fix: 'Add break; at the end of each case clause. If fallthrough is intentional, add a // fallthrough comment to document intent.',
+            via: 'structural',
           });
         }
 
@@ -1691,6 +1733,7 @@ function verifyCWE486(map: NeuralMap): VerificationResult {
             `Two classes with the same name from different packages would match incorrectly.`,
           fix: 'Use instanceof (JS/Java), isinstance() (Python), is (C#), or is_a? (Ruby) for type checking. ' +
             'These handle inheritance correctly and survive refactoring.',
+            via: 'structural',
         });
         break;
       }
@@ -1738,6 +1781,7 @@ function verifyCWE489(map: NeuralMap): VerificationResult {
           `Debug code in production can expose internal state, degrade performance, and increase attack surface.`,
         fix: 'Remove debug code before deployment. If needed for diagnostics, gate behind environment checks: ' +
           'if (process.env.NODE_ENV !== "production") { ... }. Use a proper logging framework with configurable levels.',
+          via: 'structural',
       });
     }
   }
@@ -1776,6 +1820,7 @@ function verifyCWE491(map: NeuralMap): VerificationResult {
           `A malicious subclass can override clone() to return a manipulated copy, bypassing security invariants.`,
         fix: 'Declare the class as final, or make clone() final. Consider implementing a copy constructor instead of Cloneable. ' +
           'If clone() is needed, ensure it creates a truly deep copy of all mutable fields.',
+          via: 'structural',
       });
     }
 
@@ -1788,6 +1833,7 @@ function verifyCWE491(map: NeuralMap): VerificationResult {
           `Callers who modify the cloned object may inadvertently modify shared mutable state.`,
         fix: 'Return a deep copy from clone/copy methods. Use structuredClone(), Object.assign({}, ...) with nested copies, ' +
           'or JSON.parse(JSON.stringify(...)) for simple objects. Ensure all mutable fields are independently copied.',
+          via: 'structural',
       });
     }
 
@@ -1799,6 +1845,7 @@ function verifyCWE491(map: NeuralMap): VerificationResult {
         description: `${node.label} defines __copy__ or __deepcopy__ — verify that all mutable internal state is properly deep-copied. ` +
           `A shallow copy that shares mutable references with the original can lead to unintended state sharing.`,
         fix: 'Use copy.deepcopy() for nested mutable structures. Override __deepcopy__ to ensure all internal collections are independently copied.',
+        via: 'structural',
       });
     }
   }
@@ -1840,6 +1887,7 @@ function verifyCWE495(map: NeuralMap): VerificationResult {
           fix: 'Return a defensive copy: return [...this.items] (JS), return list(self._items) (Python), ' +
             'return Collections.unmodifiableList(this.items) (Java), or return @items.dup (Ruby). ' +
             'Alternatively, use immutable data structures.',
+            via: 'structural',
         });
         break;
       }
@@ -1885,6 +1933,7 @@ function verifyCWE496(map: NeuralMap): VerificationResult {
           fix: 'Copy the input before storing: this.items = [...items] (JS), self._items = list(items) (Python), ' +
             'this.items = new ArrayList<>(items) (Java), @items = items.dup (Ruby). ' +
             'This breaks the aliasing link between external and internal references.',
+            via: 'structural',
         });
         break;
       }
@@ -1927,6 +1976,7 @@ function verifyCWE499(map: NeuralMap): VerificationResult {
       fix: 'Mark sensitive fields as transient (Java), use @JsonIgnore (Jackson), [JsonIgnore] (C#), ' +
         'or exclude from toJSON(). In ORMs, use @Column(insertable=false) or separate DTOs that omit sensitive fields. ' +
         'Never serialize raw passwords — store only hashes.',
+        via: 'structural',
     });
   }
 
@@ -1978,6 +2028,7 @@ function verifyCWE500(map: NeuralMap): VerificationResult {
           `and potential security bypasses (e.g., overwriting a default error message or config value).`,
         fix: 'Add the final modifier: `public static final`. If the field must be mutable, make it private ' +
           'and provide controlled access through getter/setter methods with appropriate validation.',
+          via: 'structural',
       });
       break; // One finding per node is sufficient
     }
@@ -2028,6 +2079,7 @@ function verifyCWE582(map: NeuralMap): VerificationResult {
         fix: 'Make the array private and provide a public method that returns a defensive copy: ' +
           '`private static final int[] ARR = {...}; public static int[] getArr() { return ARR.clone(); }`. ' +
           'Alternatively, use an immutable collection: Collections.unmodifiableList(Arrays.asList(...)).',
+          via: 'structural',
       });
       break;
     }
@@ -2075,6 +2127,7 @@ function verifyCWE688(map: NeuralMap): VerificationResult {
         fix: 'Review the function call and ensure the correct variable is passed. If logging is intentional, ' +
           'redact sensitive data: logger.info("auth attempt", { user: userId }) instead of logger.info(password). ' +
           'Use a linter rule (no-console, eslint-plugin-no-secrets) to catch these.',
+          via: 'structural',
       });
     }
 
@@ -2087,6 +2140,7 @@ function verifyCWE688(map: NeuralMap): VerificationResult {
           `suggesting the req/res parameters may be swapped in the handler signature.`,
         fix: 'Verify the handler parameter order matches the framework convention: (req, res) for Express, ' +
           '(request, response) for Hapi, (ctx) for Koa. Swap parameters if reversed.',
+          via: 'structural',
       });
     }
 
@@ -2099,6 +2153,7 @@ function verifyCWE688(map: NeuralMap): VerificationResult {
           `accessing .data, .body, .length etc. on the error variable. The callback arguments may be swapped.`,
         fix: 'Review the callback signature. Node.js convention is (err, result) — ensure you are using ' +
           'the result parameter for data access, not the error parameter.',
+          via: 'structural',
       });
     }
   }
@@ -2152,6 +2207,7 @@ function verifyCWE689(map: NeuralMap): VerificationResult {
         fix: 'Set permissions atomically during creation: use mode option in fs.writeFile({mode: 0o600}), ' +
           'os.open(path, flags, 0o600) in Python, or set umask before creation. ' +
           'For copies, use install(1) with -m flag or shutil.copy followed by immediate fchmod on the fd.',
+          via: 'structural',
       });
     }
   }
@@ -2174,6 +2230,7 @@ function verifyCWE689(map: NeuralMap): VerificationResult {
           `The copied resource inherits default or source permissions, which may be overly permissive.`,
         fix: 'Explicitly set restrictive permissions after copying to a public location. ' +
           'Better: use atomic creation with desired permissions, or copy to a staging area first.',
+          via: 'structural',
       });
     }
   }
@@ -2224,6 +2281,7 @@ function verifyCWE698(map: NeuralMap): VerificationResult {
         fix: 'Always return/exit immediately after sending a redirect. In Express: return res.redirect("/login"). ' +
           'In PHP: header("Location: ..."); exit();. In Java: response.sendRedirect(...); return;. ' +
           'In Python/Flask: return redirect(url). Never rely on the redirect alone to stop execution.',
+          via: 'structural',
       });
     } else {
       // Redirect without explicit return — still suspicious
@@ -2235,6 +2293,7 @@ function verifyCWE698(map: NeuralMap): VerificationResult {
           `Without return, subsequent code in the handler may execute, including template rendering or data operations.`,
         fix: 'Add an explicit return statement after every redirect call: return res.redirect(...). ' +
           'This prevents accidental fall-through even if no dangerous code currently follows.',
+          via: 'structural',
       });
     }
   }
@@ -2285,6 +2344,7 @@ function verifyCWE704(map: NeuralMap): VerificationResult {
           description: `${node.label} contains ${tc.name}. ` +
             `Incorrect type conversions can cause data loss, sign errors, truncation, or type confusion vulnerabilities.`,
           fix: tc.fix,
+          via: 'structural',
         });
         break; // One finding per node to avoid noise
       }
@@ -2344,6 +2404,7 @@ function verifyCWE706(map: NeuralMap): VerificationResult {
             `An attacker can create a symlink pointing to a sensitive file, causing the operation to act on the wrong resource.`,
           fix: 'Use O_NOFOLLOW flag, lstat() to check for symlinks before operating, or realpath() followed by prefix validation. ' +
             'On Node.js, use fs.lstat to detect symlinks before reading/writing.',
+            via: 'structural',
         });
       }
     }
@@ -2359,6 +2420,7 @@ function verifyCWE706(map: NeuralMap): VerificationResult {
           `executing unexpected code through the module resolution mechanism.`,
         fix: 'Use an allowlist/map of permitted module names: const modules = { "a": moduleA, "b": moduleB }; ' +
           'modules[name]. Never pass user input directly to require/import/Class.forName.',
+          via: 'structural',
       });
     }
 
@@ -2373,6 +2435,7 @@ function verifyCWE706(map: NeuralMap): VerificationResult {
           `causing the code to resolve a different function/value than intended.`,
         fix: 'Use Object.create(null) for lookup dictionaries, Map for key-value stores, ' +
           'Object.freeze to prevent prototype modification, and hasOwnProperty/Object.hasOwn for property checks.',
+          via: 'structural',
       });
     }
   }
@@ -2418,6 +2481,7 @@ function verifyCWE732(map: NeuralMap): VerificationResult {
           description: `${node.label} assigns overly permissive access: ${pp.name}. ` +
             `Critical resources with excessive permissions can be read, modified, or deleted by unauthorized actors.`,
           fix: pp.fix,
+          via: 'structural',
         });
       }
     }
@@ -2464,6 +2528,7 @@ function verifyCWE749(map: NeuralMap): VerificationResult {
         fix: 'Add authentication and authorization middleware before dangerous operations. ' +
           'Use @RequiresPermission, requireAdmin middleware, or RBAC checks. ' +
           'Never expose eval, exec, file deletion, or admin functions without strict access control.',
+          via: 'structural',
       });
     }
   }
@@ -2481,6 +2546,7 @@ function verifyCWE749(map: NeuralMap): VerificationResult {
           `If this service is reachable from untrusted networks, the dangerous operation is exploitable.`,
         fix: 'Add authentication (API keys, JWT, mTLS) to external service endpoints. ' +
           'Apply principle of least privilege — only expose operations that the caller legitimately needs.',
+          via: 'structural',
       });
     }
   }
@@ -2537,6 +2603,7 @@ function verifyCWE754(map: NeuralMap): VerificationResult {
             `Failing to check for unusual conditions (null, error, empty, NaN) can cause crashes, ` +
             `undefined behavior, or security bypasses when the unexpected state is exploited.`,
           fix: up.fix,
+          via: 'structural',
         });
         break; // One finding per node
       }
@@ -2601,6 +2668,7 @@ function verifyCWE755(map: NeuralMap): VerificationResult {
             `Security-critical errors (auth failures, permission denied, input validation) are silently ignored.`,
           fix: 'At minimum, log the error. Better: re-throw specific exceptions, return error responses, ' +
             'or take corrective action. Only swallow exceptions when you can prove the error is truly benign.',
+            via: 'structural',
         });
         break;
       }
@@ -2619,6 +2687,7 @@ function verifyCWE755(map: NeuralMap): VerificationResult {
           fix: 'Catch specific exception types. If catching broadly, re-throw unexpected exceptions: ' +
             'catch (e) { if (e instanceof SpecificError) { handle(); } else { throw e; } }. ' +
             'Never catch Throwable/BaseException without re-throwing.',
+            via: 'structural',
         });
         break;
       }
@@ -2635,6 +2704,7 @@ function verifyCWE755(map: NeuralMap): VerificationResult {
           `This is especially dangerous for auth/payment/security operations.`,
         fix: 'After logging, either re-throw the exception, return an error result, or send an error response. ' +
           'The caller must know the operation failed: catch (e) { logger.error(e); throw e; }.',
+          via: 'structural',
       });
     }
   }
@@ -2676,6 +2746,7 @@ function verifyCWE756(map: NeuralMap): VerificationResult {
             `environment variables, and database queries to attackers.`,
           fix: 'Disable debug mode in production: set DEBUG=False (Django), app.debug=false (Flask/Express), ' +
             'NODE_ENV=production. Configure custom error pages for 4xx and 5xx status codes.',
+            via: 'structural',
         });
       }
     }
@@ -2689,6 +2760,7 @@ function verifyCWE756(map: NeuralMap): VerificationResult {
           `Without a custom error page, users see default framework error output including stack traces and internal paths.`,
         fix: 'Create custom error pages: Express: app.use((err, req, res, next) => res.render("error")). ' +
           'Django: templates/500.html. Flask: @app.errorhandler(500).',
+          via: 'structural',
       });
     }
   }
@@ -2736,6 +2808,7 @@ function verifyCWE778(map: NeuralMap): VerificationResult {
           `Without audit logs, authentication failures, privilege escalations, and security breaches go undetected.`,
         fix: 'Add structured audit logging for all security events. Log WHO (user/IP), WHAT (action), ' +
           'WHEN (timestamp), WHERE (endpoint), SUCCESS/FAILURE. Use a dedicated audit logger.',
+          via: 'structural',
       });
     }
   }
@@ -2784,6 +2857,7 @@ function verifyCWE779(map: NeuralMap): VerificationResult {
             `Sensitive data in logs creates a secondary attack surface.`,
           fix: 'Never log passwords, tokens, or credit card numbers. Redact sensitive fields: ' +
             'logger.info({ ...user, password: "[REDACTED]" }). Use structured logging with auto-redaction.',
+            via: 'structural',
         });
         break;
       }
@@ -2830,6 +2904,7 @@ function verifyCWE804(map: NeuralMap): VerificationResult {
           `Bypassed by submitting the form directly without JavaScript or setting expected form values.`,
         fix: 'Always verify CAPTCHA server-side: reCAPTCHA: POST google.com/recaptcha/api/siteverify. ' +
           'hCaptcha: POST hcaptcha.com/siteverify. Never trust client-side CAPTCHA validation alone.',
+          via: 'structural',
       });
     }
 
@@ -2841,6 +2916,7 @@ function verifyCWE804(map: NeuralMap): VerificationResult {
         description: `CAPTCHA at ${node.label} uses hardcoded or predictable answers. ` +
           `An attacker who reads the source can bypass it entirely.`,
         fix: 'Use a proven CAPTCHA service (reCAPTCHA v3, hCaptcha, Turnstile) instead of rolling your own.',
+        via: 'structural',
       });
     }
 
@@ -2852,6 +2928,7 @@ function verifyCWE804(map: NeuralMap): VerificationResult {
         description: `CAPTCHA at ${node.label} uses simple arithmetic. ` +
           `Math CAPTCHAs are trivially solvable by any bot using basic parsing.`,
         fix: 'Replace with behavioral analysis CAPTCHA (reCAPTCHA v3) or proof-of-work (Turnstile).',
+        via: 'structural',
       });
     }
   }
@@ -2895,6 +2972,7 @@ function verifyCWE806(map: NeuralMap): VerificationResult {
             `strncpy(dest, src, strlen(src)) is semantically identical to strcpy(dest, src).`,
           fix: 'Use DESTINATION buffer size: strncpy(dest, src, sizeof(dest)-1); dest[sizeof(dest)-1]="\\0"; ' +
             'memcpy(dest, src, MIN(src_len, dest_capacity)). Better: strlcpy() or snprintf().',
+            via: 'structural',
         });
         break;
       }
@@ -2946,6 +3024,7 @@ function verifyCWE807(map: NeuralMap): VerificationResult {
             `Checking req.cookies.isAdmin for authorization is trivially bypassable.`,
           fix: 'Use server-side sessions (req.session.user), JWT with signature verification (jwt.verify()), ' +
             'or database-backed permission checks. Never trust client-supplied role/permission values.',
+            via: 'structural',
         });
         break;
       }
@@ -2986,6 +3065,7 @@ function verifyCWE829(map: NeuralMap): VerificationResult {
         fix: 'Add integrity and crossorigin attributes: ' +
           '<script src="..." integrity="sha384-..." crossorigin="anonymous">. ' +
           'Also deploy Content-Security-Policy with script-src restrictions.',
+          via: 'structural',
       });
     }
 
@@ -3001,6 +3081,7 @@ function verifyCWE829(map: NeuralMap): VerificationResult {
             `An attacker who controls the module path can execute arbitrary code.`,
           fix: 'Use an allowlist: const ALLOWED = new Set(["./mod1"]); if (!ALLOWED.has(path)) throw. ' +
             'Never construct require/import paths from user input.',
+            via: 'structural',
         });
       }
     }
@@ -3015,6 +3096,7 @@ function verifyCWE829(map: NeuralMap): VerificationResult {
           `If the variable is user-controlled, this enables Remote File Inclusion (RFI).`,
         fix: 'Use an allowlist of includable files. Disable allow_url_include in php.ini. ' +
           'Use __DIR__ . "/allowed_file.php" instead of variable paths.',
+          via: 'structural',
       });
     }
   }
@@ -3061,6 +3143,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
               `If the expected exit condition never occurs, this hangs the thread/process permanently.`,
             fix: 'Add a timeout: const deadline = Date.now() + TIMEOUT_MS; while (true) { if (Date.now() > deadline) break; }. ' +
               'For retries: while (retries++ < MAX_RETRIES). For events: use AbortController for cancellation.',
+              via: 'structural',
           });
         }
       }
@@ -3075,6 +3158,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
           `If the condition never becomes true (crashed service, network partition), the loop runs forever.`,
         fix: 'Add timeout: const start = Date.now(); while (!ready && (Date.now()-start) < TIMEOUT) { await sleep(100); }. ' +
           'Use exponential backoff. In Go: select { case <-ctx.Done(): return }.',
+          via: 'structural',
       });
     }
 
@@ -3094,6 +3178,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
             `Common in retry loops where the increment is accidentally outside the catch block.`,
           fix: `Ensure "${varName}" is incremented every iteration: ` +
             `while (${varName} < max) { try { ... } finally { ${varName}++; } }.`,
+            via: 'structural',
         });
       }
     }
@@ -3129,6 +3214,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
               description: `L${i + 1}: while(true) loop without break, return, or throw in the loop body. ` +
                 `This is an unconditional infinite loop that will hang the thread/process.`,
               fix: 'Add a break condition, timeout, or bounded iteration count inside the loop.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -3147,6 +3233,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
               description: `L${i + 1}: for(;;) loop without break, return, or throw in the loop body. ` +
                 `This is an unconditional infinite loop.`,
               fix: 'Add a break condition, timeout, or bounded iteration count inside the loop.',
+              via: 'source_line_fallback',
             });
           }
         }
@@ -3185,6 +3272,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
                   `(${condition.trim()}) and no break/return/throw in the body. This is an infinite loop.`,
                 fix: 'Add a break condition inside the loop body, or ensure the while condition can become false. ' +
                   'For bounded iteration, add a counter: if (++count > MAX) break;',
+                  via: 'source_line_fallback',
               });
             }
           }
@@ -3208,6 +3296,7 @@ function verifyCWE835(map: NeuralMap): VerificationResult {
                 description: `L${i + 1}: while(${vn} >= 0) loop where ${vn} is assigned via modulo. ` +
                   `Modulo of non-negative values always yields >= 0, making the condition always true.`,
                 fix: 'Add a break condition, or change the loop bound to a finite counter.',
+                via: 'source_line_fallback',
               });
             }
           }
@@ -3305,6 +3394,7 @@ function verifyCWE595(map: NeuralMap): VerificationResult {
           description: `${node.label} compares objects with == which checks reference identity in Java, not content equality. ` +
             `Two String objects with the same content are NOT == unless interned.`,
           fix: 'Use .equals() for String/boxed type comparison. For null-safe comparison use Objects.equals(a, b) or "literal".equals(var).',
+          via: 'structural',
         });
       }
     }
@@ -3319,6 +3409,7 @@ function verifyCWE595(map: NeuralMap): VerificationResult {
           description: `${node.label} uses "is" for comparison which checks object identity in Python, not value equality. ` +
             `This works for small integers (-5 to 256) and interned strings but fails unpredictably for other values.`,
           fix: 'Use == for value comparison. Reserve "is" only for None, True, False, and sentinel objects.',
+          via: 'structural',
         });
       }
     }
@@ -3332,6 +3423,7 @@ function verifyCWE595(map: NeuralMap): VerificationResult {
           description: `${node.label} compares objects/arrays with === which checks reference identity in JavaScript. ` +
             `Two objects with identical contents are NOT === unless they are the same reference.`,
           fix: 'Use deep comparison: JSON.stringify for simple cases, lodash isEqual, or a custom deepEqual. For arrays, compare element-by-element.',
+          via: 'structural',
         });
       }
     }
@@ -3369,6 +3461,7 @@ function verifyCWE597(map: NeuralMap): VerificationResult {
             description: `${node.label} compares a String with == operator. In Java, == compares references, not string content. ` +
               `This may pass for string literals (interned) but fail for dynamically created strings (from user input, DB, etc.).`,
             fix: 'Use "literal".equals(variable) for null-safe comparison, or Objects.equals(a, b). Never use == for String comparison in Java.',
+            via: 'structural',
           });
         }
       }
@@ -3383,6 +3476,7 @@ function verifyCWE597(map: NeuralMap): VerificationResult {
           description: `${node.label} uses single = for string comparison in a test expression. While this works in [[ ]], ` +
             `it can cause assignment instead of comparison in other contexts.`,
           fix: 'Use == for string comparison in [[ ]] or test expressions. Quote variables: [[ "$var" == "value" ]].',
+          via: 'structural',
         });
       }
     }
@@ -3428,6 +3522,7 @@ function verifyCWE597(map: NeuralMap): VerificationResult {
                 severity: 'medium',
                 description: `L${i + 1}: String comparison uses == operator instead of .equals(). '${sv} == ${other}' compares object references, not string contents.`,
                 fix: 'Use String.equals() for content comparison. The == operator compares object references in Java.',
+                via: 'source_line_fallback',
               });
             }
             break; // One finding per line is enough
@@ -3485,6 +3580,7 @@ function verifyCWE607(map: NeuralMap): VerificationResult {
         fix: 'Java: Collections.unmodifiableList(List.of(...)) or List.of() directly. ' +
           'JS/TS: Object.freeze() or use "as const" for type-level immutability. ' +
           'Python: Use tuple instead of list, frozenset instead of set, MappingProxyType for dicts.',
+          via: 'structural',
       });
     }
   }
@@ -3522,6 +3618,7 @@ function verifyCWE609(map: NeuralMap): VerificationResult {
         fix: 'Java: Mark the field volatile, or use an enum singleton, or use the holder class pattern (LazyHolder). ' +
           'C++: Use std::call_once or std::atomic with memory_order_acquire/release. ' +
           'Kotlin: Use "by lazy" or a companion object. Python: Generally unnecessary due to the GIL.',
+          via: 'structural',
       });
     }
   }
@@ -3567,6 +3664,7 @@ function verifyCWE619(map: NeuralMap): VerificationResult {
       fix: 'Java: Use try-with-resources: try (var rs = stmt.executeQuery()) { ... }. ' +
         'Python: Use "with" context manager: with conn.cursor() as cur: ... ' +
         'Node: Use pool.query() which auto-releases, or ensure client.release() in finally.',
+        via: 'structural',
     });
   }
 
@@ -3617,6 +3715,7 @@ function verifyCWE625(map: NeuralMap): VerificationResult {
               `malicious content that passes validation. E.g., /admin/ matches "not-admin-really".`,
             fix: 'Add ^ and $ anchors: /^pattern$/ for full-string matching. ' +
               'Or use re.fullmatch() (Python) instead of re.match()/re.search().',
+              via: 'structural',
           });
           continue;
         }
@@ -3636,6 +3735,7 @@ function verifyCWE625(map: NeuralMap): VerificationResult {
                 `An attacker can bypass IP/domain restrictions with substitute characters.`,
               fix: 'Escape dots: use \\. instead of . in IP/domain regex. Better yet, parse the URL/IP ' +
                 'with a library (new URL(), ipaddress.ip_address()) and compare programmatically.',
+                via: 'structural',
             });
           }
         }
@@ -3695,6 +3795,7 @@ function verifyCWE908(map: NeuralMap): VerificationResult {
             `Using uninitialized memory can expose sensitive data from previous operations, ` +
             `cause crashes, or produce undefined behavior exploitable for code execution.`,
           fix: up.fix,
+          via: 'structural',
         });
         break;
       }
@@ -3747,6 +3848,7 @@ function verifyCWE909(map: NeuralMap): VerificationResult {
             `The resource is allocated but its required initialization step is missing. ` +
             `Using an uninitialized resource can cause UB, security bypasses, or silent data corruption.`,
           fix: mp.fix,
+          via: 'structural',
         });
         break;
       }
@@ -3799,6 +3901,7 @@ function verifyCWE910(map: NeuralMap): VerificationResult {
             `After close, the OS can reassign that descriptor to a new resource. ` +
             `Subsequent operations silently affect the wrong resource.`,
           fix: p.fix,
+          via: 'structural',
         });
         break;
       }
@@ -3850,6 +3953,7 @@ function verifyCWE911(map: NeuralMap): VerificationResult {
           description: `${node.label}: ${p.name}. ` +
             `Incorrect reference counting leads to use-after-free (exploitable for code execution) or memory leaks.`,
           fix: p.fix,
+          via: 'structural',
         });
         break;
       }
@@ -3879,6 +3983,7 @@ function verifyCWE912(map: NeuralMap): VerificationResult {
         description: `${node.label} defines a hidden/undocumented endpoint with a suspicious name. ` +
           `Hidden endpoints bypass normal access control and audit logging.`,
         fix: 'Remove the hidden endpoint or document it with proper auth, authorization, and audit logging.',
+        via: 'structural',
       });
     }
 
@@ -3889,6 +3994,7 @@ function verifyCWE912(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} contains a hardcoded bypass credential or magic value that grants elevated access.`,
         fix: 'Remove all hardcoded bypass values. Use a proper break-glass procedure with audit logging.',
+        via: 'structural',
       });
     }
 
@@ -3899,6 +4005,7 @@ function verifyCWE912(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} defines a function with a name suggesting hidden/backdoor functionality.`,
         fix: 'Remove the backdoor function or rename it and add proper access controls.',
+        via: 'structural',
       });
     }
 
@@ -3909,6 +4016,7 @@ function verifyCWE912(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `${node.label} passes request input directly to eval/exec — functionally a webshell.`,
         fix: 'Remove the eval/exec endpoint. Use a sandboxed interpreter with allowlists if dynamic behavior is needed.',
+        via: 'structural',
       });
     }
 
@@ -3919,6 +4027,7 @@ function verifyCWE912(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `${node.label} reads a secret environment variable that toggles backdoor/bypass functionality.`,
         fix: 'Remove secret toggle variables. Use proper feature flags with access controls and audit logging.',
+        via: 'structural',
       });
     }
   }
@@ -3991,6 +4100,7 @@ function verifyCWE581(map: NeuralMap): VerificationResult {
         fix: `Override hashCode() consistently with equals(). In ${lang}, ensure that ` +
           `a.equals(b) implies a.hashCode() == b.hashCode(). Use Objects.hash() (Java), ` +
           `HashCode.Combine() (C#), or tuple hashing (Python).`,
+          via: 'structural',
       });
     } else if (!hasEquals && hasHashCode) {
       findings.push({
@@ -4003,6 +4113,7 @@ function verifyCWE581(map: NeuralMap): VerificationResult {
           `Identity checks become inconsistent.`,
         fix: `Override equals() consistently with hashCode(). The contract requires that ` +
           `equal objects have equal hash codes, but also that the equality check is meaningful.`,
+          via: 'structural',
       });
     }
   }
@@ -4050,6 +4161,7 @@ function verifyCWE584(map: NeuralMap): VerificationResult {
         fix: 'Remove the return from the finally block. Use a variable to store the return value ' +
           'in try/catch, then return it after the finally block. The finally block should only ' +
           'perform cleanup (close resources, release locks).',
+          via: 'structural',
       });
     }
   }
@@ -4127,6 +4239,7 @@ function verifyCWE588(map: NeuralMap): VerificationResult {
           `this is a crash vector (DoS). In auth paths, it can skip security checks entirely.`,
         fix: 'Check parent existence before accessing children. Use optional chaining (?.) in JS/TS, ' +
           'Optional.map() in Java, .get() with default in Python, or explicit bounds/null checks in C.',
+          via: 'structural',
       });
     }
   }
@@ -4201,6 +4314,7 @@ function verifyCWE589(map: NeuralMap): VerificationResult {
           `they are silently disabled on unsupported platforms.`,
         fix: 'Guard platform-specific calls with runtime platform detection (process.platform, ' +
           'sys.platform, #ifdef _WIN32, etc.) or use cross-platform abstractions.',
+          via: 'structural',
       });
     }
   }
@@ -4267,6 +4381,7 @@ function verifyCWE590(map: NeuralMap): VerificationResult {
         fix: 'Only call free()/delete on pointers returned by malloc()/calloc()/realloc()/new. ' +
           'Never free stack variables, string literals, or static data. ' +
           'Use AddressSanitizer (-fsanitize=address) to detect at runtime.',
+          via: 'structural',
       });
     }
   }
@@ -4338,6 +4453,7 @@ function verifyCWE591(map: NeuralMap): VerificationResult {
           'guard-paged, locked allocations. In Rust, use secrecy::Secret<T> with Zeroize. ' +
           'In .NET, use SecureString. Always zero memory before freeing (explicit_bzero, ' +
           'SecureZeroMemory, sodium_memzero).',
+          via: 'structural',
       });
     }
   }
@@ -4393,6 +4509,7 @@ function verifyCWE605(map: NeuralMap): VerificationResult {
         description: `Multiple bind/listen calls on port ${port}: ${nodes[0].label} and ${nodes[1].label}. ` +
           'Duplicate port binds cause EADDRINUSE errors or race conditions where an attacker can bind first.',
         fix: 'Ensure only one process/server binds to each port. Use cluster module for multi-process, or use SO_EXCLUSIVEADDRUSE to prevent port hijacking.',
+        via: 'structural',
       });
     }
   }
@@ -4416,6 +4533,7 @@ function verifyCWE605(map: NeuralMap): VerificationResult {
             'An attacker could bind to the port first, intercepting traffic (port hijacking).',
           fix: 'Handle EADDRINUSE errors. Use exclusive address binding (SO_EXCLUSIVEADDRUSE on Windows, ' +
             'exclusive: true in Node.js). Check port availability before binding.',
+            via: 'structural',
         });
       }
     }

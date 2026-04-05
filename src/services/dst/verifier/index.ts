@@ -164,6 +164,7 @@ function verifyCWE579(map: NeuralMap): VerificationResult {
           fix: 'Ensure all objects stored in HttpSession implement java.io.Serializable. ' +
             'Avoid storing connections, streams, threads, or locks in sessions. ' +
             'Use transient fields for non-serializable references.',
+          via: 'source_line_fallback',
         });
       }
       // Check 2: Custom class instances stored that don't implement Serializable
@@ -178,6 +179,7 @@ function verifyCWE579(map: NeuralMap): VerificationResult {
               `Session replication will fail in clustered environments.`,
             fix: `Make ${className} implement java.io.Serializable and add a serialVersionUID field. ` +
               'All objects stored in HttpSession must be serializable for session replication.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -215,6 +217,7 @@ function verifyCWE580(map: NeuralMap): VerificationResult {
           fix: 'Replace "new ClassName()" with "super.clone()" in clone() implementations. ' +
             'Cast the result: MyClass copy = (MyClass) super.clone(). ' +
             'Consider using copy constructors or static factory methods instead of Cloneable.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -585,6 +588,7 @@ export function verifyAll(map: NeuralMap, language?: string, options?: VerifyAll
             description: w.description,
             fix: `The validation/sanitization at ${w.controlNode.label} needs to be replaced or hardened. ` +
               `The current control provides false safety — it appears to protect the path but is itself exploitable.`,
+            via: 'bfs',
           });
         }
       }
@@ -674,6 +678,7 @@ export function verifyAll(map: NeuralMap, language?: string, options?: VerifyAll
               'Or verify session.getAttribute("user_id") == queried_id after fetch. ' +
               'The parameterized query is necessary but insufficient — it only prevents SQL injection, ' +
               'not authorization bypass (IDOR).',
+            via: 'scope_taint',
           });
         }
       }

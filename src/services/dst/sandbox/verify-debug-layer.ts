@@ -85,9 +85,7 @@ async function main() {
       if (d.timing) {
         console.log(`Timing: walk=${d.timing.walkMs}ms, post-process=${d.timing.postProcessMs}ms, total=${d.timing.totalMs}ms`);
       }
-      if (d.sourceLineFallbacks > 0) {
-        console.log(`Source-line fallbacks: ${d.sourceLineFallbacks} (mapper gaps forced regex fallback)`);
-      }
+      // sourceLineFallbacks derived from findings post-verification (see below)
     } else {
       console.error('  diagnostics object NOT FOUND on ctx');
     }
@@ -99,6 +97,10 @@ async function main() {
   console.log('\n=== CWE-89 VERIFICATION ===');
   try {
     const results = verifyAll(map, 'java');
+    const fallbackCount = results.reduce((n, r) => n + r.findings.filter(f => f.via === 'source_line_fallback').length, 0);
+    if (fallbackCount > 0) {
+      console.log(`Source-line fallbacks: ${fallbackCount} (findings via source_line_fallback)`);
+    }
     const sqli = results.find(r => r.cwe === 'CWE-89');
     if (sqli) {
       console.log(`Holds: ${sqli.holds}`);

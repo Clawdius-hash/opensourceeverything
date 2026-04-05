@@ -70,6 +70,7 @@ function verifyCWE116(map: NeuralMap): VerificationResult {
               `SQL: parameterized queries. Shell: avoid string concat, use execFile(). ` +
               `Headers: reject newlines. JSON: JSON.stringify(). XML: XML encoding. ` +
               `CSV: csv.writer with proper quoting. Use OWASP ESAPI encoders for multi-context output.`,
+            via: 'bfs',
           });
         }
       }
@@ -108,17 +109,15 @@ function verifyCWE134(map: NeuralMap): VerificationResult {
       if (src.id === sink.id) continue;
 
       // Primary: BFS taint path
-      let vulnerable134 = hasTaintedPathWithoutControl(map, src.id, sink.id);
+      const bfs134 = hasTaintedPathWithoutControl(map, src.id, sink.id);
 
       // Fallback 1: sink has tainted data_in
-      if (!vulnerable134 && sinkHasTaintedDataIn(map, sink.id)) {
-        vulnerable134 = true;
-      }
+      const sinkTainted134 = !bfs134 && sinkHasTaintedDataIn(map, sink.id);
 
       // Fallback 2: scope-based — tainted TRANSFORM in same scope as sink
-      if (!vulnerable134 && scopeBasedTaintReaches(map, src.id, sink.id)) {
-        vulnerable134 = true;
-      }
+      const scope134 = !bfs134 && !sinkTainted134 && scopeBasedTaintReaches(map, src.id, sink.id);
+
+      const vulnerable134 = bfs134 || sinkTainted134 || scope134;
 
       if (vulnerable134) {
         const scopeSnaps134 = getContainingScopeSnapshots(map, sink.id);
@@ -140,6 +139,7 @@ function verifyCWE134(map: NeuralMap): VerificationResult {
             fix: 'NEVER use user input as a format string. Always use static/hardcoded format strings. ' +
               'Pass user input only as format arguments: printf("%s", userInput) not printf(userInput). ' +
               'In Python, avoid str.format(userInput) — use f-strings with sanitized values or %-formatting with %s.',
+            via: bfs134 ? 'bfs' : sinkTainted134 ? 'sink_tainted' : 'scope_taint',
           });
         }
       }
@@ -191,6 +191,7 @@ function verifyCWE170(map: NeuralMap): VerificationResult {
               `Prefer strlcpy() or strcpy_s() which guarantee null termination. ` +
               `For strncpy: always set dest[sizeof(dest)-1] = 0 after the call. ` +
               `For binary reads (recv, fread): track length separately, don't treat as C strings.`,
+            via: 'bfs',
           });
         }
       }
@@ -245,6 +246,7 @@ function verifyCWE176(map: NeuralMap): VerificationResult {
               'JS: str.normalize("NFC"). Python: unicodedata.normalize("NFKC", s). ' +
               'Java: Normalizer.normalize(s, Form.NFKC). ' +
               'For usernames/domains, consider restricting to ASCII or using IDNA/Punycode.',
+            via: 'bfs',
           });
         }
       }
@@ -305,6 +307,7 @@ function verifyCWE177(map: NeuralMap): VerificationResult {
                   'decodeURIComponent() in JS, urllib.parse.unquote() in Python, ' +
                   'URLDecoder.decode() in Java. Decode iteratively until no changes ' +
                   'to defeat double/triple encoding. Then validate the decoded form.',
+                via: 'bfs',
               });
               break;
             }
@@ -367,6 +370,7 @@ function verifyCWE178(map: NeuralMap): VerificationResult {
               'For filenames on Windows: always normalize case. For usernames: case-fold at registration/login. ' +
               'For regex: use /i flag. Java: equalsIgnoreCase(). Go: strings.EqualFold(). ' +
               'SQL: use ILIKE or LOWER() on both sides.',
+            via: 'bfs',
           });
         }
       }
@@ -435,6 +439,7 @@ function verifyCWE179(map: NeuralMap): VerificationResult {
                   fix: 'Reverse the order: canonicalize first (decode, normalize, resolve), then validate. ' +
                     'Apply ALL transformations (URL decoding, Unicode normalization, path resolution) ' +
                     'BEFORE running security checks. Validate the canonical form, not the raw input.',
+                  via: 'bfs',
                 });
                 break;
               }
@@ -463,6 +468,7 @@ function verifyCWE179(map: NeuralMap): VerificationResult {
                 `validation may occur before canonicalization. Encoded input can bypass checks.`,
               fix: 'Always canonicalize input (decode, normalize, resolve) BEFORE applying validation. ' +
                 'Validate on the canonical form, not the raw input.',
+              via: 'bfs',
             });
           }
         }
@@ -535,6 +541,7 @@ function verifyCWE180(map: NeuralMap): VerificationResult {
                 'Use realpath() to resolve symlinks, then check that the canonical path ' +
                 'starts with the allowed base directory. Java: getCanonicalPath() before startsWith(). ' +
                 'Go: filepath.EvalSymlinks() then filepath.Clean() before checking prefix.',
+              via: 'bfs',
             });
             break;
           }
@@ -562,6 +569,7 @@ function verifyCWE180(map: NeuralMap): VerificationResult {
                 `segments can bypass the validation.`,
               fix: 'Always resolve path to canonical form (realpath/resolve) before validation. ' +
                 'Then verify the resolved path is within allowed directories.',
+              via: 'bfs',
             });
           }
         }
@@ -628,6 +636,7 @@ function verifyCWE182(map: NeuralMap): VerificationResult {
               'while (input !== sanitize(input)) input = sanitize(input). ' +
               'Or use allowlist approach: keep only known-good characters. ' +
               'Libraries like DOMPurify handle recursive sanitization correctly.',
+            via: 'bfs',
           });
         }
       }
@@ -688,6 +697,7 @@ function verifyCWE183(map: NeuralMap): VerificationResult {
               'For MIME types: enumerate specific types, no wildcards (*/*, image/*). ' +
               'For file extensions: strict Set after case normalization. ' +
               'For regex: anchored patterns (^...$) with specific character classes.',
+            via: 'bfs',
           });
         }
       }
@@ -741,6 +751,7 @@ function verifyCWE185(map: NeuralMap): VerificationResult {
           description: `${node.label} uses [A-z] in regex /${pattern}/. ASCII range A(65)-z(122) includes ` +
             `six non-alpha characters: [\\]^_\`. Use [A-Za-z] instead.`,
           fix: 'Replace [A-z] with [A-Za-z] or use the /i flag with [a-z].',
+          via: 'structural',
         });
         continue;
       }
@@ -753,6 +764,7 @@ function verifyCWE185(map: NeuralMap): VerificationResult {
           description: `${node.label} has empty alternation in regex /${pattern}/. An empty branch matches ` +
             `the empty string, making the entire group effectively optional — probably not intended.`,
           fix: 'Remove the empty alternation branch: (|foo) should be (foo)? if optional was intended.',
+          via: 'structural',
         });
         continue;
       }
@@ -771,6 +783,7 @@ function verifyCWE185(map: NeuralMap): VerificationResult {
             `The dot metacharacter matches ANY character, so "192.168.1.1" also matches "192X168Y1Z1".`,
           fix: 'Escape literal dots with \\. — e.g., /192\\.168\\.1\\.1/. Better yet, parse the IP ' +
             'with a library and compare programmatically.',
+          via: 'structural',
         });
       }
     }
@@ -827,6 +840,7 @@ function verifyCWE187(map: NeuralMap): VerificationResult {
           `content in the unchecked portion. E.g., startsWith("admin") matches "admin; DROP TABLE".`,
         fix: 'Use full-string comparison: strcmp (C), === (JS), == (Python), .equals() (Java). ' +
           'If partial match is intentional (e.g., URL prefix), validate the REMAINDER too.',
+        via: 'structural',
       });
     }
   }
@@ -910,6 +924,7 @@ function verifyCWE838(map: NeuralMap): VerificationResult {
                   `characters dangerous in the output context.`,
                 fix: `Use context-appropriate encoding: HTML context needs HTML encoding, SQL needs parameterized queries, ` +
                   `shell needs shell escaping. Each output context has its own dangerous characters.`,
+                via: 'bfs',
               });
               break;
             }
@@ -931,6 +946,7 @@ function verifyCWE838(map: NeuralMap): VerificationResult {
         description: `${node.label} URL-encodes data and then places it in an HTML context. ` +
           `URL encoding converts spaces to %20 but does NOT neutralize < > " & which are dangerous in HTML.`,
         fix: 'Use HTML encoding (escapeHtml, htmlspecialchars, textContent) for HTML contexts.',
+        via: 'structural',
       });
     }
   }

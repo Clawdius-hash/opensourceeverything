@@ -56,6 +56,7 @@ function verifyCWE1070(map: NeuralMap): VerificationResult {
           `crashing sessions, caches, or message queues.`,
         fix: 'Mark non-serializable fields as transient, or make the field types implement Serializable. ' +
           'Implement custom writeObject/readObject if the field must be reconstituted after deserialization.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -71,6 +72,7 @@ function verifyCWE1070(map: NeuralMap): VerificationResult {
             `pickle.dump will raise TypeError at runtime.`,
           fix: 'Implement __getstate__/__setstate__ to exclude non-picklable attributes, or use ' +
             'a serialization library that handles them (e.g., dill, cloudpickle).',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -153,6 +155,7 @@ function verifyCWE1071(map: NeuralMap): VerificationResult {
         fix: 'Add proper logic to the empty block. For catch/except: at minimum log the error. ' +
           'For security callbacks: implement the validation/authorization logic. ' +
           'If intentionally empty, add a comment explaining why.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -204,6 +207,7 @@ function verifyCWE1073(map: NeuralMap): VerificationResult {
           `and make injection/authorization auditing difficult.`,
         fix: 'Split into smaller functions with single responsibility. Use batch queries or joins ' +
           'instead of multiple sequential accesses. Consider a repository or data access layer pattern.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -293,6 +297,7 @@ function verifyCWE1074(map: NeuralMap): VerificationResult {
             `Fragile base class changes can silently weaken security properties.`,
           fix: 'Prefer composition over inheritance. Extract shared behavior into interfaces/traits/mixins. ' +
             'Flatten the hierarchy to 3 levels or fewer. Ensure security-critical methods are final/sealed.',
+          via: 'structural',
         });
       }
     }
@@ -344,6 +349,7 @@ function verifyCWE1075(map: NeuralMap): VerificationResult {
         fix: `Remove the '${keyword}' from the finally block. Move cleanup logic to a separate method. ` +
           'In Java, use try-with-resources. In Python, use context managers. ' +
           'Never use return/break/continue/throw inside finally — it masks the original exception.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -391,6 +397,7 @@ function verifyCWE1076(map: NeuralMap): VerificationResult {
         description: `${node.label} defines '${methodName}' but the body is trivial (returns true/null/void). ` +
           `Callers trust the method name implies security enforcement, but no actual checking occurs.`,
         fix: `Implement real validation logic in ${methodName}, or rename it to indicate it is a no-op/placeholder.`,
+        via: 'source_line_fallback',
       });
     }
 
@@ -406,6 +413,7 @@ function verifyCWE1076(map: NeuralMap): VerificationResult {
           `Objects will behave incorrectly in HashMaps/HashSets — duplicate entries bypass uniqueness checks, ` +
           `and security-sensitive lookups (session maps, permission caches) may fail silently.`,
         fix: 'Always override both equals() and hashCode() together. Use IDE generation or Objects.hash().',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -449,6 +457,7 @@ function verifyCWE1078(map: NeuralMap): VerificationResult {
           `The second statement always executes regardless of the condition, bypassing the check.`,
         fix: 'Always use braces after if/else/for/while. Enable compiler warnings for misleading indentation ' +
           '(-Wmisleading-indentation in GCC/Clang). Use a linter that enforces brace style.',
+        via: 'source_line_fallback',
       });
     } else if (IF_NO_BRACE_TWO_LINES.test(code)) {
       findings.push({
@@ -458,6 +467,7 @@ function verifyCWE1078(map: NeuralMap): VerificationResult {
         description: `${node.label} has an if-without-braces followed by two indented statements. ` +
           `Only the first statement is conditional — the second always executes despite appearing guarded.`,
         fix: 'Add braces to all if/else/for/while blocks. Enable -Wmisleading-indentation or equivalent linter rule.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -506,6 +516,7 @@ function verifyCWE1079(map: NeuralMap): VerificationResult {
             `sensitive memory (keys, tokens) won't be zeroed, resources won't be freed.`,
           fix: 'Declare the destructor virtual: "virtual ~ClassName() = default;" or "virtual ~ClassName() {}". ' +
             'This is required by the C++ Core Guidelines (C.35) for any class with virtual functions.',
+          via: 'source_line_fallback',
         });
       } else if (!ANY_DTOR.test(code)) {
         // No destructor at all in a polymorphic class
@@ -516,6 +527,7 @@ function verifyCWE1079(map: NeuralMap): VerificationResult {
           description: `${node.label} has virtual methods but no destructor at all. ` +
             `The compiler-generated destructor is non-virtual — same problem as non-virtual destructor.`,
           fix: 'Add "virtual ~ClassName() = default;" to the class definition.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -569,6 +581,7 @@ function verifyCWE1080(map: NeuralMap): VerificationResult {
           `injection points, auth gaps, and data leaks hide in the volume.`,
         fix: 'Split into focused modules: separate data access, business logic, auth, and routing. ' +
           'Aim for files under 500 lines. Use the single responsibility principle.',
+        via: 'structural',
       });
     }
   }
@@ -638,6 +651,7 @@ function verifyCWE1082(map: NeuralMap): VerificationResult {
         fix: 'Use smart pointers (shared_ptr/unique_ptr) or a dedicated destroy/dispose pattern where the ' +
           'OWNER manages lifecycle. For COM objects, ensure AddRef/Release are properly paired. ' +
           'Never access members after delete this. Prefer RAII for resource management.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -708,6 +722,7 @@ function verifyCWE1044(map: NeuralMap): VerificationResult {
           `Deep abstraction hierarchies make security review difficult — vulnerabilities hide in layers that nobody reads.`,
         fix: 'Flatten the architecture. Consolidate wrapper classes that add no logic. ' +
           'Prefer composition over deep inheritance. Each layer should add clear, distinct value.',
+        via: 'structural',
       });
     }
   }
@@ -741,6 +756,7 @@ function verifyCWE1044(map: NeuralMap): VerificationResult {
           `Deep delegation obscures what actually happens to data, making taint tracking unreliable.`,
         fix: 'Reduce abstraction layers. Inline trivial wrapper functions. ' +
           'Ensure security-critical operations are visible within 2-3 call levels of the entry point.',
+        via: 'structural',
       });
     }
   }
@@ -806,6 +822,7 @@ function verifyCWE1045(map: NeuralMap): VerificationResult {
               `${childName}'s destructor is not virtual. Deleting a ${childName} through a ${parentName}* ` +
               `pointer will not call ${childName}'s destructor, potentially leaking resources or skipping security cleanup.`,
             fix: `Add "virtual" to ${childName}'s destructor, or use "override" in C++11+.`,
+            via: 'structural',
           });
         }
       }
@@ -854,6 +871,7 @@ function verifyCWE1046(map: NeuralMap): VerificationResult {
             : 'While not directly user-controlled, this pattern can cause performance degradation with large datasets.'),
         fix: 'Use a mutable builder pattern: StringBuilder (Java/C#), [].join() (JS), "".join(parts) (Python), ' +
           'strings.Builder (Go), or std::string::reserve + append (C++).',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -927,6 +945,7 @@ function verifyCWE1047(map: NeuralMap): VerificationResult {
         `Circular dependencies cause undefined initialization order, partial module loading, and obscure security boundaries.`,
       fix: 'Break the cycle by extracting shared code into a third module, using dependency injection, ' +
         'or restructuring the dependency direction. Use tools like madge (JS) or pylint (Python) to detect cycles.',
+      via: 'structural',
     });
   }
 
@@ -940,6 +959,7 @@ function verifyCWE1047(map: NeuralMap): VerificationResult {
         description: `${node.label}: code contains a comment acknowledging a circular dependency. ` +
           `Known circular dependencies should be resolved, not documented and left in place.`,
         fix: 'Refactor to eliminate the circular dependency rather than working around it.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -985,6 +1005,7 @@ function verifyCWE1048(map: NeuralMap): VerificationResult {
             : 'High fan-out indicates the function has too many responsibilities. Decompose into focused sub-functions.'),
         fix: 'Apply the Single Responsibility Principle: extract groups of related calls into helper functions. ' +
           'Each function should do one thing. For security-critical code, keep functions small and reviewable.',
+        via: 'structural',
       });
     }
   }
@@ -1043,6 +1064,7 @@ function verifyCWE1050(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `${node.label}: ${exp.name}. Each iteration triggers an expensive platform call — O(N) instead of O(1) batched.`,
           fix: exp.fix,
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1105,6 +1127,7 @@ function verifyCWE1051(map: NeuralMap): VerificationResult {
         description,
         fix: 'Move network addresses to environment variables or a configuration service. ' +
           'Example: const host = process.env.DB_HOST || "localhost".',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -1150,6 +1173,7 @@ function verifyCWE1052(map: NeuralMap): VerificationResult {
           severity: 'low',
           description: `${node.label}: initialization has ${magicCount} magic number literals. Hard to maintain and configure.`,
           fix: 'Extract magic numbers into named constants (e.g., const MAX_RETRIES = 3). Use config files for env-specific values.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -1191,6 +1215,7 @@ function verifyCWE1053(map: NeuralMap): VerificationResult {
       severity: 'low',
       description: `Security-critical API at ${node.label} has no documentation. Consumers cannot understand the security contract.`,
       fix: 'Add docs: (1) purpose, (2) auth requirements, (3) input validation, (4) error handling, (5) security assumptions. Use JSDoc/docstrings.',
+      via: 'structural',
     });
   }
 
@@ -1282,6 +1307,7 @@ function verifyCWE1054(map: NeuralMap): VerificationResult {
             severity: 'medium',
             description: `Input from ${src.label} passes through ${minCallDepth} calls before validation at ${ctrl.label}. All intermediate layers handle unvalidated data.`,
             fix: 'Move validation to the entry point (controller/handler). Use schema validation middleware (Joi, Zod) at the route level.',
+            via: 'structural',
           });
           break;
         }
@@ -1328,6 +1354,7 @@ function verifyCWE1055(map: NeuralMap): VerificationResult {
       severity: 'low',
       description: `${node.label}: ${language} class uses multiple concrete inheritance. Diamond problem makes security behavior unpredictable.`,
       fix: 'Prefer composition. Use ABCs/Protocols/interfaces as bases. In C++: virtual inheritance or containment.',
+      via: 'source_line_fallback',
     });
   }
 
@@ -1362,6 +1389,7 @@ function verifyCWE1056(map: NeuralMap): VerificationResult {
       severity: 'medium',
       description: `Security function at ${node.label} uses variadic parameters. Callers can pass wrong arg count without error.`,
       fix: 'Use explicit named parameters with types. Add runtime arity validation if variadic is necessary.',
+      via: 'source_line_fallback',
     });
   }
 
@@ -1397,6 +1425,7 @@ function verifyCWE1057(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `${node.node_type} node ${node.label} performs direct DB operations. Bypasses centralized validation and access control.`,
           fix: 'Move data access to a repository/DAO layer. Controller calls repository.findUser(id) not db.query("SELECT...").',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -1439,6 +1468,7 @@ function verifyCWE1058(map: NeuralMap): VerificationResult {
       severity: 'high',
       description: `${node.label}: mutable static state in concurrent context without synchronization. Race conditions possible.`,
       fix: 'Make field final/const, use atomics, protect with mutex/lock, or use thread-local storage.',
+      via: 'source_line_fallback',
     });
   }
 
@@ -1482,6 +1512,7 @@ function verifyCWE1059(map: NeuralMap): VerificationResult {
         severity: 'low',
         description: `${node.label}: ${lines}-line security module with ${docCount} doc comment(s) and ~${complexity} branch points. Insufficient docs for complex security logic.`,
         fix: 'Add module-level overview, function-level docs, inline comments for security decisions. Document trust model and auth flow.',
+        via: 'structural',
       });
     }
   }
@@ -1523,6 +1554,7 @@ function verifyCWE1060(map: NeuralMap): VerificationResult {
             `instead of 1 batch query, wasting connection pool resources and creating exploitable latency.`,
           fix: 'Replace individual queries in loops with batch operations: WHERE ... IN (...), ' +
             'bulkWrite(), findAll({where: {id: ids}}), Promise.all(), or DataLoader-style batching.',
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1564,6 +1596,7 @@ function verifyCWE1061(map: NeuralMap): VerificationResult {
             `External code can modify state directly, bypassing validation or invariant checks.`,
           fix: 'Make fields private with accessor methods. Java: private + getters/setters. ' +
             'TypeScript: private/readonly. Python: leading underscore + @property.',
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1581,6 +1614,7 @@ function verifyCWE1061(map: NeuralMap): VerificationResult {
             description: `Class ${classMatch[1]} at ${node.label} has ${publicCount} public members and no private/protected members. ` +
               `Every internal detail is exposed, allowing tight coupling and invariant bypass.`,
             fix: 'Identify implementation details and make them private. Expose only the minimal public API needed.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -1594,6 +1628,7 @@ function verifyCWE1061(map: NeuralMap): VerificationResult {
         description: `${node.label} returns a reference to internal mutable state. ` +
           `Callers can modify the object internals without going through its API.`,
         fix: 'Return a defensive copy: Collections.unmodifiableList(), [...array], new Map(map), Object.freeze().',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -1629,6 +1664,7 @@ function verifyCWE1062(map: NeuralMap): VerificationResult {
         description: `${node.label} contains a type switch on 'this'/'self', indicating a parent class ` +
           `that checks its own runtime type. This couples the parent to all children and violates OCP.`,
         fix: 'Use polymorphism: define abstract/virtual methods in the parent and override in each child.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -1643,6 +1679,7 @@ function verifyCWE1062(map: NeuralMap): VerificationResult {
             description: `Base class at ${node.label} directly references child class '${match[1] || 'subclass'}'. ` +
               `This creates a circular dependency and prevents adding new subclasses without modifying the parent.`,
             fix: 'Use Template Method or Strategy pattern. Extract factory logic into a separate Factory class.',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -1684,6 +1721,7 @@ function verifyCWE1063(map: NeuralMap): VerificationResult {
             `If the constructor throws, the class becomes permanently unusable (unrecoverable without restart).`,
           fix: 'Use lazy initialization: getInstance() with holder pattern or Lazy<T>. ' +
             'Move heavy initialization to explicit init() methods that can handle failures.',
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1733,6 +1771,7 @@ function verifyCWE1064(map: NeuralMap): VerificationResult {
               `Long parameter lists increase argument transposition risk.` +
               (isSecurity ? ' This function appears security-sensitive, making parameter confusion especially dangerous.' : ''),
             fix: 'Group related parameters into an options/config object: foo({ a, b, c }) instead of foo(a, b, c).',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -1784,6 +1823,7 @@ function verifyCWE1065(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `${node.label}: ${p.name}. Server components should let the container manage runtime resources.`,
           fix: p.fix,
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1825,6 +1865,7 @@ function verifyCWE1066(map: NeuralMap): VerificationResult {
           `(no transient, no @JsonIgnore, no custom writeObject). Sensitive data will leak into serialized output.`,
         fix: 'Mark sensitive fields as transient/@JsonIgnore/@Exclude. Better: use a DTO pattern — ' +
           'serialize only an explicitly constructed DTO, never the entity directly.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -1836,6 +1877,7 @@ function verifyCWE1066(map: NeuralMap): VerificationResult {
           severity: 'medium',
           description: `${node.label} serializes an object to JSON without controlling which fields are included.`,
           fix: 'Use a DTO with only intended fields. Or: JSON.stringify(obj, ["field1","field2"]), @JsonView, @JsonIgnore.',
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1875,6 +1917,7 @@ function verifyCWE1067(map: NeuralMap): VerificationResult {
             `With large datasets this creates quadratic performance exploitable for DoS.`,
           fix: 'Build a lookup index before the loop: const lookup = new Map(items.map(i => [i.key, i])); ' +
             'then use lookup.get(key). For databases: use JOIN or IN clause.',
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -1924,6 +1967,7 @@ function verifyCWE1068(map: NeuralMap): VerificationResult {
             description: `${node.label}: ${what}. The function name promises security behavior ` +
               `but the implementation appears to be a stub or passthrough.`,
             fix: 'Implement the security behavior the function name promises, or rename to avoid false security.',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -1937,6 +1981,7 @@ function verifyCWE1068(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `${node.label} contains a TODO/FIXME/HACK acknowledging a security-relevant deviation from design.`,
         fix: 'Resolve the TODO/FIXME. If non-trivial, add compensating controls and track in your security backlog.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -1990,6 +2035,7 @@ function verifyCWE1069(map: NeuralMap): VerificationResult {
             `Debugging becomes impossible because errors leave no trace.`),
           fix: 'At minimum: log the error. Better: propagate it (re-throw, return error, reject promise). ' +
             'If genuinely expected, add a comment: // Intentional: cleanup may fail if already closed.',
+          via: 'source_line_fallback',
         });
         break;
       }
@@ -2060,6 +2106,7 @@ function verifyCWE1083(map: NeuralMap): VerificationResult {
             `access control enforcement and makes SQL injection auditing intractable.`,
           fix: 'Route all data access through a dedicated repository/DAO/data manager class. ' +
             'Use parameterized queries in the data layer and enforce access controls at the repository boundary.',
+          via: 'structural',
         });
       }
     }
@@ -2106,6 +2153,7 @@ function verifyCWE1084(map: NeuralMap): VerificationResult {
           `(partial writes on failure), and obscures security-relevant operations in noise.`,
         fix: 'Split into smaller functions with single I/O responsibility. Batch file operations where possible. ' +
           'Use transactions for related data writes. Consider a unit-of-work pattern.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2185,6 +2233,7 @@ function verifyCWE1085(map: NeuralMap): VerificationResult {
         fix: 'Remove commented-out code and use version control history to recover it if needed. ' +
           'If security checks were commented out, determine WHY and either restore them or document ' +
           'the replacement control. Use feature flags instead of commenting out code.',
+        via: 'source_line_fallback',
       });
     } else if (securityComments >= SECURITY_COMMENT_THRESHOLD) {
       findings.push({
@@ -2195,6 +2244,7 @@ function verifyCWE1085(map: NeuralMap): VerificationResult {
           `(auth, validation, sanitization). This strongly suggests security controls were deliberately disabled.`,
         fix: 'Investigate why security checks were commented out. Restore them, implement replacements, ' +
           'or document in a security decision record why they are no longer needed.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2282,6 +2332,7 @@ function verifyCWE1086(map: NeuralMap): VerificationResult {
         fix: 'Favor composition over inheritance. Extract shared behavior into mixins, decorators, or ' +
           'strategy objects. Use the interface segregation principle to split the base type into smaller, ' +
           'focused interfaces. Ensure all children consistently implement security-critical methods.',
+        via: 'structural',
       });
     }
   }
@@ -2344,6 +2395,7 @@ function verifyCWE1087(map: NeuralMap): VerificationResult {
         fix: `Add 'virtual ~${classMatch[1]}() = default;' to the class declaration. ` +
           'In C++11+, this is zero-cost for classes already having a vtable. ' +
           'Alternatively, mark the class as final if it should not be subclassed.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2439,6 +2491,7 @@ function verifyCWE1089(map: NeuralMap): VerificationResult {
         fix: 'Audit index usage with query analysis tools (EXPLAIN, pg_stat_user_indexes). ' +
           'Remove unused or redundant indices. Use covering/composite indices instead of many single-column ones. ' +
           'Consider partial indices for filtered queries.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2525,6 +2578,7 @@ function verifyCWE1090(map: NeuralMap): VerificationResult {
         fix: 'Access other classes through their public API (getters, methods). If access to internals ' +
           'is genuinely needed, expose a controlled method on the owning class that enforces invariants. ' +
           'Never use reflection (setAccessible) to bypass access control in production code.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2583,6 +2637,7 @@ function verifyCWE1091(map: NeuralMap): VerificationResult {
             : 'Wrap resource acquisition in try-with-resources (Java), using (C#), with (Python), ' +
               'or defer (Go). In C++, use RAII. Always close resources in a finally block if ' +
               'language-level constructs are unavailable.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -2659,6 +2714,7 @@ function verifyCWE1092(map: NeuralMap): VerificationResult {
         fix: 'Create layer-specific wrappers that adapt the shared function to each layer\'s security context. ' +
           'Consider whether each layer should have its own implementation with appropriate access controls. ' +
           'If sharing is intentional, document the cross-layer contract and security assumptions.',
+        via: 'structural',
       });
     }
   }
@@ -2726,6 +2782,7 @@ function verifyCWE1094(map: NeuralMap): VerificationResult {
         fix: 'Always apply LIMIT/pagination on user-facing queries. Avoid LIKE with leading wildcards ' +
           '(use full-text search instead). Validate and cap range parameters (date ranges, numeric ranges). ' +
           'Use cursor-based pagination instead of OFFSET for large datasets.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2814,6 +2871,7 @@ function verifyCWE1108(map: NeuralMap): VerificationResult {
           fix: 'Move mutable state into function-scoped variables, class instances, or request-scoped contexts. ' +
             'Use const/final/readonly for module-level values. For Node.js: use AsyncLocalStorage for request-scoped data. ' +
             'For config: use frozen objects (Object.freeze) or environment-based injection.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -2866,6 +2924,7 @@ function verifyCWE1108(map: NeuralMap): VerificationResult {
         fix: 'Move mutable state into function-scoped variables, class instances, or request-scoped contexts. ' +
           'Use const/final/readonly for module-level values. For Node.js: use AsyncLocalStorage for request-scoped data. ' +
           'For config: use frozen objects (Object.freeze) or environment-based injection.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -2914,6 +2973,7 @@ function verifyCWE1109(map: NeuralMap): VerificationResult {
             `may linger in memory, appear in error messages, or be logged.`,
           fix: 'Use separate variables for each semantic purpose. Clear sensitive variables after use ' +
             '(set to null/empty). Use const to prevent reassignment of sensitive values.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -2931,6 +2991,7 @@ function verifyCWE1109(map: NeuralMap): VerificationResult {
             `This defeats the validation — it is a trust boundary violation within a single function.`,
           fix: 'Use const for validated values so they cannot be reassigned. Use separate variable names ' +
             'for raw vs sanitized data (e.g., rawEmail vs sanitizedEmail). Never reuse a validated variable.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -2958,6 +3019,7 @@ function verifyCWE1109(map: NeuralMap): VerificationResult {
               `which defeats code review and static analysis.`,
             fix: 'Use const declarations with descriptive names for each purpose. ' +
               'Extract assignments into separate well-named variables. Consider extracting into helper functions.',
+            via: 'source_line_fallback',
           });
           break; // One finding per node for this check
         }
@@ -3004,6 +3066,7 @@ function verifyCWE1110(map: NeuralMap): VerificationResult {
         fix: 'Add a module-level doc comment explaining: (1) what security property this module enforces, ' +
           '(2) trust boundaries and who is trusted/untrusted, (3) threat model assumptions, ' +
           '(4) security invariants that must hold. Reference any security design docs.',
+        via: 'structural',
       });
     }
   }
@@ -3047,6 +3110,7 @@ function verifyCWE1111(map: NeuralMap): VerificationResult {
           fix: 'Document all possible failure modes (@throws/@raises). Implement explicit error handling ' +
             'with fail-closed behavior for security operations. Log failures. Add timeout configuration. ' +
             'Document what happens when the downstream service is unavailable.',
+          via: 'structural',
         });
       } else if (!hasErrorDoc && hasErrorHandling) {
         findings.push({
@@ -3057,6 +3121,7 @@ function verifyCWE1111(map: NeuralMap): VerificationResult {
             `Code handles some errors, but without @throws/@raises docs, callers don't know what exceptions to expect.`,
           fix: 'Add @throws/@raises annotations documenting each failure mode and whether the operation ' +
             'fails open or closed.',
+          via: 'structural',
         });
       }
     }
@@ -3104,6 +3169,7 @@ function verifyCWE1112(map: NeuralMap): VerificationResult {
         fix: 'Add JSDoc/docstring with @param types and constraints, @returns with status codes, ' +
           '@auth required permissions, and @throws for error cases. ' +
           'Better: use OpenAPI/Swagger annotations for machine-readable API docs.',
+        via: 'structural',
       });
     } else if (hasApiDoc && !hasAuthDoc && isSensitive) {
       findings.push({
@@ -3114,6 +3180,7 @@ function verifyCWE1112(map: NeuralMap): VerificationResult {
           `Callers don't know if this endpoint requires authentication or what permissions are needed.`,
         fix: 'Add @auth or @permission annotation specifying required authentication level ' +
           'and permissions. Use @public for intentionally unauthenticated endpoints.',
+        via: 'structural',
       });
     }
   }
@@ -3152,6 +3219,7 @@ function verifyCWE1113(map: NeuralMap): VerificationResult {
           `Even "example" credentials in comments get copy-pasted into production config.`,
         fix: 'Remove credentials from comments. Use environment variable references instead: ' +
           '"// Auth token from process.env.API_TOKEN". Never put real or example credentials in code comments.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -3165,6 +3233,7 @@ function verifyCWE1113(map: NeuralMap): VerificationResult {
           `because the TODO is never resolved.`,
         fix: 'Re-enable the security control. If it must be disabled for development, use a feature flag ' +
           'that is OFF in production, not a code comment. Add a CI check that greps for disabled security TODOs.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -3178,6 +3247,7 @@ function verifyCWE1113(map: NeuralMap): VerificationResult {
           `(open-source projects, leaked repos, insider threats).`,
         fix: 'Remove internal URLs from comments. Reference environment variables or config keys instead. ' +
           'Use placeholder URLs (example.com, internal.example) in documentation.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -3223,6 +3293,7 @@ function verifyCWE1114(map: NeuralMap): VerificationResult {
           `hiding logic errors like Apple's "goto fail" (CVE-2014-1266).`,
         fix: 'Standardize on one indentation style (spaces recommended). Configure editor/formatter. ' +
           'Add .editorconfig. Run a formatter (prettier, black, gofmt) as a pre-commit hook.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -3249,6 +3320,7 @@ function verifyCWE1114(map: NeuralMap): VerificationResult {
               `but the indentation suggests otherwise.`,
             fix: 'Always use braces for if/else blocks in security-critical code, even for single statements. ' +
               'Enable linter rules: curly (ESLint), C4801 (MSVC), -Wmisleading-indentation (GCC/Clang).',
+            via: 'source_line_fallback',
           });
           break;
         }
@@ -3300,6 +3372,7 @@ function verifyCWE1115(map: NeuralMap): VerificationResult {
           `cannot determine if this code has been audited or who is responsible for its security properties.`,
         fix: 'Add a standard file header with: @author (security owner), @license, @since (last security review date), ' +
           'and classification level. For high-security codebases, add @security-review-status and @threat-model-ref.',
+        via: 'structural',
       });
     }
   }
@@ -3372,6 +3445,7 @@ function verifyCWE1116(map: NeuralMap): VerificationResult {
           fix: 'Update the comment to match actual behavior, or implement what the comment promises. ' +
             'Security-critical code must have comments that accurately reflect what the code does. ' +
             'Consider adding automated comment-code consistency checks to CI.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -3419,6 +3493,7 @@ function verifyCWE1117(map: NeuralMap): VerificationResult {
         fix: 'Add documentation specifying: (1) what the function does, (2) parameters and their constraints, ' +
           '(3) return values (success AND failure), (4) exceptions thrown, (5) side effects (DB writes, logs, emails), ' +
           '(6) whether it fails open or closed on error.',
+        via: 'structural',
       });
     } else if (!hasBehavioralDoc) {
       findings.push({
@@ -3429,6 +3504,7 @@ function verifyCWE1117(map: NeuralMap): VerificationResult {
           `Missing @param/@returns/@throws. Callers cannot determine failure modes without reading the implementation.`,
         fix: 'Expand documentation with @param (constraints), @returns (success and failure cases), ' +
           '@throws (which exceptions and when), and @sideeffect (any mutations, logging, or external calls).',
+        via: 'structural',
       });
     }
   }
@@ -3472,6 +3548,7 @@ function verifyCWE1095(map: NeuralMap): VerificationResult {
             `This makes the iteration count unpredictable and can cause infinite loops or off-by-one errors.`,
           fix: `Copy the loop bound to a const before the loop: const limit = ${boundVar}; ` +
             'If dynamic bounds are intentional, add a maximum iteration guard to prevent infinite loops.',
+          via: 'source_line_fallback',
         });
       } else if (iterReassign.test(afterLoop)) {
         findings.push({
@@ -3481,6 +3558,7 @@ function verifyCWE1095(map: NeuralMap): VerificationResult {
           description: `${node.label} modifies loop iterator '${iterVar}' inside the loop body. ` +
             `This creates unpredictable iteration behavior.`,
           fix: `Avoid modifying '${iterVar}' inside the loop body. Use a separate variable or restructure as a while loop.`,
+          via: 'source_line_fallback',
         });
       }
     }
@@ -3500,6 +3578,7 @@ function verifyCWE1095(map: NeuralMap): VerificationResult {
           description: `${node.label} modifies while-loop bound '${boundVar}' inside the loop. ` +
             `This risks infinite loops or skipped iterations.`,
           fix: `Snapshot the bound before the loop, or add a max-iteration guard.`,
+          via: 'source_line_fallback',
         });
       }
     }
@@ -3532,26 +3611,26 @@ function verifyCWE1097(map: NeuralMap): VerificationResult {
         missing: 'STRUCTURAL (@Table/@Column mapping for @Entity class)', severity: 'medium',
         description: `${node.label} is annotated @Entity but lacks @Table or @Column mappings. ` +
           `JPA will use default naming which may not match the actual database schema, causing silent data loss.`,
-        fix: 'Add @Table(name="...") and @Column annotations. Add @Id for the primary key.' });
+        fix: 'Add @Table(name="...") and @Column annotations. Add @Id for the primary key.', via: 'source_line_fallback' });
     }
     if (PY_MODEL.test(code) && !PY_MAPPED.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (__tablename__ or Meta class for ORM model)', severity: 'medium',
         description: `${node.label} inherits from a database model base but lacks __tablename__ or Meta configuration.`,
-        fix: 'Add __tablename__ = "explicit_name" (SQLAlchemy) or class Meta with db_table (Django).' });
+        fix: 'Add __tablename__ = "explicit_name" (SQLAlchemy) or class Meta with db_table (Django).', via: 'source_line_fallback' });
     }
     if (TS_ENTITY.test(code) && !TS_MAPPED.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (@Column decorators for @Entity class)', severity: 'medium',
         description: `${node.label} uses @Entity() but no @Column or @PrimaryGeneratedColumn decorators are visible. ` +
           `TypeORM will not persist unmapped fields, causing silent data loss.`,
-        fix: 'Add @PrimaryGeneratedColumn() and @Column() decorators to all persisted fields.' });
+        fix: 'Add @PrimaryGeneratedColumn() and @Column() decorators to all persisted fields.', via: 'source_line_fallback' });
     }
     if (CS_ENTITY.test(code) && !CS_MAPPED.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL ([Table]/[Column] attributes for serializable entity)', severity: 'medium',
         description: `${node.label} is marked [Serializable] or used with DbContext but lacks explicit column/table mappings.`,
-        fix: 'Add [Table("name")] and [Column("name")] attributes, or use Fluent API in OnModelCreating.' });
+        fix: 'Add [Table("name")] and [Column("name")] attributes, or use Fluent API in OnModelCreating.', via: 'source_line_fallback' });
     }
   }
   return { cwe: 'CWE-1097', name: 'Persistent Storable Data Element without Mapping to Data Store', holds: findings.length === 0, findings };
@@ -3590,12 +3669,12 @@ function verifyCWE1098(map: NeuralMap): VerificationResult {
             `${!hasCopy ? 'a copy constructor' : ''}${!hasCopy && !hasAssign ? ' and ' : ''}${!hasAssign ? 'a copy assignment operator' : ''}. ` +
             `Default shallow copies will cause double-free and use-after-free.`,
           fix: 'Apply the Rule of Three/Five: implement copy constructor, copy assignment, and destructor together. ' +
-            'Better: use std::unique_ptr or std::shared_ptr. Or delete copy operations: ClassName(const ClassName&) = delete;' });
+            'Better: use std::unique_ptr or std::shared_ptr. Or delete copy operations: ClassName(const ClassName&) = delete;', via: 'source_line_fallback' });
       } else if (!hasDtor && (HAS_COPY_CTOR.test(code) || HAS_COPY_ASSIGN.test(code))) {
         findings.push({ source: nodeRef(node), sink: nodeRef(node),
           missing: 'STRUCTURAL (destructor to match custom copy operations — Rule of Three)', severity: 'high',
           description: `${node.label} has raw pointer members and custom copy operations but no destructor — memory leaks.`,
-          fix: 'Add a destructor that frees owned resources, or use smart pointers instead of raw pointers.' });
+          fix: 'Add a destructor that frees owned resources, or use smart pointers instead of raw pointers.', via: 'source_line_fallback' });
       }
     }
     if (RUST_RAW_PTR.test(code) && /\bstruct\b/.test(code) && !RUST_DROP.test(code) && !RUST_CLONE.test(code)) {
@@ -3604,7 +3683,7 @@ function verifyCWE1098(map: NeuralMap): VerificationResult {
           missing: 'STRUCTURAL (Drop and/or Clone for struct with raw pointers)', severity: 'high',
           description: `${node.label} is a Rust struct with raw pointer fields but no Drop or Clone. ` +
             `Without Drop, pointed-to memory leaks. Without Clone, bitwise copy creates aliasing.`,
-          fix: 'Implement Drop and Clone. Wrap raw pointers in Box, Rc, or Arc if possible.' });
+          fix: 'Implement Drop and Clone. Wrap raw pointers in Box, Rc, or Arc if possible.', via: 'source_line_fallback' });
       }
     }
   }
@@ -3648,7 +3727,7 @@ function verifyCWE1099(map: NeuralMap): VerificationResult {
         missing: 'STRUCTURAL (consistent naming convention for security functions)', severity: 'low',
         description: `Security functions use mixed naming conventions (${[...styles].join(', ')}): ${names}. ` +
           `Inconsistent naming makes it harder to identify all security-relevant functions.`,
-        fix: 'Adopt a single naming convention for security functions. Configure a linter to enforce it.' });
+        fix: 'Adopt a single naming convention for security functions. Configure a linter to enforce it.', via: 'source_line_fallback' });
     }
   }
   return { cwe: 'CWE-1099', name: 'Inconsistent Naming Conventions for Identifiers', holds: findings.length === 0, findings };
@@ -3677,20 +3756,20 @@ function verifyCWE1100(map: NeuralMap): VerificationResult {
         missing: 'STRUCTURAL (platform-agnostic path handling via path.join/os.path.join)', severity: 'medium',
         description: `${node.label} contains hardcoded platform-specific file paths. ` +
           `This breaks on other platforms and fixed path assumptions may be exploitable via symlinks.`,
-        fix: 'Use path.join() / os.path.join() with configurable base directories. Isolate platform paths behind an abstraction.' });
+        fix: 'Use path.join() / os.path.join() with configurable base directories. Isolate platform paths behind an abstraction.', via: 'source_line_fallback' });
     }
     if (REGISTRY_ACCESS.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (registry access isolated behind platform abstraction)', severity: 'medium',
         description: `${node.label} accesses the Windows registry directly in business logic. ` +
           `Hard Windows dependency; registry manipulation can be a privilege escalation vector.`,
-        fix: 'Isolate registry access behind a platform service interface. Use env vars or config files for cross-platform settings.' });
+        fix: 'Isolate registry access behind a platform service interface. Use env vars or config files for cross-platform settings.', via: 'source_line_fallback' });
     }
     if (PLATFORM_CMD.test(code) && !PLATFORM_ABSTRACTION.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (platform-specific commands isolated behind abstraction)', severity: 'medium',
         description: `${node.label} invokes a platform-specific shell/command directly. Fails on other platforms and is injection-prone.`,
-        fix: 'Wrap platform-specific commands in a service layer with platform detection.' });
+        fix: 'Wrap platform-specific commands in a service layer with platform detection.', via: 'source_line_fallback' });
     }
   }
   return { cwe: 'CWE-1100', name: 'Insufficient Isolation of System-Dependent Functions', holds: findings.length === 0, findings };
@@ -3718,20 +3797,20 @@ function verifyCWE1101(map: NeuralMap): VerificationResult {
         missing: 'STRUCTURAL (generated code should not depend on eval/exec at runtime)', severity: 'high',
         description: `${node.label} is generated code that uses eval/exec to execute templates at runtime. ` +
           `Generated code should be fully resolved at generation time. Runtime eval introduces injection risk.`,
-        fix: 'Pre-compile templates at build time. Use static code generation without runtime eval.' });
+        fix: 'Pre-compile templates at build time. Use static code generation without runtime eval.', via: 'source_line_fallback' });
     }
     if (isGenerated && DYNAMIC_IMPORT.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (generated code should use static imports)', severity: 'medium',
         description: `${node.label} is generated code with dynamic imports. Referenced modules may not exist in all environments.`,
-        fix: 'Use static imports. Emit a typed interface with dependency injection instead of dynamic resolution.' });
+        fix: 'Use static imports. Emit a typed interface with dependency injection instead of dynamic resolution.', via: 'source_line_fallback' });
     }
     if (REFLECT_CREATE.test(code) && /\b(?:class_?name|type_?name|handler_?name)\b/i.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (type-safe factory instead of reflection-based instantiation)', severity: 'medium',
         description: `${node.label} uses reflection to instantiate classes from string names. ` +
           `Target class may not exist at runtime; bypasses type checking; can instantiate unintended classes.`,
-        fix: 'Use a registry/factory pattern with explicit type mappings instead of reflection.' });
+        fix: 'Use a registry/factory pattern with explicit type mappings instead of reflection.', via: 'source_line_fallback' });
     }
   }
   return { cwe: 'CWE-1101', name: 'Reliance on Runtime Component in Generated Code', holds: findings.length === 0, findings };
@@ -3760,25 +3839,25 @@ function verifyCWE1102(map: NeuralMap): VerificationResult {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (explicit endianness in struct.pack format string)', severity: 'medium',
         description: `${node.label} uses struct.pack without an explicit endianness marker. Native byte order is machine-dependent.`,
-        fix: 'Use ">" (big-endian) or "<" (little-endian) prefix: struct.pack(">I", value).' });
+        fix: 'Use ">" (big-endian) or "<" (little-endian) prefix: struct.pack(">I", value).', via: 'source_line_fallback' });
     }
     if (PTR_CAST_WIDTH.test(code) && !EXPLICIT_ENDIAN.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (memcpy or explicit serialization instead of pointer type punning)', severity: 'high',
         description: `${node.label} casts buffer pointers to integer types. Assumes alignment, endianness, and width.`,
-        fix: 'Use memcpy + ntohl/ntohs, or a serialization library (protobuf, flatbuffers, msgpack).' });
+        fix: 'Use memcpy + ntohl/ntohs, or a serialization library (protobuf, flatbuffers, msgpack).', via: 'source_line_fallback' });
     }
     if (NODE_BUFFER_NO_ENDIAN.test(code) && !NODE_BUFFER_ENDIAN.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (explicit endianness: readUInt32BE or readUInt32LE)', severity: 'medium',
         description: `${node.label} reads multi-byte values from Buffer without specifying endianness.`,
-        fix: 'Use readUInt32BE() for big-endian or readUInt32LE() for little-endian.' });
+        fix: 'Use readUInt32BE() for big-endian or readUInt32LE() for little-endian.', via: 'source_line_fallback' });
     }
     if (JAVA_BYTEBUF_NO_ORDER.test(code) && !EXPLICIT_ENDIAN.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (ByteBuffer.order() to set explicit byte order)', severity: 'medium',
         description: `${node.label} creates ByteBuffer without .order(). Default BIG_ENDIAN is a hidden assumption.`,
-        fix: 'Call .order(ByteOrder.BIG_ENDIAN) or .order(ByteOrder.LITTLE_ENDIAN) after allocation.' });
+        fix: 'Call .order(ByteOrder.BIG_ENDIAN) or .order(ByteOrder.LITTLE_ENDIAN) after allocation.', via: 'source_line_fallback' });
     }
   }
   return { cwe: 'CWE-1102', name: 'Reliance on Machine-Dependent Data Representation', holds: findings.length === 0, findings };
@@ -3813,7 +3892,7 @@ function verifyCWE1104(map: NeuralMap): VerificationResult {
           missing: `STRUCTURAL (replace deprecated ${dep.name} with ${dep.replacement})`, severity: 'medium',
           description: `${node.label} imports ${dep.name}, which is deprecated/unmaintained. ` +
             `Unmaintained packages never receive security patches.`,
-          fix: `Replace ${dep.name} with ${dep.replacement}.` });
+          fix: `Replace ${dep.name} with ${dep.replacement}.`, via: 'source_line_fallback' });
         break;
       }
     }
@@ -3845,14 +3924,14 @@ function verifyCWE1106(map: NeuralMap): VerificationResult {
           missing: 'STRUCTURAL (named constant for cryptographic parameter)', severity: 'medium',
           description: `${node.label} uses magic number (${match[1]}) for a crypto parameter. ` +
             `Duplicated elsewhere with a typo, the security property silently degrades.`,
-          fix: `Define: const KEY_SIZE_BITS = ${match[1]}; and reference it everywhere.` });
+          fix: `Define: const KEY_SIZE_BITS = ${match[1]}; and reference it everywhere.`, via: 'source_line_fallback' });
       }
     }
     if ((match = PERMISSION_MAGIC.exec(code)) !== null) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (named constant for file permission mode)', severity: 'medium',
         description: `${node.label} uses magic permission value (${match[1]}). Hard to audit across codebase.`,
-        fix: 'Define: const FILE_MODE_READ_WRITE = 0o644; and use consistently.' });
+        fix: 'Define: const FILE_MODE_READ_WRITE = 0o644; and use consistently.', via: 'source_line_fallback' });
     }
     if ((match = TIMEOUT_MAGIC.exec(code)) !== null) {
       const value = parseInt(match[1], 10);
@@ -3862,7 +3941,7 @@ function verifyCWE1106(map: NeuralMap): VerificationResult {
           findings.push({ source: nodeRef(node), sink: nodeRef(node),
             missing: 'STRUCTURAL (named constant for timeout/expiry value)', severity: 'low',
             description: `${node.label} uses magic number (${match[1]}) for timeout/expiry. Should be a named constant.`,
-            fix: `Define: const SESSION_TIMEOUT_MS = ${match[1]}; and reference from configuration.` });
+            fix: `Define: const SESSION_TIMEOUT_MS = ${match[1]}; and reference from configuration.`, via: 'source_line_fallback' });
         }
       }
     }
@@ -3895,19 +3974,19 @@ function verifyCWE1107(map: NeuralMap): VerificationResult {
         missing: 'STRUCTURAL (cipher algorithm in central constants/config module)', severity: 'medium',
         description: `${node.label} hardcodes a cipher algorithm string inline. ` +
           `Cipher rotation requires finding every inline reference. Missed locations use the weak cipher.`,
-        fix: 'Define in crypto config: export const CIPHER = "aes-256-gcm"; Import everywhere.' });
+        fix: 'Define in crypto config: export const CIPHER = "aes-256-gcm"; Import everywhere.', via: 'source_line_fallback' });
     }
     if (INLINE_ALGORITHM.test(code) && !INLINE_CIPHER.test(code) && !/\bimport\b|\brequire\b/.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (hash/crypto algorithm should be centralized)', severity: 'low',
         description: `${node.label} uses inline hash/crypto algorithm string. Hard to audit and migrate.`,
-        fix: 'Centralize: export const HASH_ALGORITHM = "sha256"; import from crypto-config.' });
+        fix: 'Centralize: export const HASH_ALGORITHM = "sha256"; import from crypto-config.', via: 'source_line_fallback' });
     }
     if (INLINE_CORS_ORIGIN.test(code)) {
       findings.push({ source: nodeRef(node), sink: nodeRef(node),
         missing: 'STRUCTURAL (CORS origins in central configuration)', severity: 'medium',
         description: `${node.label} hardcodes CORS origins inline. Hard to audit trusted origins list.`,
-        fix: 'Define in env config: ALLOWED_ORIGINS = process.env.CORS_ORIGINS?.split(",").' });
+        fix: 'Define in env config: ALLOWED_ORIGINS = process.env.CORS_ORIGINS?.split(",").', via: 'source_line_fallback' });
     }
   }
   return { cwe: 'CWE-1107', name: 'Insufficient Isolation of Symbolic Constant Definitions', holds: findings.length === 0, findings };
@@ -3949,6 +4028,7 @@ function verifyCWE1118(map: NeuralMap): VerificationResult {
           `Attackers who trigger errors bypass the security check entirely.`,
         fix: 'Either handle the error explicitly (fail closed: deny access, abort operation) or ' +
           'document the intentional fail-open decision with a comment explaining WHY silent continuation is safe.',
+        via: 'source_line_fallback',
       });
       continue;
     }
@@ -3963,6 +4043,7 @@ function verifyCWE1118(map: NeuralMap): VerificationResult {
           `The error handling strategy is undocumented — callers cannot determine failure behavior.`,
         fix: 'Document the error handling strategy: does this fail open or closed? What state is the ' +
           'system in after the error? Add @throws documentation to the enclosing function.',
+        via: 'source_line_fallback',
       });
       continue;
     }
@@ -3980,6 +4061,7 @@ function verifyCWE1118(map: NeuralMap): VerificationResult {
             `create unpredictable failure modes.`,
           fix: 'Add a doc comment explaining: (1) what errors this handles, (2) whether it terminates or continues, ' +
             '(3) what state cleanup occurs, (4) whether errors are reported/alerted.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -4020,6 +4102,7 @@ function verifyCWE1119(map: NeuralMap): VerificationResult {
           `creates spaghetti control flow where security-critical cleanup code can be bypassed by jumping over it.`,
         fix: 'Refactor goto chains into structured loops, early returns, or RAII/try-finally patterns. ' +
           'Each goto that jumps over cleanup code is a potential resource leak or security bypass.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -4031,6 +4114,7 @@ function verifyCWE1119(map: NeuralMap): VerificationResult {
         description: `${node.label} uses ${labelJumpCount} labeled break/continue statements. ` +
           `Excessive labeled jumps make it hard to verify that all code paths execute security checks.`,
         fix: 'Extract inner loops into named functions. Replace labeled breaks with early returns from helper functions.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -4044,6 +4128,7 @@ function verifyCWE1119(map: NeuralMap): VerificationResult {
           `setjmp and longjmp is skipped.`,
         fix: 'Replace longjmp with structured error handling (exceptions, error return codes, or signal handlers). ' +
           'If longjmp is unavoidable (e.g., legacy C), ensure all resources are registered for cleanup before setjmp.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -4080,6 +4165,7 @@ function verifyCWE1120(map: NeuralMap): VerificationResult {
           `function in working memory. Subtle interactions between distant code blocks create vulnerabilities.`,
         fix: 'Extract cohesive blocks into named helper functions. Each function should have a single responsibility. ' +
           'Security-critical sections (auth checks, input validation, output encoding) should be in dedicated functions.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -4096,6 +4182,7 @@ function verifyCWE1120(map: NeuralMap): VerificationResult {
             `where trusted data is expected (parameter confusion).`,
           fix: 'Group related parameters into an options/config object. Use TypeScript interfaces or ' +
             'named parameters (Python kwargs) to make call sites self-documenting and prevent argument swapping.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -4138,6 +4225,7 @@ function verifyCWE1121(map: NeuralMap): VerificationResult {
         fix: 'Decompose into smaller functions using strategy pattern, lookup tables, or early returns. ' +
           'Replace complex conditional chains with polymorphism or configuration objects. ' +
           'Ensure test coverage for ALL branches, not just the happy path.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -4192,6 +4280,7 @@ function verifyCWE1122(map: NeuralMap): VerificationResult {
         fix: 'Extract complex expressions into named intermediate variables. Break long functions into ' +
           'smaller ones with descriptive names. Replace magic numbers with named constants. ' +
           'Dense code is unmaintainable code — and unmaintainable code becomes insecure code.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -4233,6 +4322,7 @@ function verifyCWE1123(map: NeuralMap): VerificationResult {
             `will execute, and any user influence over the eval argument is a code injection vulnerability.`,
           fix: 'Replace eval with a lookup table, switch statement, or JSON.parse (for data). ' +
             'If dynamic behavior is needed, use a sandboxed interpreter (vm2, Web Workers) with no access to the host.',
+          via: 'source_line_fallback',
         });
         continue;
       }
@@ -4246,6 +4336,7 @@ function verifyCWE1123(map: NeuralMap): VerificationResult {
         description: `${node.label} uses new Function() to generate code at runtime. Like eval, this ` +
           `creates code that cannot be statically analyzed. Any user input in the function body is code injection.`,
         fix: 'Replace new Function() with a closure, higher-order function, or pre-compiled template.',
+        via: 'source_line_fallback',
       });
       continue;
     }
@@ -4261,6 +4352,7 @@ function verifyCWE1123(map: NeuralMap): VerificationResult {
             `The system's behavior is modified by runtime data, making static verification impossible.`,
           fix: 'Use parameterized command execution (execFile with argument arrays instead of exec with string interpolation). ' +
             'Maintain an allowlist of permitted commands.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -4276,6 +4368,7 @@ function verifyCWE1123(map: NeuralMap): VerificationResult {
           `with user-controlled input. This lets attackers invoke arbitrary methods on objects.`,
         fix: 'Replace dynamic dispatch with an explicit allowlist of permitted method names. ' +
           'Never pass user input directly to send(), method(), or define_method().',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -4326,6 +4419,7 @@ function verifyCWE1124(map: NeuralMap): VerificationResult {
         fix: 'Use early returns (guard clauses) to reduce nesting. Extract inner blocks into named functions. ' +
           'Replace nested if-else chains with lookup tables or strategy patterns. ' +
           'Each level of nesting doubles the cognitive load on reviewers.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -4404,6 +4498,7 @@ function verifyCWE1125(map: NeuralMap): VerificationResult {
           `any unauthenticated user can invoke it.`,
         fix: 'Add authentication middleware (verify JWT/session) and authorization checks (verify role/permissions) ' +
           'before processing the request. If this is intentionally public, document why with a security comment.',
+        via: 'structural',
       });
     }
     // Removed: generic "read-only endpoint needs rate limiting" findings — these are the #1 FP source
@@ -4423,6 +4518,7 @@ function verifyCWE1125(map: NeuralMap): VerificationResult {
         'Use an allowlist of public endpoints rather than a denylist of protected ones. ' +
         'Remove or consolidate unused endpoints. Apply defense-in-depth: rate limiting, input validation, ' +
         'and output encoding should be applied by default, not opt-in.',
+      via: 'structural',
     });
   }
 
@@ -4463,6 +4559,7 @@ function verifyCWE1126(map: NeuralMap): VerificationResult {
             `leaks into another user's request (IDOR/data leakage).`,
           fix: 'Move request-specific state into the request handler function scope, or use request-scoped ' +
             'containers (Express req object, AsyncLocalStorage, ThreadLocal). Never store per-request data at module level.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -4480,6 +4577,7 @@ function verifyCWE1126(map: NeuralMap): VerificationResult {
             `or leaks data between users.`,
           fix: 'Use a proper cache (Redis, LRU cache with TTL and size limits). For counters, use atomic ' +
             'operations or request-scoped state. For buffers, scope them to the request lifecycle.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -4496,6 +4594,7 @@ function verifyCWE1126(map: NeuralMap): VerificationResult {
           `values to unintended code paths.`,
         fix: 'Replace var with let or const to ensure block scoping. This prevents accidental access ' +
           'to variables outside their intended scope.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -4549,6 +4648,7 @@ function verifyCWE1127(map: NeuralMap): VerificationResult {
             `using 'any' disables it completely. Attackers can pass unexpected types that bypass validation.`,
           fix: 'Replace `any` with proper types. Use generics for flexible typing. For external data, ' +
             'use a runtime validator (zod, io-ts, joi) that enforces types at the boundary.',
+          via: 'source_line_fallback',
         });
       }
     }
@@ -4564,6 +4664,7 @@ function verifyCWE1127(map: NeuralMap): VerificationResult {
         fix: 'Fix the underlying issues instead of suppressing. If suppression is truly necessary, use ' +
           '@ts-expect-error (not @ts-ignore — it will alert when the underlying issue is fixed). ' +
           'Add a comment explaining WHY each suppression is safe.',
+        via: 'source_line_fallback',
       });
     }
 
@@ -4577,6 +4678,7 @@ function verifyCWE1127(map: NeuralMap): VerificationResult {
           `the security check throws and may fail open.`,
         fix: 'Replace non-null assertions with explicit null checks and early returns. ' +
           'Use optional chaining (?.) with explicit fallback behavior for security-critical paths.',
+        via: 'source_line_fallback',
       });
     }
   }

@@ -102,6 +102,7 @@ function verifyCWE328(map: NeuralMap): VerificationResult {
               `MD5 and SHA-1 are cryptographically broken — vulnerable to collision and preimage attacks.`,
             fix: 'Use strong hashing: SHA-256/SHA-3 for integrity, bcrypt/scrypt/Argon2 for passwords. ' +
               'Never use MD5 or SHA-1 for security-sensitive operations.',
+            via: 'bfs',
           });
         }
       }
@@ -135,6 +136,7 @@ function verifyCWE328(map: NeuralMap): VerificationResult {
                 `MD5 and SHA-1 are cryptographically broken.`,
               fix: 'Use strong hashing: SHA-256/SHA-3 for integrity, bcrypt/scrypt/Argon2 for passwords. ' +
                 'Never use MD5 or SHA-1 for security-sensitive operations.',
+              via: 'scope_taint',
             });
           }
         }
@@ -175,6 +177,7 @@ function verifyCWE328(map: NeuralMap): VerificationResult {
               `These are cryptographically broken — vulnerable to collision and preimage attacks.`,
           fix: 'Use strong hashing: SHA-256/SHA-3 for integrity, bcrypt/scrypt/Argon2 for passwords. ' +
             'Never use MD5 or SHA-1 for security-sensitive operations.',
+          via: 'structural',
         });
       }
     }
@@ -211,19 +214,19 @@ function verifyCWE261(map: NeuralMap): VerificationResult {
     const handlesPassword = PASSWORD_RE.test(code) || PASSWORD_RE.test(node.label) ||
       node.data_in.some(d => PASSWORD_RE.test(d.name));
 
+    let pwFlowsBfs = false;
     if (!handlesPassword) {
       // Check if password data flows into this node from INGRESS
       const pwIngress = map.nodes.filter(n =>
         n.node_type === 'INGRESS' && PASSWORD_RE.test(n.analysis_snapshot || n.code_snapshot)
       );
-      let pwFlows = false;
       for (const src of pwIngress) {
         if (hasTaintedPathWithoutControl(map, src.id, node.id)) {
-          pwFlows = true;
+          pwFlowsBfs = true;
           break;
         }
       }
-      if (!pwFlows) continue;
+      if (!pwFlowsBfs) continue;
     }
 
     // Skip if strong hashing is also present
@@ -239,6 +242,7 @@ function verifyCWE261(map: NeuralMap): VerificationResult {
       fix: 'Replace weak encoding with strong one-way hashing: bcrypt, scrypt, or Argon2. ' +
         'Base64 and hex are encoding (reversible), not encryption or hashing. ' +
         'Example: bcrypt.hash(password, 12) instead of btoa(password).',
+      via: pwFlowsBfs ? 'bfs' : 'structural',
     });
   }
 
@@ -297,6 +301,7 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
         fix: 'Replace with AES-256-GCM (authenticated encryption) or ChaCha20-Poly1305. ' +
           'For Node.js: crypto.createCipheriv("aes-256-gcm", key, iv). ' +
           'For Java: Cipher.getInstance("AES/GCM/NoPadding"). Never use DES, 3DES, RC4, or Blowfish.',
+        via: 'structural',
       });
     }
     if (ECB_MODE_RE.test(code)) {
@@ -308,6 +313,7 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
           `ECB encrypts identical plaintext blocks to identical ciphertext blocks, leaking data patterns.`,
         fix: 'Use GCM mode (authenticated encryption) or CBC with HMAC. Never use ECB mode. ' +
           'Example: "aes-256-gcm" instead of "aes-256-ecb".',
+        via: 'structural',
       });
     }
   }
@@ -339,6 +345,7 @@ function verifyCWE327(map: NeuralMap): VerificationResult {
                 severity: 'high',
                 description: `Broken cryptographic algorithm "${resolvedAlgo}" specified via variable at ${nearNode.label}.`,
                 fix: 'Replace with AES-256-GCM or ChaCha20-Poly1305. Never use DES, 3DES, RC4, or Blowfish.',
+                via: 'source_line_fallback',
               });
             }
           }
@@ -390,6 +397,7 @@ function verifyCWE330(map: NeuralMap): VerificationResult {
           `Math.random()/random.random()/rand() are predictable and must not be used for tokens, keys, or session IDs.`,
         fix: 'Use a CSPRNG: crypto.randomBytes() (Node.js), secrets.token_hex() (Python), ' +
           'SecureRandom (Java/Ruby), crypto/rand (Go), or crypto.getRandomValues() (browser).',
+        via: 'structural',
       });
     }
   }
@@ -418,6 +426,7 @@ function verifyCWE331(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Insufficient entropy at ${node.label}. Random buffer < 16 bytes (128 bits), making brute-force feasible.`,
         fix: 'Use at least 32 bytes (256 bits) for keys and 16 bytes (128 bits) for tokens. Example: crypto.randomBytes(32).',
+        via: 'structural',
       });
     }
     if (TRUNC_RE331.test(code)) {
@@ -427,6 +436,7 @@ function verifyCWE331(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Security token at ${node.label} is truncated to a short length, reducing effective entropy.`,
         fix: 'Do not truncate security tokens. Use full CSPRNG output. Use base64url encoding if shorter strings needed.',
+        via: 'structural',
       });
     }
     if (SHORT_SALT_RE331.test(code)) {
@@ -436,6 +446,7 @@ function verifyCWE331(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Short hardcoded salt at ${node.label}. Salts must be unique per-user and at least 16 bytes.`,
         fix: 'Generate a unique random salt per user/password using crypto.randomBytes(16). Never use hardcoded or short salts.',
+        via: 'structural',
       });
     }
   }
@@ -470,6 +481,7 @@ function verifyCWE338(map: NeuralMap): VerificationResult {
           `(Mersenne Twister, LCG) that can be reverse-engineered from observed outputs.`,
         fix: 'Replace with a CSPRNG: crypto.randomBytes() (Node.js), java.security.SecureRandom (Java), ' +
           'secrets module (Python), crypto/rand (Go), or crypto.getRandomValues() (browser).',
+        via: 'structural',
       });
     }
   }
@@ -503,6 +515,7 @@ function verifyCWE347(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `JWT algorithm "none" allowed at ${node.label}. Attackers can forge tokens by stripping the signature.`,
         fix: 'Specify allowed algorithms: jwt.verify(token, secret, { algorithms: ["HS256"] }). Never allow "none".',
+        via: 'structural',
       });
       continue;
     }
@@ -513,6 +526,7 @@ function verifyCWE347(map: NeuralMap): VerificationResult {
         severity: 'critical',
         description: `Signature verification disabled at ${node.label}. Skipping verification allows forged data.`,
         fix: 'Never disable signature verification. Remove verify:false/ignoreSignature:true. Always verify with a trusted key.',
+        via: 'structural',
       });
       continue;
     }
@@ -525,6 +539,7 @@ function verifyCWE347(map: NeuralMap): VerificationResult {
           severity: 'critical',
           description: `Signed data decoded without verification at ${node.label}. jwt.decode() does NOT verify the signature.`,
           fix: 'Use jwt.verify(token, secret) instead of jwt.decode(token). Always verify the signature before trusting the payload.',
+          via: 'scope_taint',
         });
       }
     }
@@ -560,6 +575,7 @@ function verifyCWE354(map: NeuralMap): VerificationResult {
           severity: 'high',
           description: `Webhook data at ${node.label} processed without HMAC signature verification. Attackers can forge payloads.`,
           fix: 'Verify webhook signature using the provider signing secret. Use crypto.timingSafeEqual() for HMAC comparison.',
+          via: 'scope_taint',
         });
       }
     }
@@ -577,6 +593,7 @@ function verifyCWE354(map: NeuralMap): VerificationResult {
               severity: 'high',
               description: `External data from ${node.label} processed at ${sink.label} without integrity verification.`,
               fix: 'Verify integrity: compare SHA-256 hash, verify GPG signature, or use lockfiles with integrity hashes.',
+              via: 'structural',
             });
           }
         }
@@ -612,6 +629,7 @@ function verifyCWE757(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Weak TLS/SSL protocol version at ${node.label}. SSLv2/v3/TLS 1.0/1.1 have known vulnerabilities.`,
         fix: 'Enforce TLS 1.2 minimum: { minVersion: "TLSv1.2" } (Node.js), tls.Config{MinVersion: tls.VersionTLS12} (Go).',
+        via: 'structural',
       });
     }
     if (WEAK_CFG_RE757.test(code)) {
@@ -621,6 +639,7 @@ function verifyCWE757(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `TLS minimum version set too low at ${node.label}. TLS 1.0 and 1.1 are deprecated.`,
         fix: 'Set minVersion to "TLSv1.2" or higher. TLS 1.3 is preferred where supported.',
+        via: 'structural',
       });
     }
     if (WEAK_CIPH_RE757.test(code)) {
@@ -630,6 +649,7 @@ function verifyCWE757(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Weak cipher suite at ${node.label}. EXPORT/NULL/RC4/DES/anonymous DH provide insufficient encryption.`,
         fix: 'Use modern suites: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305. Remove EXPORT/NULL/RC4/DES/anon ciphers.',
+        via: 'structural',
       });
     }
   }
@@ -658,6 +678,7 @@ function verifyCWE759(map: NeuralMap): VerificationResult {
         description: `Password hashed without salt at ${node.label}. Unsalted hashes are vulnerable to rainbow table attacks.`,
         fix: 'Use bcrypt, scrypt, or Argon2id (they handle salting automatically). ' +
           'Never use raw SHA-256/MD5 for passwords. Example: bcrypt.hash(password, 12).',
+        via: 'structural',
       });
     }
   }
@@ -679,6 +700,7 @@ function verifyCWE759(map: NeuralMap): VerificationResult {
             severity: 'high',
             description: `Password from ${src.label} hashed at ${sink.label} without a salt. Rainbow tables can reverse unsalted hashes.`,
             fix: 'Use bcrypt.hash(password, saltRounds) or argon2.hash(password). If PBKDF2, pass a unique random salt.',
+            via: 'bfs',
           });
         }
       }
@@ -711,6 +733,7 @@ function verifyCWE759(map: NeuralMap): VerificationResult {
               `Without a unique salt per password, attackers can use rainbow tables.`,
             fix: 'Use bcrypt, scrypt, or Argon2 instead of raw MessageDigest/createHash. ' +
               'These generate a unique random salt automatically.',
+            via: 'structural',
           });
         }
       }
@@ -754,6 +777,7 @@ function verifyCWE759(map: NeuralMap): VerificationResult {
           `Unsalted hashes are vulnerable to rainbow table and precomputation attacks.`,
         fix: 'Add a random salt via hash.update(SecureRandom.generateSeed(32)) before calling digest(). ' +
           'Better: use bcrypt, scrypt, or Argon2 which handle salting automatically.',
+        via: 'scope_taint',
       });
     }
   }
@@ -783,6 +807,7 @@ function verifyCWE760(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Hardcoded/static salt for password hashing at ${node.label}. Attackers precompute one rainbow table for all users.`,
         fix: 'Generate unique random salt per password: crypto.randomBytes(16). Better: use bcrypt/Argon2 (auto-salting).',
+        via: 'structural',
       });
     }
     if (USER_SALT_RE760.test(code) && !RAND_SALT_RE760.test(code)) {
@@ -792,6 +817,7 @@ function verifyCWE760(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Predictable salt (username/email) for password hashing at ${node.label}. Enables targeted precomputation.`,
         fix: 'Use cryptographically random salt: crypto.randomBytes(16). Never use username/email as salt.',
+        via: 'structural',
       });
     }
     if (TIME_SALT_RE760.test(code) && !RAND_SALT_RE760.test(code)) {
@@ -801,6 +827,7 @@ function verifyCWE760(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Time-based salt for password hashing at ${node.label}. Timestamps are predictable, reducing salt space.`,
         fix: 'Use cryptographically random salt: crypto.randomBytes(16). Timestamps have low entropy.',
+        via: 'structural',
       });
     }
   }
@@ -840,6 +867,7 @@ function verifyCWE760(map: NeuralMap): VerificationResult {
         description: `${node.label} uses java.util.Random for salt generation instead of SecureRandom. ` +
           `Predictable salts reduce hash uniqueness and enable rainbow table attacks.`,
         fix: 'Use SecureRandom instead of java.util.Random for generating salts.',
+        via: 'scope_taint',
       });
     }
   }
@@ -868,6 +896,7 @@ function verifyCWE916(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Fast hash for password at ${node.label}. MD5/SHA compute in microseconds — billions of guesses per second.`,
         fix: 'Use bcrypt (cost >= 12), scrypt, or Argon2id. Never use MD5/SHA directly for password storage.',
+        via: 'structural',
       });
       continue;
     }
@@ -878,6 +907,7 @@ function verifyCWE916(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Low bcrypt cost factor at ${node.label}. Fewer than 10 rounds gives insufficient brute-force resistance.`,
         fix: 'Set bcrypt cost to at least 12: bcrypt.hash(password, 12). Re-hash on login when upgrading.',
+        via: 'structural',
       });
     }
     if (LOW_PB_RE916.test(code)) {
@@ -887,6 +917,7 @@ function verifyCWE916(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `Low PBKDF2 iteration count at ${node.label}. OWASP recommends >= 600,000 for SHA-256.`,
         fix: 'Set PBKDF2 iterations to >= 600,000 for SHA-256. Better: migrate to Argon2id.',
+        via: 'structural',
       });
     }
   }
@@ -940,6 +971,7 @@ function verifyCWE780(map: NeuralMap): VerificationResult {
             'Node.js: crypto.publicEncrypt({ padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }). ' +
             'Python: PKCS1_OAEP.new(key). Go: rsa.EncryptOAEP(). ' +
             'Note: PKCS#1 v1.5 for SIGNATURES (not encryption) is still considered safe.',
+          via: 'structural',
         });
         break;
       }
@@ -983,6 +1015,7 @@ function verifyCWE311(map: NeuralMap): VerificationResult {
         fix: 'Use encrypted protocols: HTTPS instead of HTTP, FTPS/SFTP instead of FTP, ' +
           'TLS-enabled connections for databases (mongodb+srv, postgres with ssl=true). ' +
           'Enable TLS for all connections that carry sensitive data.',
+        via: 'structural',
       });
       continue;
     }
@@ -997,6 +1030,7 @@ function verifyCWE311(map: NeuralMap): VerificationResult {
           `Network traffic can be intercepted, exposing credentials, tokens, or PII.`,
         fix: 'Replace http:// with https:// for all requests containing sensitive data. ' +
           'Configure TLS for all external service connections.',
+        via: 'structural',
       });
     }
   }
@@ -1040,6 +1074,7 @@ function verifyCWE317(map: NeuralMap): VerificationResult {
           fix: 'Use type="password" for password inputs. Mask sensitive values with asterisks or dots. ' +
             'For display-only: show only last 4 characters (e.g., "****1234"). ' +
             'Never show full API keys, tokens, or passwords in the UI.',
+          via: 'structural',
         });
         continue;
       }
@@ -1055,6 +1090,7 @@ function verifyCWE317(map: NeuralMap): VerificationResult {
             `Cleartext sensitive data in UI elements can be seen by bystanders or captured by screen recording.`,
           fix: 'Mask sensitive data before displaying: show "****" or partial values. ' +
             'Use type="password" for password fields. Redact API keys to show only prefix/suffix.',
+          via: 'structural',
         });
       }
     }
@@ -1098,6 +1134,7 @@ function verifyCWE318(map: NeuralMap): VerificationResult {
           `Compiled binaries and bundled JS can be reverse-engineered to extract embedded secrets.`,
         fix: 'Move secrets to environment variables, a secrets manager (HashiCorp Vault, AWS Secrets Manager), ' +
           'or encrypted configuration files loaded at runtime. Never embed secrets in source that gets compiled or bundled.',
+        via: 'structural',
       });
     }
 
@@ -1111,6 +1148,7 @@ function verifyCWE318(map: NeuralMap): VerificationResult {
         fix: 'Use environment variables for connection strings: process.env.DATABASE_URL. ' +
           'Or use a secret manager to inject credentials at runtime. ' +
           'Connection strings in code survive compilation and bundling.',
+        via: 'structural',
       });
     }
   }
@@ -1176,6 +1214,7 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
           'or HashiCorp Vault. Never hardcode encryption keys. ' +
           'Example: const key = Buffer.from(process.env.ENCRYPTION_KEY, "hex"). ' +
           'Implement key rotation procedures.',
+        via: 'structural',
       });
     }
   }
@@ -1202,6 +1241,7 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
           description: `Hard-coded cryptographic key at ${node.label}. ` +
             `Keys embedded in source code cannot be rotated without redeployment.`,
           fix: 'Load cryptographic keys from environment variables or a key management service.',
+          via: 'structural',
         });
       }
       if (CRYPTO_ALG_PROPERTY.test(snap)) {
@@ -1213,6 +1253,7 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
           description: `${node.label} loads crypto algorithm from property "cryptoAlg1" which resolves to DES/ECB. ` +
             `DES is a deprecated weak cipher with only 56-bit effective key strength.`,
           fix: 'Use AES-256-GCM or AES-256-CBC instead of DES. Update the properties file to use strong algorithms.',
+          via: 'structural',
         });
       }
     }
@@ -1252,6 +1293,7 @@ function verifyCWE321(map: NeuralMap): VerificationResult {
         description: `Variable "${skMatch[1]}" is assigned a hardcoded string and then used as a cryptographic key in SecretKeySpec. ` +
           `Keys embedded in source code cannot be rotated without redeployment.`,
         fix: 'Load cryptographic keys from environment variables or a key management service.',
+        via: 'source_line_fallback',
       });
     }
   }
@@ -1293,6 +1335,7 @@ function verifyCWE322(map: NeuralMap): VerificationResult {
         fix: 'Use authenticated key exchange: TLS with certificate verification, signed DH parameters, ' +
           'or protocols like STS (Station-to-Station). Verify the remote party\'s identity through certificates (PKI), ' +
           'pre-shared keys, or digital signatures on the key exchange messages.',
+        via: 'structural',
       });
     }
 
@@ -1307,6 +1350,7 @@ function verifyCWE322(map: NeuralMap): VerificationResult {
         fix: 'Remove anonymous cipher suites (aNULL, ADH, AECDH, DH-anon). ' +
           'Use authenticated suites that require server certificates. ' +
           'Example: tls.createServer({ ciphers: "ECDHE-RSA-AES256-GCM-SHA384:..." }).',
+        via: 'structural',
       });
     }
 
@@ -1320,6 +1364,7 @@ function verifyCWE322(map: NeuralMap): VerificationResult {
           `rejectUnauthorized=false or similar disables the entity authentication that prevents MITM attacks.`,
         fix: 'Enable certificate verification: set rejectUnauthorized: true, verify_mode: ssl.CERT_REQUIRED, ' +
           'InsecureSkipVerify: false. If using self-signed certs, configure the CA certificate explicitly.',
+        via: 'structural',
       });
     }
   }
@@ -1357,6 +1402,7 @@ function verifyCWE323(map: NeuralMap): VerificationResult {
           `In AES-GCM, nonce reuse also reveals the authentication key, enabling ciphertext forgery.`,
         fix: 'Generate a fresh random nonce for every encryption: crypto.randomBytes(12) for GCM, ' +
           'crypto.randomBytes(16) for CTR. Never store nonces as constants. For deterministic nonces, use AES-GCM-SIV.',
+        via: 'structural',
       });
     }
     if (COUNTER_RESET_RE.test(code)) {
@@ -1368,6 +1414,7 @@ function verifyCWE323(map: NeuralMap): VerificationResult {
           `with the same key, destroying stream cipher security.`,
         fix: 'Use random nonces instead of counters. If counters are required, persist them across restarts. ' +
           'Better: use AES-GCM-SIV which is nonce-misuse resistant.',
+        via: 'structural',
       });
     }
   }
@@ -1396,6 +1443,7 @@ function verifyCWE324(map: NeuralMap): VerificationResult {
           `Using expired keys allows more time for cryptanalysis and means compromised keys remain in use indefinitely.`,
         fix: 'Always validate key expiration. Set key TTLs (90 days for signing, 1 year for encryption). ' +
           'Implement automated rotation. Never disable expiry checks.',
+        via: 'structural',
       });
     }
     if (HARDCODED_KEY_RE.test(code) && !KEY_ROTATION_RE.test(code)) {
@@ -1410,6 +1458,7 @@ function verifyCWE324(map: NeuralMap): VerificationResult {
             `Keys that never expire accumulate risk: more ciphertext for cryptanalysis, longer exposure if compromised.`,
           fix: 'Store keys in a KMS (AWS KMS, Vault, Azure Key Vault). Set expiration dates. ' +
             'Implement automated rotation. Version keys so old ciphertext can be re-encrypted.',
+          via: 'scope_taint',
         });
       }
     }
@@ -1444,6 +1493,7 @@ function verifyCWE325(map: NeuralMap): VerificationResult {
             `CBC/CTR without HMAC allows bit-flipping (padding oracle, ciphertext malleability).`,
           fix: 'Use AES-GCM or ChaCha20-Poly1305. If CBC is required, apply encrypt-then-MAC: ' +
             'encrypt first, HMAC the ciphertext, verify HMAC before decrypting.',
+          via: 'scope_taint',
         });
       }
     }
@@ -1456,6 +1506,7 @@ function verifyCWE325(map: NeuralMap): VerificationResult {
           `Raw SHA/MD5 for passwords enables rainbow table attacks. Even salted fast hashes are brutable.`,
         fix: 'Use bcrypt, argon2id, or scrypt. These include built-in salting and work factors. ' +
           'Never use SHA-256/MD5 for passwords.',
+        via: 'structural',
       });
     }
     // Detect KeyGenerator.getInstance() without .init() before .generateKey()
@@ -1477,6 +1528,7 @@ function verifyCWE325(map: NeuralMap): VerificationResult {
             `and causes interoperability issues across providers.`,
           fix: 'Call KeyGenerator.init(keySize) before generateKey(). For AES, use init(256) for maximum security. ' +
             'Always explicitly specify key size rather than relying on provider defaults.',
+          via: 'scope_taint',
         });
       }
     }
@@ -1569,6 +1621,7 @@ function verifyCWE325(map: NeuralMap): VerificationResult {
               `The crypto provider will choose a default key size which may be insufficient and non-portable.`,
             fix: 'Call ' + inst.varName + '.init(256) (for AES) between getInstance() and generateKey(). ' +
               'Always explicitly specify key size rather than relying on provider defaults.',
+            via: 'source_line_fallback',
           });
         }
       }
@@ -1600,6 +1653,7 @@ function verifyCWE326(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Inadequate RSA key size at ${node.label}. RSA-1024 is factored; RSA-512/768 are trivially breakable. NIST requires >= 2048.`,
         fix: 'Use RSA-2048 minimum (RSA-4096 preferred). For new systems, prefer ECC (P-256/Ed25519).',
+        via: 'structural',
       });
     }
     if (SHORT_DH_RE.test(code)) {
@@ -1609,6 +1663,7 @@ function verifyCWE326(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Weak Diffie-Hellman parameters at ${node.label}. DH-1024 is vulnerable to Logjam precomputation.`,
         fix: 'Use DH-2048 minimum, or ECDH with Curve25519/P-256.',
+        via: 'structural',
       });
     }
     if (WEAK_ECC_RE.test(code)) {
@@ -1618,6 +1673,7 @@ function verifyCWE326(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Weak elliptic curve at ${node.label}. Curves below 256 bits lack adequate security margins.`,
         fix: 'Use P-256, P-384, P-521, Curve25519, or Ed25519.',
+        via: 'structural',
       });
     }
     if (WEAK_TLS_RE.test(code)) {
@@ -1627,6 +1683,7 @@ function verifyCWE326(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `Deprecated TLS at ${node.label}. SSLv2/v3 have POODLE, TLS 1.0 has BEAST, TLS 1.1 is deprecated.`,
         fix: 'Set minimum TLS to 1.2 (1.3 preferred). Node.js: minVersion:"TLSv1.2". Java: SSLContext.getInstance("TLSv1.3").',
+        via: 'structural',
       });
     }
   }
@@ -1657,6 +1714,7 @@ function verifyCWE329(map: NeuralMap): VerificationResult {
           `leaking whether two messages share the same prefix.`,
         fix: 'Generate random IV per encryption: crypto.randomBytes(16). Prepend IV to ciphertext. ' +
           'Better: switch to AES-GCM.',
+        via: 'structural',
       });
     } else if (PREDICTABLE_IV_RE.test(code) && !RANDOM_IV_RE.test(code)) {
       findings.push({
@@ -1667,6 +1725,7 @@ function verifyCWE329(map: NeuralMap): VerificationResult {
           `The BEAST attack exploited exactly this distinction.`,
         fix: 'Use crypto.randomBytes(16) for CBC IVs. Do NOT use counters, timestamps, or previous ciphertext blocks. ' +
           'Recommended: migrate to AES-GCM.',
+        via: 'structural',
       });
     }
   }
@@ -1699,6 +1758,7 @@ function verifyCWE329(map: NeuralMap): VerificationResult {
               `These have insufficient key lengths and known vulnerabilities.`,
           fix: 'Use AES-256-GCM or AES-256-CBC with a random IV generated from SecureRandom. ' +
             'Never use DES (56-bit key), RC4 (biased output), or ECB mode.',
+          via: 'structural',
         });
       }
     }
@@ -1744,6 +1804,7 @@ function verifyCWE329(map: NeuralMap): VerificationResult {
               'A static IV makes the first block equivalent to ECB, leaking whether two messages share the same prefix.',
             fix: 'Generate a random IV per encryption using SecureRandom.nextBytes(). Prepend IV to ciphertext. ' +
               'Better: switch to AES-GCM which handles nonces more safely.',
+            via: 'source_line_fallback',
           });
           break; // One finding is enough
         }
@@ -1781,6 +1842,7 @@ function verifyCWE335(map: NeuralMap): VerificationResult {
           `An attacker can enumerate all possible seeds and reproduce the output stream.`,
         fix: 'For security: use CSPRNG directly (crypto.randomBytes, SecureRandom, os.urandom). ' +
           'For non-security: seed from CSPRNG: new Random(SecureRandom.nextLong()).',
+        via: 'structural',
       });
     }
   }
@@ -1818,6 +1880,7 @@ function verifyCWE336(map: NeuralMap): VerificationResult {
             `Identical seeds produce identical output streams.`,
           fix: 'Use CSPRNG (crypto.randomBytes, SecureRandom) for security. ' +
             'For non-security fast PRNGs, seed each instance from a CSPRNG.',
+          via: 'structural',
         });
       }
     } else {
@@ -1833,6 +1896,7 @@ function verifyCWE336(map: NeuralMap): VerificationResult {
           description: `Hardcoded PRNG seed (${seedVal}) in security context at ${node.label}. ` +
             `The entire output sequence is deterministic and reproducible.`,
           fix: 'Replace with CSPRNG: crypto.randomBytes() (Node.js), SecureRandom (Java), secrets module (Python).',
+          via: 'structural',
         });
       }
     }
@@ -1859,6 +1923,7 @@ function verifyCWE336(map: NeuralMap): VerificationResult {
             `These produce predictable sequences unsuitable for security-sensitive operations.`,
           fix: 'Use java.security.SecureRandom instead of java.util.Random. ' +
             'SecureRandom provides cryptographically strong random values.',
+          via: 'structural',
         });
       }
     }
@@ -1897,6 +1962,7 @@ function verifyCWE336(map: NeuralMap): VerificationResult {
               `This makes the PRNG output predictable and reproducible across runs.`,
             fix: 'Do not call setSeed() with hardcoded values on SecureRandom. ' +
               'Let SecureRandom self-seed from the OS entropy source, or use SecureRandom.generateSeed() if reseeding.',
+            via: 'structural',
           });
         }
       }
@@ -1929,6 +1995,7 @@ function verifyCWE337(map: NeuralMap): VerificationResult {
           `Hostname, IP, PID, file metadata are all discoverable. XORing low-entropy values does NOT create high entropy.`,
         fix: 'Use CSPRNG directly (crypto.randomBytes, SecureRandom, os.urandom). ' +
           'If a fast PRNG is needed, seed from CSPRNG.',
+        via: 'structural',
       });
     }
   }
@@ -1956,6 +2023,7 @@ function verifyCWE339(map: NeuralMap): VerificationResult {
         description: `PRNG seeded from small value space at ${node.label}. ` +
           `< 2^16 seed values can be exhaustively searched in milliseconds.`,
         fix: 'Use >= 128 bits (16 bytes) of CSPRNG output as seed. Or use CSPRNG directly.',
+        via: 'structural',
       });
     }
     if (TRUNCATED_SEED_RE339.test(code)) {
@@ -1966,6 +2034,7 @@ function verifyCWE339(map: NeuralMap): VerificationResult {
         description: `PRNG seed truncated to small type at ${node.label}. ` +
           `Casting to byte/int8/int16 reduces seed space to 256-65536 values.`,
         fix: 'Use full-width seed (32+ bits minimum). For security: use CSPRNG instead.',
+        via: 'structural',
       });
     }
     if (TRIVIAL_SEED_RE339.test(code)) {
@@ -1975,6 +2044,7 @@ function verifyCWE339(map: NeuralMap): VerificationResult {
         severity: 'high',
         description: `PRNG seeded with trivial value (boolean/0/1) at ${node.label}. Only 2-3 possible output streams.`,
         fix: 'Use CSPRNG for security contexts. For non-security: seed from system entropy.',
+        via: 'structural',
       });
     }
   }
@@ -2011,6 +2081,7 @@ function verifyCWE340(map: NeuralMap): VerificationResult {
         description: `Sequential/auto-increment ID exposed externally at ${node.label}. ` +
           `Attackers enumerate valid IDs by incrementing, enabling IDOR attacks.`,
         fix: 'Use UUIDv4, nanoid, or CUID for external identifiers. Keep auto-increment as internal PKs only.',
+        via: 'structural',
       });
     }
     if (TIMESTAMP_ID_RE340.test(code) && !SAFE_ID_RE340.test(code)) {
@@ -2021,6 +2092,7 @@ function verifyCWE340(map: NeuralMap): VerificationResult {
         description: `Timestamp-based identifier at ${node.label}. Guessable to millisecond precision, ` +
           `enabling enumeration in the creation time window.`,
         fix: 'Use crypto.randomUUID() or crypto.randomBytes(16).toString("hex").',
+        via: 'structural',
       });
     }
     if (UUIDV1_RE340.test(code)) {
@@ -2030,6 +2102,7 @@ function verifyCWE340(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `UUIDv1 at ${node.label} embeds MAC address and timestamp, leaking server identity. Adjacent UUIDs are sequential.`,
         fix: 'Use UUIDv4. Node.js: crypto.randomUUID(). Python: uuid.uuid4(). Java: UUID.randomUUID().',
+        via: 'structural',
       });
     }
     if (PREDICTABLE_HASH_ID_RE340.test(code) && !SAFE_ID_RE340.test(code)) {
@@ -2039,6 +2112,7 @@ function verifyCWE340(map: NeuralMap): VerificationResult {
         severity: 'medium',
         description: `ID derived from hash of predictable inputs at ${node.label}. Anyone with the inputs can reproduce it.`,
         fix: 'Generate IDs from CSPRNG output. If deterministic (dedup), add server-side secret (HMAC).',
+        via: 'structural',
       });
     }
   }
