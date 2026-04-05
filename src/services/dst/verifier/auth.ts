@@ -213,7 +213,7 @@ function verifyCWE384(map: NeuralMap): VerificationResult {
   const authNodes = map.nodes.filter(n =>
     (n.node_type === 'AUTH' ||
      // Also check STRUCTURAL nodes that define login/auth routes
-     (n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def') ||
+     (n.node_type === 'STRUCTURAL' && n.node_subtype === 'route') ||
      // CONTROL nodes that contain bcrypt auth checks (bcrypt.compareSync in if-condition)
      (n.node_type === 'CONTROL' && BCRYPT_AUTH_RE.test(n.analysis_snapshot || n.code_snapshot))) &&
     (n.analysis_snapshot || n.code_snapshot).match(/\b(login|authenticate|passport\.authenticate|sign\s*in|logIn|createSession|doLogin|bcrypt\.compare|bcrypt\.compareSync)\b/i) !== null
@@ -1138,7 +1138,7 @@ function verifyCWE620(map: NeuralMap): VerificationResult {
 
   // Find password change functions/routes
   const passwordChangeNodes = map.nodes.filter(n =>
-    (n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def' &&
+    (n.node_type === 'STRUCTURAL' && n.node_subtype === 'route' &&
      passwordChangePattern.test(n.analysis_snapshot || n.code_snapshot)) ||
     (n.node_type === 'STRUCTURAL' && n.node_subtype === 'function' &&
      passwordChangePattern.test(n.analysis_snapshot || n.code_snapshot)) ||
@@ -1750,12 +1750,12 @@ function verifyCWE862(map: NeuralMap): VerificationResult {
   // Checks three sources of auth coverage:
   //   1. Any sibling node in the direct containing STRUCTURAL scope matches AUTHZ862
   //   2. The scope node's own code matches (e.g. the containing function IS the auth check)
-  //   3. Any route_def node whose line range encompasses the sink — this catches auth middleware
+  //   3. Any route node whose line range encompasses the sink — this catches auth middleware
   //      passed as an argument to the route: app.delete('/path', authorize, handler)
   function scopeHasAuthz862(sink: { id: string; line_start: number; line_end: number }): boolean {
     // Find all STRUCTURAL nodes that directly CONTAIN the sink
     const parentScopes = map.nodes.filter(n =>
-      (n.node_type === 'STRUCTURAL' && (n.node_subtype === 'function' || n.node_subtype === 'route_def')) &&
+      (n.node_type === 'STRUCTURAL' && (n.node_subtype === 'function' || n.node_subtype === 'route')) &&
       n.edges.some(e => e.edge_type === 'CONTAINS' && e.target === sink.id)
     );
 
@@ -1770,19 +1770,19 @@ function verifyCWE862(map: NeuralMap): VerificationResult {
         .filter((n): n is NonNullable<typeof n> => n != null);
       if (scopeChildren.some(n => AUTHZ862.test(stripComments(n.analysis_snapshot || n.code_snapshot)))) return true;
 
-      // Check any route_def that wraps the same line range as this scope.
-      // A route_def like app.delete('/path', authorize, handler) captures the auth middleware
+      // Check any route that wraps the same line range as this scope.
+      // A route like app.delete('/path', authorize, handler) captures the auth middleware
       // in its code_snapshot even though the handler function is a separate STRUCTURAL node.
       const routeDefsWrappingScope = map.nodes.filter(n =>
-        n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def' &&
+        n.node_type === 'STRUCTURAL' && n.node_subtype === 'route' &&
         n.line_start <= scope.line_start && n.line_end >= scope.line_end
       );
       if (routeDefsWrappingScope.some(rd => AUTHZ862.test(stripComments(rd.analysis_snapshot || rd.code_snapshot)))) return true;
     }
 
-    // Fallback: check any route_def that directly encompasses the sink's line
+    // Fallback: check any route that directly encompasses the sink's line
     const routeDefsCoveringSink = map.nodes.filter(n =>
-      n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def' &&
+      n.node_type === 'STRUCTURAL' && n.node_subtype === 'route' &&
       n.line_start <= sink.line_start && n.line_end >= sink.line_end
     );
     if (routeDefsCoveringSink.some(rd => AUTHZ862.test(stripComments(rd.analysis_snapshot || rd.code_snapshot)))) return true;
@@ -1797,7 +1797,7 @@ function verifyCWE862(map: NeuralMap): VerificationResult {
       // A sink is vulnerable only if:
       //   - There is a data-flow path (BFS) from source to sink with no auth intermediate, OR
       //     the source and sink share a function scope with no auth in that scope
-      //   - AND the containing scope (or its route_def wrapper) has NO authorization coverage
+      //   - AND the containing scope (or its route wrapper) has NO authorization coverage
       // The scope check is the authoritative gate: if the scope has auth, suppress the finding.
       const bfsHit862 = pathNoAuthz862(src.id, sink.id);
       const scopeHit862 = !bfsHit862 && sharesFunctionScope(map, src.id, sink.id);
@@ -4423,7 +4423,7 @@ function verifyCWE1021(map: NeuralMap): VerificationResult {
     // Require actual route definitions — files without routes cannot have clickjacking
     const hasRoutes = map.nodes.some(n =>
       /\b(app\.get|app\.post|app\.put|app\.delete|app\.patch|router\.get|router\.post|app\.route|@Get|@Post|@RequestMapping)\b/i.test(n.analysis_snapshot || n.code_snapshot) ||
-      (n.node_subtype.includes('route_def'))
+      (n.node_subtype.includes('route'))
     );
     if (!hasRoutes) {
       return { cwe: 'CWE-1021', name: 'Improper Restriction of Rendered UI Layers', holds: true, findings };

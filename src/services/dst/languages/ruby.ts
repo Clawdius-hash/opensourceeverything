@@ -547,10 +547,10 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   // =========================================================================
 
   // -- Sinatra route DSL --
-  'Sinatra::Base.get':        { nodeType: 'STRUCTURAL', subtype: 'route_def', tainted: false },
+  'Sinatra::Base.get':        { nodeType: 'STRUCTURAL', subtype: 'route', tainted: false },
 
   // -- Devise route generation --
-  'devise_for':               { nodeType: 'STRUCTURAL', subtype: 'route_def', tainted: false },
+  'devise_for':               { nodeType: 'STRUCTURAL', subtype: 'route', tainted: false },
 
   // =========================================================================
   // META -- config, debug

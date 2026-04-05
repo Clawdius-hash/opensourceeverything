@@ -777,7 +777,7 @@ export function stripComments(code: string, language?: string): string {
  * This gives safe-pattern checks visibility into the containing function's code without
  * leaking code from unrelated functions (scope poisoning).
  *
- * Walk: target node → CONTAINS parent → ... → nearest function/route_def STRUCTURAL node.
+ * Walk: target node → CONTAINS parent → ... → nearest function/route STRUCTURAL node.
  * Returns that node's analysis_snapshot (full function body, up to 2000 chars).
  * Falls back to the target node's own snapshot if no containing function is found.
  */
@@ -797,7 +797,7 @@ export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): str
   const nodeById = new Map(map.nodes.map(n => [n.id, n]));
 
   // Walk up the CONTAINS chain to find the nearest function-level STRUCTURAL node
-  const functionSubtypes = new Set(['function', 'route_def', 'method', 'lambda']);
+  const functionSubtypes = new Set(['function', 'route', 'method', 'lambda']);
   let currentId: string | undefined = nodeId;
   const visited = new Set<string>();
 
@@ -829,9 +829,16 @@ export function getContainingScopeSnapshots(map: NeuralMap, nodeId: string): str
 // ---------------------------------------------------------------------------
 
 /**
+ * STRUCTURAL node subtypes that represent function-level scopes.
+ * 'function' covers: function/method declarations, constructors, arrow functions, lambdas, closures, generators
+ * 'route' covers: route-annotated methods (@GetMapping, [HttpGet], etc.)
+ */
+export const FUNCTION_SCOPE_SUBTYPES = new Set(['function', 'route']);
+
+/**
  * Check whether two nodes share a function scope.
- * "Shares scope" = both nodes are contained (via CONTAINS edges) by the same
- * STRUCTURAL/function ancestor, OR both lie within the same function's line range.
+ * "Shares scope" = both nodes are contained by the same function-body STRUCTURAL node.
+ * Two methods in the same class do NOT share function scope.
  */
 export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: string): boolean {
   const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
@@ -839,14 +846,11 @@ export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: st
   const nodeB = nodeMap.get(nodeIdB);
   if (!nodeA || !nodeB) return false;
 
-  // Only function-level subtypes count as "same scope"
-  const functionSubtypes = new Set(['function', 'route_def', 'method', 'lambda']);
-
-  // Strategy 1: Direct CONTAINS edge matching — only function-level STRUCTURAL nodes
+  // Strategy 1: Common CONTAINS ancestor that is a function-scope STRUCTURAL node
   const getAncestors = (nodeId: string): Set<string> => {
     const ancestors = new Set<string>();
     for (const n of map.nodes) {
-      if (n.node_type === 'STRUCTURAL' && functionSubtypes.has(n.node_subtype)) {
+      if (n.node_type === 'STRUCTURAL' && FUNCTION_SCOPE_SUBTYPES.has(n.node_subtype)) {
         for (const edge of n.edges) {
           if (edge.target === nodeId && edge.edge_type === 'CONTAINS') {
             ancestors.add(n.id);
@@ -863,10 +867,9 @@ export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: st
     if (ancestorsB.has(a)) return true;
   }
 
-  // Strategy 2: Line-range containment (already correctly scoped to function/route_def)
+  // Strategy 2: Line-range fallback — both nodes within same function-scope node's span
   const funcNodes = map.nodes.filter(n =>
-    n.node_type === 'STRUCTURAL' &&
-    (n.node_subtype === 'function' || n.node_subtype === 'route_def')
+    n.node_type === 'STRUCTURAL' && FUNCTION_SCOPE_SUBTYPES.has(n.node_subtype)
   );
 
   for (const func of funcNodes) {

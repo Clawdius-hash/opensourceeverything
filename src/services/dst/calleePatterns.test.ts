@@ -534,11 +534,11 @@ describe('calleePatterns — lookupCallee', () => {
     expect(result!.subtype).toBe('http_response');
   });
 
-  it('server.route → STRUCTURAL/route_def (Hapi)', () => {
+  it('server.route → STRUCTURAL/route (Hapi)', () => {
     const result = lookupCallee(['server', 'route']);
     expect(result).not.toBeNull();
     expect(result!.nodeType).toBe('STRUCTURAL');
-    expect(result!.subtype).toBe('route_def');
+    expect(result!.subtype).toBe('route');
   });
 
   it('server.register → STRUCTURAL/dependency (Hapi)', () => {

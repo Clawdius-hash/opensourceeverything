@@ -71,7 +71,7 @@ export const PHONEMES_JS_PRISMA_NEXTJS_GRAPHQL = {
   // Apollo Server: server.applyMiddleware({app}) mounts the GraphQL endpoint onto
   // an Express/Koa/Fastify app. This is where the GraphQL route gets defined — it's
   // the equivalent of app.use('/graphql', ...).
-  'server.applyMiddleware': { nodeType: 'STRUCTURAL', subtype: 'route_def', tainted: false },
+  'server.applyMiddleware': { nodeType: 'STRUCTURAL', subtype: 'route', tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // NEXT.JS — getServerSideProps / getStaticProps as phonemes

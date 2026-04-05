@@ -116,7 +116,7 @@ export function isLibraryCode(map: NeuralMap): boolean {
  */
 export function hasWebFrameworkContext(map: NeuralMap): boolean {
   // --- Graph-level signals ---
-  if (map.nodes.some(n => n.node_type === 'STRUCTURAL' && n.node_subtype === 'route_def')) {
+  if (map.nodes.some(n => n.node_type === 'STRUCTURAL' && n.node_subtype === 'route')) {
     return true;
   }
   if (map.nodes.some(n =>
@@ -247,10 +247,16 @@ export function findContainingFunction(map: NeuralMap, nodeId: string): string |
 }
 
 /**
- * Check if two nodes share a common function scope.
- * Uses two strategies:
- *   1. Direct CONTAINS edge matching (both contained by the same STRUCTURAL node)
- *   2. Line-range containment (both within the line range of the same function STRUCTURAL node)
+ * STRUCTURAL node subtypes that represent function-level scopes.
+ * 'function' covers: function/method declarations, constructors, arrow functions, lambdas, closures, generators
+ * 'route' covers: route-annotated methods (@GetMapping, [HttpGet], etc.)
+ */
+export const FUNCTION_SCOPE_SUBTYPES = new Set(['function', 'route']);
+
+/**
+ * Check whether two nodes share a function scope.
+ * "Shares scope" = both nodes are contained by the same function-body STRUCTURAL node.
+ * Two methods in the same class do NOT share function scope.
  */
 export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: string): boolean {
   const nodeMap = new Map(map.nodes.map(n => [n.id, n]));
@@ -258,11 +264,11 @@ export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: st
   const nodeB = nodeMap.get(nodeIdB);
   if (!nodeA || !nodeB) return false;
 
-  // Strategy 1: Direct CONTAINS edge matching
+  // Strategy 1: Common CONTAINS ancestor that is a function-scope STRUCTURAL node
   const getAncestors = (nodeId: string): Set<string> => {
     const ancestors = new Set<string>();
     for (const n of map.nodes) {
-      if (n.node_type === 'STRUCTURAL') {
+      if (n.node_type === 'STRUCTURAL' && FUNCTION_SCOPE_SUBTYPES.has(n.node_subtype)) {
         for (const edge of n.edges) {
           if (edge.target === nodeId && edge.edge_type === 'CONTAINS') {
             ancestors.add(n.id);
@@ -279,19 +285,14 @@ export function sharesFunctionScope(map: NeuralMap, nodeIdA: string, nodeIdB: st
     if (ancestorsB.has(a)) return true;
   }
 
-  // Strategy 2: Line-range containment
+  // Strategy 2: Line-range fallback — both nodes within same function-scope node's span
   const funcNodes = map.nodes.filter(n =>
-    n.node_type === 'STRUCTURAL' &&
-    (n.node_subtype === 'function' || n.node_subtype === 'route_def' ||
-     (n.analysis_snapshot || n.code_snapshot).match(/\bfunction\b|\b=>\b/i) !== null)
+    n.node_type === 'STRUCTURAL' && FUNCTION_SCOPE_SUBTYPES.has(n.node_subtype)
   );
 
   for (const func of funcNodes) {
-    const funcStart = func.line_start;
-    const funcEnd = func.line_end;
-
-    if (nodeA.line_start >= funcStart && nodeA.line_start <= funcEnd &&
-        nodeB.line_start >= funcStart && nodeB.line_start <= funcEnd) {
+    if (nodeA.line_start >= func.line_start && nodeA.line_start <= func.line_end &&
+        nodeB.line_start >= func.line_start && nodeB.line_start <= func.line_end) {
       return true;
     }
   }

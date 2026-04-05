@@ -386,21 +386,21 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'document.location':    { nodeType: 'INGRESS',     subtype: 'user_input',    tainted: true },
 
   // ── Express app.* → STRUCTURAL (route definitions) ──
-  'app.get':              { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'app.post':             { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'app.put':              { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'app.delete':           { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'app.patch':            { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
+  'app.get':              { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'app.post':             { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'app.put':              { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'app.delete':           { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'app.patch':            { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'app.use':              { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
-  'app.all':              { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
+  'app.all':              { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'app.listen':           { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
-  'router.get':           { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'router.post':          { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'router.put':           { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'router.delete':        { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'router.patch':         { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
+  'router.get':           { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'router.post':          { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'router.put':           { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'router.delete':        { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'router.patch':         { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'router.use':           { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
-  'router.all':           { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
+  'router.all':           { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FRAMEWORK: Fastify
@@ -432,12 +432,12 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'fastify.decorate':     { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
   'fastify.addHook':      { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
   'fastify.inject':       { nodeType: 'EXTERNAL',   subtype: 'api_call',      tainted: false },
-  'fastify.get':          { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'fastify.post':         { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'fastify.put':          { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'fastify.delete':       { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'fastify.patch':        { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
-  'fastify.all':          { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
+  'fastify.get':          { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'fastify.post':         { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'fastify.put':          { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'fastify.delete':       { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'fastify.patch':        { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
+  'fastify.all':          { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'fastify.listen':       { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -496,7 +496,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'h.continue':           { nodeType: 'CONTROL',    subtype: 'guard',         tainted: false },
 
   // ── Hapi server.* → STRUCTURAL ──
-  'server.route':         { nodeType: 'STRUCTURAL', subtype: 'route_def',     tainted: false },
+  'server.route':         { nodeType: 'STRUCTURAL', subtype: 'route',     tainted: false },
   'server.register':      { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
   'server.auth':          { nodeType: 'AUTH',        subtype: 'authenticate',  tainted: false },
   'server.ext':           { nodeType: 'STRUCTURAL', subtype: 'dependency',    tainted: false },
@@ -592,7 +592,7 @@ const MEMBER_CALLS: Record<string, CalleePattern> = {
   'context.req':          { nodeType: 'INGRESS',    subtype: 'http_request',  tainted: true },
   'graphql.execute':      { nodeType: 'EXTERNAL',   subtype: 'graphql_exec',  tainted: false },
   'ApolloServer.start':   { nodeType: 'STRUCTURAL', subtype: 'lifecycle',     tainted: false },
-  'server.applyMiddleware': { nodeType: 'STRUCTURAL', subtype: 'route_def',   tainted: false },
+  'server.applyMiddleware': { nodeType: 'STRUCTURAL', subtype: 'route',   tainted: false },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ORM: Prisma — unsafe raw query variants (explicit member calls)

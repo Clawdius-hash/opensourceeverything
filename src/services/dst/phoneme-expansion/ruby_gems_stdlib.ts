@@ -57,7 +57,7 @@ export const PHONEMES_RUBY_GEMS_STDLIB = {
   // Sinatra uses top-level DSL methods for routing. The existing ruby.ts has
   // Sinatra response helpers (halt, erb, haml) but no route definitions.
   // Pattern covers get/post/put/delete/patch — scanner wildcards handle the rest.
-  'Sinatra::Base.get':      { nodeType: 'STRUCTURAL', subtype: 'route_def',    tainted: false },
+  'Sinatra::Base.get':      { nodeType: 'STRUCTURAL', subtype: 'route',    tainted: false },
 
   // ── 7. Pundit policy scoping — AUTH (authorization) ────────────────────
   // policy_scope is how Pundit filters collections by authorization rules.
@@ -69,6 +69,6 @@ export const PHONEMES_RUBY_GEMS_STDLIB = {
   // ── 8. Devise route generation — STRUCTURAL ─────────────────────────
   // devise_for generates all auth routes (/sign_in, /sign_out, /password/new, etc.)
   // Without this, the scanner can't map Devise's implicit route surface.
-  'devise_for':             { nodeType: 'STRUCTURAL', subtype: 'route_def',    tainted: false },
+  'devise_for':             { nodeType: 'STRUCTURAL', subtype: 'route',    tainted: false },
 
 } as const;
