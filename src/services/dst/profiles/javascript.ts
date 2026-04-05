@@ -2423,6 +2423,12 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
       }
     }
   }
+  // No tainted return found — explicitly mark as clean (false).
+  // Distinguishes "analyzed, returns clean" from "never analyzed" (undefined).
+  const cleanFuncNodeId = ctx.currentScope?.containerNodeId;
+  if (cleanFuncNodeId && !ctx.functionReturnTaint.has(cleanFuncNodeId)) {
+    ctx.functionReturnTaint.set(cleanFuncNodeId, false);
+  }
 }
 
 // ---------------------------------------------------------------------------

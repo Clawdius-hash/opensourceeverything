@@ -882,7 +882,7 @@ function paramHasTaintAnnotation(paramNode: SyntaxNode): boolean {
 // Helper: check if a method has a Spring route annotation
 // ---------------------------------------------------------------------------
 
-function methodHasRouteAnnotation(methodNode: SyntaxNode): string | null {
+function methodHasRouteAnnotation(methodNode: SyntaxNode): { annotation: string; path: string | null } | null {
   // Check preceding siblings or modifiers for route annotations
   const modifiers = methodNode.childForFieldName('modifiers') ??
     methodNode.descendantsOfType('modifiers')[0];
@@ -893,8 +893,8 @@ function methodHasRouteAnnotation(methodNode: SyntaxNode): string | null {
     if (!mod) continue;
     if (mod.type === 'marker_annotation' || mod.type === 'annotation') {
       const annotName = mod.childForFieldName('name')?.text ?? mod.text.replace('@', '');
-      if (SPRING_ROUTE_ANNOTATIONS.has(annotName)) {
-        return annotName;
+      if (SPRING_ROUTE_ANNOTATIONS.has(annotName) || SERVLET_ANNOTATIONS.has(annotName)) {
+        return { annotation: annotName, path: extractAnnotationPath(mod) };
       }
     }
   }
@@ -935,6 +935,100 @@ function getAnnotationName(node: SyntaxNode): string {
     return name?.text ?? node.text.replace(/@([^(]+).*/, '$1');
   }
   return node.text;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract path value from an annotation's arguments
+// Handles: @GetMapping("/users"), @WebServlet(value="/api"), @WebServlet(urlPatterns={"/x"})
+// ---------------------------------------------------------------------------
+
+function extractAnnotationPath(annotNode: SyntaxNode): string | null {
+  // Only 'annotation' nodes have arguments; 'marker_annotation' never has a path
+  if (annotNode.type !== 'annotation') return null;
+
+  const argList = annotNode.childForFieldName('arguments');
+  if (!argList) return null;
+
+  for (let i = 0; i < argList.namedChildCount; i++) {
+    const child = argList.namedChild(i);
+    if (!child) continue;
+
+    // Case 1: bare string literal — @GetMapping("/users")
+    if (child.type === 'string_literal') {
+      return child.text.replace(/^"|"$/g, '');
+    }
+
+    // Case 2: element_value_pair — @WebServlet(value = "/api") or urlPatterns={"/x"}
+    if (child.type === 'element_value_pair') {
+      const key = child.childForFieldName('key')?.text;
+      const value = child.childForFieldName('value');
+      if (!value) continue;
+
+      if (key === 'value' || key === 'urlPatterns' || key === 'path') {
+        // Direct string literal: value = "/api"
+        if (value.type === 'string_literal') {
+          return value.text.replace(/^"|"$/g, '');
+        }
+        // Array initializer: urlPatterns = {"/x", "/y"} — take first
+        if (value.type === 'element_value_array_initializer') {
+          for (let j = 0; j < value.namedChildCount; j++) {
+            const elem = value.namedChild(j);
+            if (elem?.type === 'string_literal') {
+              return elem.text.replace(/^"|"$/g, '');
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: compose a class-level route prefix with a method-level path
+// ---------------------------------------------------------------------------
+
+function composePaths(prefix: string, methodPath: string): string {
+  if (!prefix && !methodPath) return '/';
+  if (!prefix) return methodPath.startsWith('/') ? methodPath : '/' + methodPath;
+  if (!methodPath) return prefix.startsWith('/') ? prefix : '/' + prefix;
+
+  const normalizedPrefix = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+  const normalizedMethod = methodPath.startsWith('/') ? methodPath : '/' + methodPath;
+
+  const composed = normalizedPrefix + normalizedMethod;
+  return composed.startsWith('/') ? composed : '/' + composed;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract class-level route prefix from @WebServlet or @RequestMapping
+// ---------------------------------------------------------------------------
+
+const SERVLET_ANNOTATIONS: ReadonlySet<string> = new Set([
+  'WebServlet',
+]);
+
+function extractClassRoutePrefix(classNode: SyntaxNode): { path: string | null; isServlet: boolean } {
+  const modifiers = classNode.childForFieldName('modifiers') ??
+    classNode.descendantsOfType('modifiers')[0];
+  if (!modifiers) return { path: null, isServlet: false };
+
+  for (let i = 0; i < modifiers.childCount; i++) {
+    const mod = modifiers.child(i);
+    if (!mod) continue;
+    if (mod.type === 'marker_annotation' || mod.type === 'annotation') {
+      const annotName = getAnnotationName(mod);
+      if (SERVLET_ANNOTATIONS.has(annotName)) {
+        return { path: extractAnnotationPath(mod), isServlet: true };
+      }
+      if (annotName === 'RequestMapping') {
+        return { path: extractAnnotationPath(mod), isServlet: false };
+      }
+    }
+  }
+
+  return { path: null, isServlet: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1571,10 +1665,56 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       });
 
       if (routeAnnotation) {
-        methodNode.tags.push('route', routeAnnotation);
+        methodNode.tags.push('route', routeAnnotation.annotation);
       }
       if (hasSecurityAnnotation) {
         methodNode.tags.push('auth_gate');
+      }
+
+      // Compose route path: class prefix + method annotation path
+      // Look for the enclosing class node to get any route prefix
+      let classRoutePrefix = '';
+      let isServletClass = false;
+      let parentNode = node.parent;
+      while (parentNode) {
+        if (parentNode.type === 'class_body' && parentNode.parent?.type === 'class_declaration') {
+          const classInfo = extractClassRoutePrefix(parentNode.parent);
+          classRoutePrefix = classInfo.path ?? '';
+          isServletClass = classInfo.isServlet;
+          break;
+        }
+        parentNode = parentNode.parent;
+      }
+
+      if (routeAnnotation?.path) {
+        methodNode.metadata.route_path = composePaths(classRoutePrefix, routeAnnotation.path);
+      } else if (routeAnnotation && classRoutePrefix) {
+        methodNode.metadata.route_path = classRoutePrefix.startsWith('/') ? classRoutePrefix : '/' + classRoutePrefix;
+      }
+
+      // Servlet method handling: doGet/doPost/doPut/doDelete inherit class @WebServlet path
+      const SERVLET_METHOD_HTTP_MAP: Record<string, string> = {
+        doGet: 'GET', doPost: 'POST', doPut: 'PUT', doDelete: 'DELETE',
+      };
+      if (isServletClass && SERVLET_METHOD_HTTP_MAP[name]) {
+        methodNode.metadata.http_method = SERVLET_METHOD_HTTP_MAP[name];
+        methodNode.node_subtype = 'route';
+        methodNode.tags.push('route', 'servlet');
+        if (classRoutePrefix) {
+          methodNode.metadata.route_path = classRoutePrefix.startsWith('/') ? classRoutePrefix : '/' + classRoutePrefix;
+        }
+      }
+
+      // Extract HTTP method from Spring mapping annotation name
+      if (routeAnnotation && !methodNode.metadata.http_method) {
+        const MAPPING_HTTP_MAP: Record<string, string> = {
+          GetMapping: 'GET', PostMapping: 'POST', PutMapping: 'PUT',
+          DeleteMapping: 'DELETE', PatchMapping: 'PATCH',
+        };
+        const httpMethod = MAPPING_HTTP_MAP[routeAnnotation.annotation];
+        if (httpMethod) {
+          methodNode.metadata.http_method = httpMethod;
+        }
       }
 
       // Extract param names from AST and populate param_names on the STRUCTURAL node
@@ -1687,6 +1827,12 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
       }
 
+      // Extract class-level route prefix (@WebServlet, @RequestMapping)
+      const classRouteInfo = extractClassRoutePrefix(node);
+      if (classRouteInfo.isServlet) {
+        subtype = 'controller';
+      }
+
       const classNode = createNode({
         label: name,
         node_type: 'STRUCTURAL',
@@ -1697,6 +1843,15 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         line_end: node.endPosition.row + 1,
         code_snapshot: node.text.slice(0, 200), analysis_snapshot: node.text.slice(0, 2000),
       });
+
+      // Store route metadata on the class node
+      if (classRouteInfo.path) {
+        classNode.metadata.route_path = classRouteInfo.path.startsWith('/') ? classRouteInfo.path : '/' + classRouteInfo.path;
+      }
+      if (classRouteInfo.isServlet) {
+        classNode.metadata.is_servlet_route = true;
+      }
+
       ctx.neuralMap.nodes.push(classNode);
       ctx.lastCreatedNodeId = classNode.id;
       ctx.emitContainsIfNeeded(classNode.id);
@@ -2455,6 +2610,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       const annotName = getAnnotationName(node);
       // Create META nodes for significant annotations
       if (SPRING_ROUTE_ANNOTATIONS.has(annotName) ||
+          SERVLET_ANNOTATIONS.has(annotName) ||
           SPRING_SECURITY_ANNOTATIONS.has(annotName) ||
           VALIDATION_ANNOTATIONS.has(annotName) ||
           SPRING_TAINT_ANNOTATIONS.has(annotName) ||
@@ -2464,7 +2620,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         const annotNode = createNode({
           label: `@${annotName}`,
           node_type: 'META',
-          node_subtype: SPRING_ROUTE_ANNOTATIONS.has(annotName) ? 'route_annotation' :
+          node_subtype: (SPRING_ROUTE_ANNOTATIONS.has(annotName) || SERVLET_ANNOTATIONS.has(annotName)) ? 'route_annotation' :
                         SPRING_SECURITY_ANNOTATIONS.has(annotName) ? 'security_annotation' :
                         VALIDATION_ANNOTATIONS.has(annotName) ? 'validation_annotation' :
                         'annotation',
@@ -2812,6 +2968,12 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
         }
       }
     }
+  }
+  // No tainted return found — explicitly mark as clean (false).
+  // Distinguishes "analyzed, returns clean" from "never analyzed" (undefined).
+  const cleanFuncNodeId = ctx.currentScope?.containerNodeId;
+  if (cleanFuncNodeId && !ctx.functionReturnTaint.has(cleanFuncNodeId)) {
+    ctx.functionReturnTaint.set(cleanFuncNodeId, false);
   }
 }
 

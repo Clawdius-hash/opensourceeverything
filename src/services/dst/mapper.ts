@@ -668,9 +668,9 @@ export class MapperContext {
         if ((lc.analysis_snapshot || lc.code_snapshot).match(
           new RegExp('\\b' + escaped + '\\s*\\(')
         ) !== null) {
-          // If the function was visited AND it does NOT return tainted data, remove
-          // the conservative taint from the call/passthrough node.
-          if (this.functionReturnTaint.has(funcNodeId) === false) {
+          // If the function was analyzed AND explicitly returns clean data, remove
+          // the conservative taint. Three-valued: true=tainted, false=clean, undefined=unanalyzed.
+          if (this.functionReturnTaint.get(funcNodeId) === false) {
             // GUARD: Before removing taint, check if the function is a potential
             // passthrough — a non-request parameter flows through to the return.
             // The mapper doesn't propagate call-site argument taint into function
