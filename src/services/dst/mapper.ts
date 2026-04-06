@@ -124,6 +124,7 @@ export class MapperContext {
    *  Set by postVisitFunction during the walk, read by PASS 2 Step 4b
    *  to propagate return taint to local_call nodes for forward-referenced functions. */
   readonly functionReturnTaint = new Map<string, boolean>();
+  readonly functionDefinitelyClean = new Map<string, boolean>();
 
   /** Fast lookup: node ID -> NeuralMapNode. Populated via registerNode().
    *  Eliminates O(n) .find() calls in addDataFlow, addContainsEdge,
@@ -681,6 +682,12 @@ export class MapperContext {
         ) !== null) {
           // If the function was analyzed AND explicitly returns clean data, remove
           // the conservative taint. Three-valued: true=tainted, false=clean, undefined=unanalyzed.
+          if (this.functionDefinitelyClean.get(funcNodeId) === true) {
+            // Function provably returns only literals — strip taint without passthrough check
+            lc.data_out = lc.data_out.filter(d => !d.tainted);
+            untaintedCallIds.add(lc.id);
+            break;
+          }
           if (this.functionReturnTaint.get(funcNodeId) === false) {
             // GUARD: Before removing taint, check if the function is a potential
             // passthrough — a non-request parameter flows through to the return.

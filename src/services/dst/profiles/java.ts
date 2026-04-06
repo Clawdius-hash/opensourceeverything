@@ -1220,6 +1220,16 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
           sources.push({ nodeId: existing.id, name: existing.label });
         }
       }
+      // If callee is DEFINITELY clean (returns only literals), arg taint doesn't flow through
+      if (sources.length > 0) {
+        const fnName = expr.childForFieldName('name');
+        if (fnName?.type === 'identifier') {
+          const funcNodeId = ctx.functionRegistry.get(fnName.text);
+          if (funcNodeId && ctx.functionDefinitelyClean.get(funcNodeId) === true) {
+            sources.length = 0;
+          }
+        }
+      }
       return sources;
     }
 
@@ -3235,6 +3245,57 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
 }
 
 // ---------------------------------------------------------------------------
+// isDefinitelyCleanExpression — conservative check for provably clean values
+// ---------------------------------------------------------------------------
+
+/** Returns true ONLY if the expression is provably a clean value (literal, constant). */
+function isDefinitelyCleanExpression(expr: SyntaxNode, ctx: MapperContextLike): boolean {
+  if (!expr) return false;
+  switch (expr.type) {
+    case 'string_literal':
+    case 'decimal_integer_literal':
+    case 'hex_integer_literal':
+    case 'octal_integer_literal':
+    case 'binary_integer_literal':
+    case 'decimal_floating_point_literal':
+    case 'hex_floating_point_literal':
+    case 'character_literal':
+    case 'true':
+    case 'false':
+    case 'null_literal':
+      return true;
+    case 'identifier': {
+      const v = ctx.resolveVariable(expr.text);
+      return v?.constantValue !== undefined;
+    }
+    case 'parenthesized_expression':
+      return expr.namedChild(0) ? isDefinitelyCleanExpression(expr.namedChild(0)!, ctx) : false;
+    case 'ternary_expression': {
+      const condition = expr.childForFieldName('condition');
+      const consequence = expr.childForFieldName('consequence');
+      const alternative = expr.childForFieldName('alternative');
+      const condResult = condition ? tryEvalCondition(condition, ctx) : null;
+      if (condResult === true) return consequence ? isDefinitelyCleanExpression(consequence, ctx) : false;
+      if (condResult === false) return alternative ? isDefinitelyCleanExpression(alternative, ctx) : false;
+      return (consequence ? isDefinitelyCleanExpression(consequence, ctx) : false)
+          && (alternative ? isDefinitelyCleanExpression(alternative, ctx) : false);
+    }
+    case 'cast_expression': {
+      const value = expr.childForFieldName('value');
+      return value ? isDefinitelyCleanExpression(value, ctx) : false;
+    }
+    case 'binary_expression': {
+      const left = expr.childForFieldName('left');
+      const right = expr.childForFieldName('right');
+      return (left ? isDefinitelyCleanExpression(left, ctx) : false)
+          && (right ? isDefinitelyCleanExpression(right, ctx) : false);
+    }
+    default:
+      return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // postVisitFunction — check if return expression is tainted
 // ---------------------------------------------------------------------------
 
@@ -3275,6 +3336,27 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
   const cleanFuncNodeId = ctx.currentScope?.containerNodeId;
   if (cleanFuncNodeId && !ctx.functionReturnTaint.has(cleanFuncNodeId)) {
     ctx.functionReturnTaint.set(cleanFuncNodeId, false);
+  }
+
+  // Determine if function is DEFINITELY clean (all return paths are provably literals/constants).
+  // Stricter than functionReturnTaint === false — won't flag passthroughs as clean.
+  const defCleanId = ctx.currentScope?.containerNodeId;
+  if (defCleanId) {
+    const allReturns = body.descendantsOfType('return_statement');
+    if (allReturns.length === 0) {
+      ctx.functionDefinitelyClean.set(defCleanId, true);
+    } else {
+      let allClean = true;
+      for (const ret of allReturns) {
+        const retExpr = ret.namedChild(0);
+        if (!retExpr) continue; // bare return; is clean
+        if (!isDefinitelyCleanExpression(retExpr, ctx)) {
+          allClean = false;
+          break;
+        }
+      }
+      ctx.functionDefinitelyClean.set(defCleanId, allClean);
+    }
   }
 }
 
