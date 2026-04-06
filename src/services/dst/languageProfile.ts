@@ -10,7 +10,7 @@
  */
 
 import type { Node as SyntaxNode } from 'web-tree-sitter';
-import type { NodeType } from './types.js';
+import type { NodeType, SemanticSentence } from './types.js';
 import type { CalleePattern } from './calleePatterns.js';
 import type { ScopeType, VariableInfo } from './mapper.js';
 
@@ -270,6 +270,10 @@ export interface MapperContextLike {
   getCurrentContainerId: () => string | null;
   addContainsEdge: (containerNodeId: string, childNodeId: string) => void;
   emitContainsIfNeeded: (childNodeId: string) => void;
+  /** V2: Accumulated semantic sentences */
+  sentences: SemanticSentence[];
+  /** V2: Add a sentence to the accumulator */
+  addSentence(s: SemanticSentence): void;
 }
 
 // ─── Taint source result ───────────────────────────────────────────────

@@ -115,6 +115,40 @@ export function rangeExcludesZero(range: RangeInfo): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// V2: Semantic sentence types
+// ---------------------------------------------------------------------------
+
+/** A deterministic semantic sentence describing what one piece of code does */
+export interface SemanticSentence {
+  /** Filled template text — the human-readable sentence */
+  text: string;
+  /** Template key used to generate this sentence */
+  templateKey: string;
+  /** Slot values interpolated into the template */
+  slots: Record<string, string>;
+  /** Line number in source (1-based) */
+  lineNumber: number;
+  /** ID of the NeuralMapNode that generated this sentence */
+  nodeId: string;
+  /** Taint classification */
+  taintClass: 'TAINTED' | 'SAFE' | 'SINK' | 'TRANSFORM' | 'STRUCTURAL' | 'NEUTRAL';
+}
+
+/** A record of a taint state change for variable history tracking */
+export interface TaintEvent {
+  /** Variable name */
+  variable: string;
+  /** New taint state */
+  tainted: boolean;
+  /** Why the state changed */
+  reason: string;
+  /** Index in the story where this happened */
+  sentenceIndex: number;
+  /** Node that caused the change */
+  nodeId: string;
+}
+
+// ---------------------------------------------------------------------------
 // Core interfaces
 // ---------------------------------------------------------------------------
 
@@ -191,6 +225,8 @@ export interface NeuralMapNode {
   tags: string[];
   /** Arbitrary key-value metadata */
   metadata: Record<string, unknown>;
+  /** Semantic sentences generated for this node during classification */
+  sentences?: SemanticSentence[];
 }
 
 export interface NeuralMap {
@@ -206,6 +242,8 @@ export interface NeuralMap {
   created_at: string;
   /** Version of the parser/mapper that produced this map */
   parser_version: string;
+  /** The complete semantic story — all sentences in execution order */
+  story?: SemanticSentence[];
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 
 import type { Node as SyntaxNode } from 'web-tree-sitter';
 import type Parser from 'web-tree-sitter';
-import type { NeuralMap, NeuralMapNode, Edge, Sensitivity, RangeInfo } from './types.js';
+import type { NeuralMap, NeuralMapNode, Edge, Sensitivity, RangeInfo, SemanticSentence, TaintEvent } from './types.js';
 import { createNode, createNeuralMap, resetSequence } from './types.js';
 import type { LanguageProfile } from './languageProfile.js';
 import { javascriptProfile } from './profiles/javascript.js';
@@ -156,6 +156,17 @@ export class MapperContext {
 
   /** The language profile driving this mapping session */
   readonly profile: LanguageProfile;
+
+  /** V2: Accumulated semantic sentences during the walk */
+  readonly sentences: SemanticSentence[] = [];
+
+  /** V2: Variable taint history log */
+  readonly taintLog: TaintEvent[] = [];
+
+  /** V2: Add a sentence to the accumulator */
+  addSentence(s: SemanticSentence): void {
+    this.sentences.push(s);
+  }
 
   constructor(sourceFile: string, sourceCode: string, profile: LanguageProfile = javascriptProfile) {
     resetSequence();
@@ -1173,6 +1184,11 @@ export function buildNeuralMap(
   ctx.buildReadsEdges();
   ctx.buildWritesEdges();
   ctx.buildDependsEdges();
+
+  // V2: Assemble story from accumulated sentences, sorted by line number
+  if (ctx.sentences.length > 0) {
+    ctx.neuralMap.story = [...ctx.sentences].sort((a, b) => a.lineNumber - b.lineNumber);
+  }
 
   const tDone = performance.now();
   ctx.diagnostics.timing.walkMs = Math.round(tWalkDone - t0);
