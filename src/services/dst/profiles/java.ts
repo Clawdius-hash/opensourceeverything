@@ -40,6 +40,8 @@ import type {
 import type { ScopeType, VariableInfo } from '../mapper.js';
 import type { CalleePattern } from '../calleePatterns.js';
 import { createNode } from '../types.js';
+import type { SemanticSentence } from '../types.js';
+import { generateSentence, getTemplateKey } from '../sentence-generator.js';
 import { lookupCallee as _lookupJavaCallee } from '../languages/java.js';
 
 // ---------------------------------------------------------------------------
@@ -1638,6 +1640,85 @@ function processFunctionParams(funcNode: SyntaxNode, ctx: MapperContextLike): vo
 }
 
 // ---------------------------------------------------------------------------
+// V2: Sentence generation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the variable name that a method call result is being assigned to.
+ * Looks at the parent AST node: `String kid = request.getParameter("kid")` → "kid"
+ */
+function varNameFromContext(callNode: SyntaxNode, ctx: MapperContextLike): string {
+  // Check if parent is variable_declarator: type varName = <callNode>
+  const parent = callNode.parent;
+  if (parent?.type === 'variable_declarator') {
+    const nameNode = parent.childForFieldName('name');
+    if (nameNode?.type === 'identifier') return nameNode.text;
+  }
+  // Check if parent is assignment_expression: varName = <callNode>
+  if (parent?.type === 'assignment_expression') {
+    const left = parent.childForFieldName('left');
+    if (left?.type === 'identifier') return left.text;
+  }
+  return 'result';
+}
+
+/**
+ * Collect variable names from an arguments node for sentence slots.
+ * `(a, b, "literal")` → "a, b, \"literal\""
+ */
+function collectArgVarNames(argsNode: SyntaxNode | null): string {
+  if (!argsNode) return '';
+  const names: string[] = [];
+  for (let i = 0; i < argsNode.namedChildCount; i++) {
+    const arg = argsNode.namedChild(i);
+    if (!arg) continue;
+    if (arg.type === 'identifier') {
+      names.push(arg.text);
+    } else if (arg.type === 'string_literal') {
+      names.push(arg.text.slice(0, 30));
+    } else if (arg.type === 'binary_expression') {
+      // String concatenation — collect identifiers within
+      const parts: string[] = [];
+      const walk = (n: SyntaxNode) => {
+        if (n.type === 'identifier') parts.push(n.text);
+        else if (n.type === 'string_literal') parts.push(n.text.slice(0, 20));
+        else { for (let c = 0; c < n.childCount; c++) { const ch = n.child(c); if (ch) walk(ch); } }
+      };
+      walk(arg);
+      names.push(parts.join(' + '));
+    } else {
+      names.push(arg.text?.slice(0, 30) ?? '?');
+    }
+  }
+  return names.join(', ');
+}
+
+/** Determine the taint class for a sentence based on node type, subtype, and taint state. */
+function resolveTaintClass(
+  nodeType: string,
+  subtype: string,
+  tainted: boolean,
+): SemanticSentence['taintClass'] {
+  if (nodeType === 'INGRESS' && tainted) return 'TAINTED';
+  if (nodeType === 'INGRESS') return 'NEUTRAL';
+  if (nodeType === 'STORAGE' && (subtype.includes('sql') || subtype.includes('query') || subtype.includes('db_'))) return 'SINK';
+  if (nodeType === 'TRANSFORM' && subtype === 'sanitize') return 'SAFE';
+  if (nodeType === 'CONTROL') return 'STRUCTURAL';
+  return 'NEUTRAL';
+}
+
+/** Emit a sentence to both the node and the mapper context. */
+function emitSentence(
+  sentence: SemanticSentence,
+  node: { sentences?: SemanticSentence[] },
+  ctx: MapperContextLike,
+): void {
+  if (!node.sentences) node.sentences = [];
+  node.sentences.push(sentence);
+  ctx.addSentence(sentence);
+}
+
+// ---------------------------------------------------------------------------
 // classifyNode — the heart of the switch statement
 // ---------------------------------------------------------------------------
 
@@ -2112,6 +2193,37 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           });
         }
 
+        // V2: Generate semantic sentence for CWE-relevant method invocations
+        {
+          const nodeIsTainted = resolution.tainted || n.data_out.some((d: any) => d.tainted);
+          const methodName = node.childForFieldName('name')?.text ?? '?';
+          const objText = calleeObj?.text?.slice(0, 40) ?? '';
+          const argsText = argsNode?.text?.slice(0, 60) ?? '';
+          let sentTaintClass = resolveTaintClass(resolution.nodeType, resolution.subtype, nodeIsTainted);
+          // PreparedStatement creation or parameter binding → SAFE
+          if (resolution.subtype === 'parameterized_query' || methodName === 'setString' || methodName === 'setInt' || methodName === 'setLong' || methodName === 'setObject') {
+            sentTaintClass = 'SAFE';
+          }
+          const templateKey = getTemplateKey(resolution.nodeType, resolution.subtype);
+          // Build template-appropriate slots
+          let slots: Record<string, string>;
+          if (templateKey === 'retrieves-from-source') {
+            slots = { subject: varNameFromContext(node, ctx), data_type: 'user input', source: `${objText}.${methodName}`, context: `line ${node.startPosition.row + 1}` };
+          } else if (templateKey === 'executes-query') {
+            // Collect variable names from args for the 'variables' slot
+            const varNames = collectArgVarNames(argsNode);
+            slots = { subject: objText || methodName, query_type: 'SQL', variables: varNames || argsText, context: `line ${node.startPosition.row + 1}` };
+          } else if (templateKey === 'parameter-binding') {
+            const indexArg = argsNode?.namedChild(0)?.text ?? '?';
+            const valueArg = argsNode?.namedChild(1)?.text?.slice(0, 40) ?? '?';
+            slots = { subject: objText || methodName, variable: valueArg, index: indexArg, context: `line ${node.startPosition.row + 1}` };
+          } else {
+            slots = { subject: objText || '?', method: methodName, object: objText, args: argsText, context: `line ${node.startPosition.row + 1}` };
+          }
+          const sentence = generateSentence(templateKey, slots, node.startPosition.row + 1, n.id, sentTaintClass);
+          emitSentence(sentence, n, ctx);
+        }
+
         // Collection mutation tainting: list.add(tainted) → mark list as tainted
         // Also maintains per-index collection taint when applicable.
         if (calleeObj?.type === 'identifier') {
@@ -2240,6 +2352,27 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                     ctx.addDataFlow(source.nodeId, aliasN.id, source.name, 'unknown', true);
                   }
                 }
+              }
+              // V2: Sentence for alias-resolved method call
+              {
+                const aliasIsTainted = aliasN.data_out.some((d: any) => d.tainted);
+                const aliasTemplateKey = getTemplateKey(aliasPattern.nodeType, aliasPattern.subtype);
+                const aliasMethodName = aliasName?.text ?? '?';
+                const aliasObjText = aliasObj?.text?.slice(0, 40) ?? '';
+                const aliasArgsText = aliasArgs?.text?.slice(0, 60) ?? '';
+                const aliasSentTaintClass = resolveTaintClass(aliasPattern.nodeType, aliasPattern.subtype, aliasIsTainted);
+                let aliasSlots: Record<string, string>;
+                if (aliasTemplateKey === 'executes-query') {
+                  aliasSlots = { subject: aliasObjText || aliasMethodName, query_type: 'SQL', variables: collectArgVarNames(aliasArgs) || aliasArgsText, context: `line ${node.startPosition.row + 1}` };
+                } else if (aliasTemplateKey === 'parameter-binding') {
+                  const idxArg = aliasArgs?.namedChild(0)?.text ?? '?';
+                  const valArg = aliasArgs?.namedChild(1)?.text?.slice(0, 40) ?? '?';
+                  aliasSlots = { subject: aliasObjText, variable: valArg, index: idxArg, context: `line ${node.startPosition.row + 1}` };
+                } else {
+                  aliasSlots = { subject: aliasObjText || '?', method: aliasMethodName, object: aliasObjText, args: aliasArgsText, context: `line ${node.startPosition.row + 1}` };
+                }
+                const aliasSentence = generateSentence(aliasTemplateKey, aliasSlots, node.startPosition.row + 1, aliasN.id, aliasSentTaintClass);
+                emitSentence(aliasSentence, aliasN, ctx);
               }
               break;
             }
@@ -2563,6 +2696,26 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             }
           }
         }
+
+        // V2: Generate sentence for object creation
+        {
+          const className = node.childForFieldName('type')?.text ?? '?';
+          const ctorArgsText = argsNode?.text?.slice(0, 60) ?? '';
+          const nodeIsTainted = resolution.tainted || n.data_out.some((d: any) => d.tainted);
+          let sentTaintClass = resolveTaintClass(resolution.nodeType, resolution.subtype, nodeIsTainted);
+          // PreparedStatement creation is SAFE
+          if (className === 'PreparedStatement' || className.endsWith('PreparedStatement')) {
+            sentTaintClass = 'SAFE';
+          }
+          const sentence = generateSentence(
+            'creates-instance',
+            { subject: varNameFromContext(node, ctx), class: className, args: ctorArgsText, context: `line ${node.startPosition.row + 1}` },
+            node.startPosition.row + 1,
+            n.id,
+            sentTaintClass,
+          );
+          emitSentence(sentence, n, ctx);
+        }
       }
       break;
     }
@@ -2862,6 +3015,25 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             });
           }
         }
+      }
+
+      // V2: Generate sentence for assignment
+      {
+        const rhsText = assignRight?.text?.slice(0, 60) ?? '?';
+        const isFromCall = assignRight?.type === 'method_invocation';
+        const templateKey = isFromCall ? 'assigned-from-call' : 'assigned-literal';
+        let slots: Record<string, string>;
+        if (isFromCall) {
+          const callObj = assignRight!.childForFieldName('object')?.text?.slice(0, 30) ?? '';
+          const callMethod = assignRight!.childForFieldName('name')?.text ?? '?';
+          const callArgs = assignRight!.childForFieldName('arguments')?.text?.slice(0, 40) ?? '';
+          slots = { subject: leftText, object: callObj, method: callMethod, args: callArgs, context: `line ${node.startPosition.row + 1}` };
+        } else {
+          slots = { subject: leftText, value: rhsText, context: `line ${node.startPosition.row + 1}` };
+        }
+        const sentTaintClass: SemanticSentence['taintClass'] = assignTainted ? 'TAINTED' : 'NEUTRAL';
+        const sentence = generateSentence(templateKey, slots, node.startPosition.row + 1, assignN.id, sentTaintClass);
+        emitSentence(sentence, assignN, ctx);
       }
 
       // --- Alias chain update on reassignment ---

@@ -10,11 +10,227 @@
  */
 
 import type { NeuralMap } from '../types';
-import type { VerificationResult, Finding } from './types.ts';
+import type { VerificationResult, Finding, NodeRef } from './types.ts';
 import { stripComments, stripLiterals, escapeRegExp, wholeWord, detectStaticValueNeutralization, resolveMapKeyTaint, detectInterproceduralNeutralization90 } from './source-analysis.ts';
 import { nodeRef, nodesOfType, inferMapLanguage, hasTaintedPathWithoutControl, sharesFunctionScope, hasDeadBranchForNode, isLineInDeadBranchFunction } from './graph-helpers.ts';
 import { getContainingScopeSnapshots, sinkHasTaintedDataIn, scopeBasedTaintReaches } from '../generated/_helpers.js';
 
+
+// ---------------------------------------------------------------------------
+// V2: Sentence-based CWE-89 detection
+// ---------------------------------------------------------------------------
+
+/** Variable taint state tracked during story walk. */
+interface VarTaintInfo {
+  tainted: boolean;
+  reason: string;
+  sourceNodeId: string;
+  /** Line where the taint was established */
+  sourceLine: number;
+}
+
+/**
+ * CWE-89 sentence verifier: walks the semantic story forward, building a
+ * variable taint map and detecting when tainted data reaches SQL sinks
+ * without parameterization.
+ *
+ * Returns findings when the sentence story proves a SQL injection path.
+ * Returns empty findings if the story is insufficient (caller falls back to legacy).
+ */
+function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  if (!map.story || map.story.length === 0) {
+    return { cwe: 'CWE-89', name: 'SQL Injection', holds: true, findings: [] };
+  }
+
+  // Cross-domain exclusion: same as legacy verifier
+  const NON_SQL_TEMPLATE_KEYS = new Set(['xpath_query', 'ldap_query', 'nosql_query']);
+
+  // Variable taint map: variable name → taint info
+  const taintMap = new Map<string, VarTaintInfo>();
+
+  // Track which statement objects have been parameterized (parameter-binding seen)
+  const parameterizedObjects = new Set<string>();
+
+  // Walk the story forward in execution order (already sorted by lineNumber in mapper)
+  for (const sentence of map.story) {
+    const { templateKey, slots, taintClass, nodeId, lineNumber } = sentence;
+
+    // 1. Track TAINTED sentences — mark variables as tainted
+    if (taintClass === 'TAINTED') {
+      const varName = slots.subject || slots.data_type || 'unknown';
+      taintMap.set(varName, {
+        tainted: true,
+        reason: sentence.text,
+        sourceNodeId: nodeId,
+        sourceLine: lineNumber,
+      });
+    }
+
+    // 2. Track SAFE sentences — mark variables as safe (sanitized or parameterized)
+    if (taintClass === 'SAFE') {
+      if (templateKey === 'parameter-binding') {
+        // Mark the statement object as parameterized
+        const stmtObj = slots.subject || '';
+        if (stmtObj) parameterizedObjects.add(stmtObj);
+      } else if (templateKey === 'creates-instance') {
+        // PreparedStatement creation — mark the variable as safe
+        const varName = slots.subject || '';
+        if (varName && varName !== 'result') {
+          taintMap.set(varName, {
+            tainted: false,
+            reason: `Parameterized: ${sentence.text}`,
+            sourceNodeId: nodeId,
+            sourceLine: lineNumber,
+          });
+        }
+      } else if (templateKey === 'calls-method') {
+        // Sanitizer call — mark subject as safe
+        const varName = slots.subject || '';
+        if (varName) {
+          taintMap.set(varName, {
+            tainted: false,
+            reason: `Sanitized: ${sentence.text}`,
+            sourceNodeId: nodeId,
+            sourceLine: lineNumber,
+          });
+        }
+      }
+    }
+
+    // 3. Track assignment sentences — propagate taint
+    if (templateKey === 'assigned-from-call' || templateKey === 'assigned-literal') {
+      const varName = slots.subject || '';
+      if (varName && taintClass === 'TAINTED') {
+        taintMap.set(varName, {
+          tainted: true,
+          reason: sentence.text,
+          sourceNodeId: nodeId,
+          sourceLine: lineNumber,
+        });
+      } else if (varName && taintClass === 'NEUTRAL') {
+        // Check if RHS references tainted variables
+        const rhsText = (slots.object || '') + '.' + (slots.method || '') + (slots.args || '') + (slots.value || '');
+        let rhsIsTainted = false;
+        for (const [tv, info] of taintMap) {
+          if (info.tainted && rhsText.includes(tv)) {
+            rhsIsTainted = true;
+            taintMap.set(varName, {
+              tainted: true,
+              reason: `Propagated from ${tv}: ${sentence.text}`,
+              sourceNodeId: info.sourceNodeId,
+              sourceLine: info.sourceLine,
+            });
+            break;
+          }
+        }
+        if (!rhsIsTainted) {
+          // Not tainted from this assignment
+          taintMap.set(varName, {
+            tainted: false,
+            reason: sentence.text,
+            sourceNodeId: nodeId,
+            sourceLine: lineNumber,
+          });
+        }
+      }
+    }
+
+    // 4. Track string concatenation — if any part is tainted, result is tainted
+    if (templateKey === 'string-concatenation') {
+      const varName = slots.subject || '';
+      const parts = slots.parts || '';
+      let concatTainted = false;
+      let concatSource: VarTaintInfo | undefined;
+      for (const [tv, info] of taintMap) {
+        if (info.tainted && parts.includes(tv)) {
+          concatTainted = true;
+          concatSource = info;
+          break;
+        }
+      }
+      if (concatTainted && varName && concatSource) {
+        taintMap.set(varName, {
+          tainted: true,
+          reason: `Concatenated with tainted data: ${sentence.text}`,
+          sourceNodeId: concatSource.sourceNodeId,
+          sourceLine: concatSource.sourceLine,
+        });
+      }
+    }
+
+    // 5. SINK detection: check if tainted data reaches SQL query
+    if (taintClass === 'SINK' && templateKey === 'executes-query') {
+      // Cross-domain exclusion
+      const queryType = (slots.query_type || '').toLowerCase();
+      if (NON_SQL_TEMPLATE_KEYS.has(queryType)) continue;
+
+      // Check the 'variables' slot for tainted variable names
+      const variables = slots.variables || '';
+      const sinkObj = slots.subject || '';
+
+      // Check if this statement object was parameterized
+      if (parameterizedObjects.has(sinkObj)) continue;
+
+      // Check if any tainted variable appears in the query variables
+      let taintedVarName: string | undefined;
+      let taintedInfo: VarTaintInfo | undefined;
+      for (const [tv, info] of taintMap) {
+        if (info.tainted && variables.includes(tv)) {
+          taintedVarName = tv;
+          taintedInfo = info;
+          break;
+        }
+      }
+
+      if (taintedVarName && taintedInfo) {
+        // Check for dead branch suppression
+        const sinkNode = map.nodes.find(n => n.id === nodeId);
+        if (sinkNode && hasDeadBranchForNode(map, sinkNode.id)) continue;
+
+        // Look backward in story for a parameter-binding sentence on the same object
+        const hasParameterBinding = map.story.some(s =>
+          s.templateKey === 'parameter-binding' &&
+          s.lineNumber <= lineNumber &&
+          (s.slots.subject === sinkObj || s.slots.subject === '')
+        );
+        if (hasParameterBinding) continue;
+
+        // Build source NodeRef
+        const sourceNode = map.nodes.find(n => n.id === taintedInfo!.sourceNodeId);
+        const sourceRef: NodeRef = sourceNode
+          ? { id: sourceNode.id, label: sourceNode.label, line: sourceNode.line_start, code: sourceNode.code_snapshot.slice(0, 200) }
+          : { id: taintedInfo.sourceNodeId, label: `taint source (line ${taintedInfo.sourceLine})`, line: taintedInfo.sourceLine, code: '' };
+
+        // Build sink NodeRef
+        const sinkRef: NodeRef = sinkNode
+          ? { id: sinkNode.id, label: sinkNode.label, line: sinkNode.line_start, code: sinkNode.code_snapshot.slice(0, 200) }
+          : { id: nodeId, label: `SQL query (line ${lineNumber})`, line: lineNumber, code: '' };
+
+        findings.push({
+          source: sourceRef,
+          sink: sinkRef,
+          missing: 'CONTROL (input validation or parameterized query)',
+          severity: 'critical',
+          description: `User input "${taintedVarName}" from ${sourceRef.label} flows to SQL query at ${sinkRef.label} without parameterization. ` +
+            `Story trace: ${taintedInfo.reason}`,
+          fix: 'Use parameterized queries (prepared statements) instead of string concatenation. ' +
+            'Example: db.query("SELECT * FROM users WHERE id = $1", [userId]) instead of ' +
+            'db.query("SELECT * FROM users WHERE id = " + userId)',
+          via: 'bfs',
+        });
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-89',
+    name: 'SQL Injection',
+    holds: findings.length === 0,
+    findings,
+  };
+}
 
 /**
  * CWE-89: SQL Injection
@@ -22,6 +238,13 @@ import { getContainingScopeSnapshots, sinkHasTaintedDataIn, scopeBasedTaintReach
  * Property: All database queries use parameterized statements when handling user input
  */
 function verifyCWE89(map: NeuralMap): VerificationResult {
+  // V2: Try sentence-based detection first
+  if (map.story && map.story.length > 0) {
+    const v2 = verifyCWE89_sentences(map);
+    if (v2.findings.length > 0) return v2;
+  }
+
+  // V1: Legacy BFS + regex path
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
 
