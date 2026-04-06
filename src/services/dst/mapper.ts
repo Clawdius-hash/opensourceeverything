@@ -126,6 +126,9 @@ export class MapperContext {
   readonly functionReturnTaint = new Map<string, boolean>();
   readonly functionDefinitelyClean = new Map<string, boolean>();
 
+  /** Node IDs whose taint was explicitly modified by PASS 2 inter-procedural analysis */
+  readonly taintModifiedNodeIds = new Set<string>();
+
   /** Fast lookup: node ID -> NeuralMapNode. Populated via registerNode().
    *  Eliminates O(n) .find() calls in addDataFlow, addContainsEdge,
    *  buildWritesEdges, buildCallsEdges, and propagateInterproceduralTaint. */
@@ -686,6 +689,7 @@ export class MapperContext {
             // Function provably returns only literals — strip taint without passthrough check
             lc.data_out = lc.data_out.filter(d => !d.tainted);
             untaintedCallIds.add(lc.id);
+            this.taintModifiedNodeIds.add(lc.id);
             break;
           }
           if (this.functionReturnTaint.get(funcNodeId) === false) {
@@ -835,6 +839,7 @@ export class MapperContext {
             if (!isPassthrough) {
               lc.data_out = lc.data_out.filter(d => !d.tainted);
               untaintedCallIds.add(lc.id);
+              this.taintModifiedNodeIds.add(lc.id);
             }
           }
           break;
@@ -918,6 +923,7 @@ export class MapperContext {
             name: 'return', source: lc.id, data_type: 'unknown',
             tainted: true, sensitivity: 'NONE' as const,
           });
+          this.taintModifiedNodeIds.add(lc.id);
           const ingressInFunc = contained.find(n => n.node_type === 'INGRESS');
           if (ingressInFunc) {
             this.addEdge(ingressInFunc.id, lc.id, 'DATA_FLOW', undefined, ingressInFunc);
@@ -1136,6 +1142,100 @@ function initializeTaint(map: NeuralMap): void {
 }
 
 /**
+ * Reconcile walk-time sentences with post-processing truth.
+ * Updates taintClass on sentences whose nodes' taint state changed,
+ * and records the reason for the change.
+ */
+function reconcileSentences(ctx: MapperContext): void {
+  // Inline resolveTaintClass — universal across languages
+  function resolveTC(nodeType: string, subtype: string, tainted: boolean): SemanticSentence['taintClass'] {
+    if (subtype === 'safe_source' || subtype === 'sanitize' || subtype === 'encode') return 'SAFE';
+    if (nodeType === 'INGRESS' && tainted) return 'TAINTED';
+    if (nodeType === 'INGRESS') return 'NEUTRAL';
+    if (nodeType === 'STORAGE' && (subtype.includes('sql') || subtype.includes('query') || subtype.includes('db_'))) return 'SINK';
+    if (nodeType === 'CONTROL') return 'STRUCTURAL';
+    if (tainted) return 'TAINTED';
+    return 'NEUTRAL';
+  }
+
+  for (const sentence of ctx.sentences) {
+    const node = ctx.nodeById.get(sentence.nodeId);
+    if (!node) continue;
+
+    // Skip role-based taintClasses — these don't change with taint
+    if (sentence.taintClass === 'SINK' || sentence.taintClass === 'STRUCTURAL' || sentence.taintClass === 'SAFE') continue;
+
+    // For assignment sentences, only reconcile if PASS 2 explicitly modified this node
+    const isAssignment = sentence.templateKey === 'assigned-from-call'
+      || sentence.templateKey === 'assigned-literal'
+      || sentence.templateKey === 'string-concatenation';
+    if (isAssignment && !ctx.taintModifiedNodeIds.has(sentence.nodeId)) continue;
+
+    // Compute what taintClass should be from the node's final state
+    const currentTainted = node.data_out.some(d => d.tainted);
+    const newTaintClass = resolveTC(node.node_type, node.node_subtype, currentTainted);
+
+    // Skip if unchanged
+    if (sentence.taintClass === newTaintClass) continue;
+    // Don't override to SINK/STRUCTURAL/SAFE from node state
+    if (newTaintClass === 'SINK' || newTaintClass === 'STRUCTURAL' || newTaintClass === 'SAFE') continue;
+
+    // Record the change with reason
+    sentence.reconciled = true;
+    sentence.originalTaintClass = sentence.taintClass;
+    sentence.taintClass = newTaintClass;
+    sentence.reconciliationReason = buildReconciliationReason(node, sentence.originalTaintClass, newTaintClass, ctx);
+  }
+}
+
+function buildReconciliationReason(
+  node: NeuralMapNode,
+  oldClass: SemanticSentence['taintClass'],
+  newClass: SemanticSentence['taintClass'],
+  ctx: MapperContext,
+): string {
+  const nodeDesc = `${node.node_subtype || node.node_type} (${node.id})`;
+
+  if (oldClass === 'TAINTED' && newClass === 'NEUTRAL') {
+    if (node.node_subtype === 'local_call' || node.node_subtype === 'passthrough') {
+      // Find which function was resolved
+      for (const [funcName, funcNodeId] of ctx.functionRegistry) {
+        if (funcName.includes(':')) continue;
+        const snap = node.analysis_snapshot || node.code_snapshot;
+        if (snap.includes(funcName + '(') || snap.includes(funcName + ' (')) {
+          if (ctx.functionDefinitelyClean.get(funcNodeId) === true) {
+            return `Taint removed: ${funcName} provably returns only literals (functionDefinitelyClean)`;
+          }
+          if (ctx.functionReturnTaint.get(funcNodeId) === false) {
+            return `Taint removed: ${funcName} does not propagate taint to return`;
+          }
+        }
+      }
+      return `Taint removed: ${nodeDesc} — PASS 2 determined output is clean`;
+    }
+    if (node.node_type === 'TRANSFORM') {
+      return `Taint removed: ${nodeDesc} is a transform — post-processing cleared taint`;
+    }
+    return `Taint removed: ${nodeDesc} — post-processing determined output is clean`;
+  }
+
+  if (oldClass === 'NEUTRAL' && newClass === 'TAINTED') {
+    if (node.node_type === 'INGRESS') {
+      return `Taint added: ${nodeDesc} is INGRESS — all outputs are user-controlled`;
+    }
+    if (node.node_type === 'EXTERNAL') {
+      return `Taint added: ${nodeDesc} is EXTERNAL — external data is untrusted`;
+    }
+    if (node.node_subtype === 'local_call' || node.node_subtype === 'passthrough') {
+      return `Taint added: ${nodeDesc} — function returns tainted data (PASS 2 resolved)`;
+    }
+    return `Taint added: ${nodeDesc} — post-processing determined output carries taint`;
+  }
+
+  return `Taint changed ${oldClass} -> ${newClass}: ${nodeDesc}`;
+}
+
+/**
  * Build a NeuralMap from a parsed tree-sitter tree.
  *
  * This skeleton version:
@@ -1191,6 +1291,9 @@ export function buildNeuralMap(
   ctx.buildReadsEdges();
   ctx.buildWritesEdges();
   ctx.buildDependsEdges();
+
+  // V2: Reconcile walk-time sentences with post-processing truth
+  reconcileSentences(ctx);
 
   // V2: Assemble story from accumulated sentences, sorted by line number
   if (ctx.sentences.length > 0) {

@@ -132,6 +132,12 @@ export interface SemanticSentence {
   nodeId: string;
   /** Taint classification */
   taintClass: 'TAINTED' | 'SAFE' | 'SINK' | 'TRANSFORM' | 'STRUCTURAL' | 'NEUTRAL';
+  /** True if reconciliation changed this sentence's taintClass */
+  reconciled?: boolean;
+  /** taintClass before reconciliation (only set when reconciled=true) */
+  originalTaintClass?: SemanticSentence['taintClass'];
+  /** Human-readable reason for the reconciliation change */
+  reconciliationReason?: string;
 }
 
 /** A record of a taint state change for variable history tracking */
