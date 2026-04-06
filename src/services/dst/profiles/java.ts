@@ -2082,6 +2082,11 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                 if (!getVar.collectionTaint[resolvedIdx]!.tainted) {
                   isCollectionSafeGet = true;
                   (ctx.neuralMap as any).collectionTaintNeutralized = true;
+                  const _ctnId1 = ctx.getCurrentContainerId();
+                  if (_ctnId1) {
+                    const _ctnNode1 = ctx.nodeById.get(_ctnId1);
+                    if (_ctnNode1) _ctnNode1.metadata.collectionTaintNeutralized = true;
+                  }
                 }
               }
             }
@@ -2459,6 +2464,11 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                   // This prevents scopeBasedTaintReaches from producing false positives
                   // when tainted data exists in scope but is neutralized before the sink.
                   (ctx.neuralMap as any).collectionTaintNeutralized = true;
+                  const _ctnId2 = ctx.getCurrentContainerId();
+                  if (_ctnId2) {
+                    const _ctnNode2 = ctx.nodeById.get(_ctnId2);
+                    if (_ctnNode2) _ctnNode2.metadata.collectionTaintNeutralized = true;
+                  }
                 }
               }
             }
