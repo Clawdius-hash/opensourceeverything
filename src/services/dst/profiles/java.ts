@@ -1220,12 +1220,12 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
           sources.push({ nodeId: existing.id, name: existing.label });
         }
       }
-      // If callee is DEFINITELY clean (returns only literals), arg taint doesn't flow through
+      // If callee returns clean data (functionReturnTaint === false), arg taint doesn't flow through
       if (sources.length > 0) {
         const fnName = expr.childForFieldName('name');
         if (fnName?.type === 'identifier') {
           const funcNodeId = ctx.functionRegistry.get(fnName.text);
-          if (funcNodeId && ctx.functionDefinitelyClean.get(funcNodeId) === true) {
+          if (funcNodeId && ctx.functionReturnTaint.get(funcNodeId) === false) {
             sources.length = 0;
           }
         }
@@ -1356,7 +1356,7 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         } else if (tainted) {
           // extractTaintSources found NO taint, but lastCreatedNode said tainted.
           // Trust extractTaintSources — it includes dead-branch elimination, safe-source
-          // detection, and functionDefinitelyClean suppression. Override lastCreatedNode.
+          // detection, and functionReturnTaint suppression. Override lastCreatedNode.
           tainted = false;
         }
       }
@@ -1587,6 +1587,18 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         const sentTaintClass: SemanticSentence['taintClass'] = tainted ? 'TAINTED' : 'NEUTRAL';
         const sentenceNode = producingNodeId ? ctx.neuralMap.nodes.find((n: any) => n.id === producingNodeId) : null;
         const sentence = generateSentence(templateKey, slots, node.startPosition.row + 1, producingNodeId ?? '', sentTaintClass);
+        // Determine taintBasis: if the value is a local function call, mark PENDING
+        if (isFromCall) {
+          const calleeName = valueNode.childForFieldName('name')?.text;
+          const calleeObj = valueNode.childForFieldName('object');
+          if (calleeName && !calleeObj && ctx.functionRegistry.has(calleeName)) {
+            sentence.taintBasis = 'PENDING';
+          } else {
+            sentence.taintBasis = 'PHONEME_RESOLUTION';
+          }
+        } else {
+          sentence.taintBasis = 'SCOPE_LOOKUP';
+        }
         if (sentenceNode) {
           if (!sentenceNode.sentences) sentenceNode.sentences = [];
           sentenceNode.sentences.push(sentence);
@@ -2321,6 +2333,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             slots = { subject: objText || '?', method: methodName, object: objText, args: argsText, context: `line ${node.startPosition.row + 1}` };
           }
           const sentence = generateSentence(templateKey, slots, node.startPosition.row + 1, n.id, sentTaintClass);
+          sentence.taintBasis = 'PHONEME_RESOLUTION';
           emitSentence(sentence, n, ctx);
         }
 
@@ -2472,6 +2485,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                   aliasSlots = { subject: aliasObjText || '?', method: aliasMethodName, object: aliasObjText, args: aliasArgsText, context: `line ${node.startPosition.row + 1}` };
                 }
                 const aliasSentence = generateSentence(aliasTemplateKey, aliasSlots, node.startPosition.row + 1, aliasN.id, aliasSentTaintClass);
+                aliasSentence.taintBasis = 'PHONEME_RESOLUTION';
                 emitSentence(aliasSentence, aliasN, ctx);
               }
               break;
@@ -2814,6 +2828,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             n.id,
             sentTaintClass,
           );
+          sentence.taintBasis = 'PHONEME_RESOLUTION';
           emitSentence(sentence, n, ctx);
         }
       }
@@ -3163,6 +3178,18 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         }
         const sentTaintClass: SemanticSentence['taintClass'] = assignTainted ? 'TAINTED' : 'NEUTRAL';
         const sentence = generateSentence(templateKey, slots, node.startPosition.row + 1, assignN.id, sentTaintClass);
+        // Determine taintBasis: local function call = PENDING, phoneme-resolved call = PHONEME, else SCOPE
+        if (isFromCall) {
+          const rhsCalleeName = assignRight!.childForFieldName('name')?.text;
+          const rhsCalleeObj = assignRight!.childForFieldName('object');
+          if (rhsCalleeName && !rhsCalleeObj && ctx.functionRegistry.has(rhsCalleeName)) {
+            sentence.taintBasis = 'PENDING';
+          } else {
+            sentence.taintBasis = 'PHONEME_RESOLUTION';
+          }
+        } else {
+          sentence.taintBasis = 'SCOPE_LOOKUP';
+        }
         emitSentence(sentence, assignN, ctx);
       }
 
@@ -3245,56 +3272,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// isDefinitelyCleanExpression — conservative check for provably clean values
-// ---------------------------------------------------------------------------
 
-/** Returns true ONLY if the expression is provably a clean value (literal, constant). */
-function isDefinitelyCleanExpression(expr: SyntaxNode, ctx: MapperContextLike): boolean {
-  if (!expr) return false;
-  switch (expr.type) {
-    case 'string_literal':
-    case 'decimal_integer_literal':
-    case 'hex_integer_literal':
-    case 'octal_integer_literal':
-    case 'binary_integer_literal':
-    case 'decimal_floating_point_literal':
-    case 'hex_floating_point_literal':
-    case 'character_literal':
-    case 'true':
-    case 'false':
-    case 'null_literal':
-      return true;
-    case 'identifier': {
-      const v = ctx.resolveVariable(expr.text);
-      return v?.constantValue !== undefined;
-    }
-    case 'parenthesized_expression':
-      return expr.namedChild(0) ? isDefinitelyCleanExpression(expr.namedChild(0)!, ctx) : false;
-    case 'ternary_expression': {
-      const condition = expr.childForFieldName('condition');
-      const consequence = expr.childForFieldName('consequence');
-      const alternative = expr.childForFieldName('alternative');
-      const condResult = condition ? tryEvalCondition(condition, ctx) : null;
-      if (condResult === true) return consequence ? isDefinitelyCleanExpression(consequence, ctx) : false;
-      if (condResult === false) return alternative ? isDefinitelyCleanExpression(alternative, ctx) : false;
-      return (consequence ? isDefinitelyCleanExpression(consequence, ctx) : false)
-          && (alternative ? isDefinitelyCleanExpression(alternative, ctx) : false);
-    }
-    case 'cast_expression': {
-      const value = expr.childForFieldName('value');
-      return value ? isDefinitelyCleanExpression(value, ctx) : false;
-    }
-    case 'binary_expression': {
-      const left = expr.childForFieldName('left');
-      const right = expr.childForFieldName('right');
-      return (left ? isDefinitelyCleanExpression(left, ctx) : false)
-          && (right ? isDefinitelyCleanExpression(right, ctx) : false);
-    }
-    default:
-      return false;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // postVisitFunction — check if return expression is tainted
@@ -3326,7 +3304,7 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
   // the block scope has already been popped. If the block-scope call already ran and set
   // the result, skip to avoid clobbering with stale (post-pop) scope state.
   if (node.type !== 'block') {
-    if (resolvedFuncNodeId && (ctx.functionReturnTaint.has(resolvedFuncNodeId) || ctx.functionDefinitelyClean.has(resolvedFuncNodeId))) {
+    if (resolvedFuncNodeId && ctx.functionReturnTaint.has(resolvedFuncNodeId)) {
       return; // Already processed by the block-scope call
     }
   }
@@ -3367,14 +3345,6 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
     ctx.functionReturnTaint.set(cleanFuncNodeId, false);
   }
 
-  // If we reached here, extractTaintSources found NO taint in ANY return expression.
-  // Combined with the scope being active (block-level call), this means the function's
-  // return value is proven clean — not just "we didn't see taint" but "we checked with
-  // full variable resolution including dead-branch elimination and found nothing."
-  // This IS functionDefinitelyClean.
-  if (resolvedFuncNodeId) {
-    ctx.functionDefinitelyClean.set(resolvedFuncNodeId, true);
-  }
 }
 
 // ---------------------------------------------------------------------------

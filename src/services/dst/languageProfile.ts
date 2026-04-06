@@ -261,13 +261,9 @@ export interface MapperContextLike {
   readonly pendingCalls: Array<{ callerContainerId: string; calleeName: string; isAsync: boolean }>;
   readonly pendingCallbackTaint: Map<string, string>;
   /** Maps function STRUCTURAL node ID -> whether the function returns tainted data.
-   *  Set by postVisitFunction, read by PASS 2 return taint propagation. */
+   *  Set by postVisitFunction, read by PASS 2 return taint propagation.
+   *  Three-valued: true=tainted, false=clean, undefined=unanalyzed. */
   readonly functionReturnTaint: Map<string, boolean>;
-  /** Maps function STRUCTURAL node ID -> whether the function DEFINITELY returns
-   *  only clean literals (not passthrough params or method calls).
-   *  true = ALL return paths are provably string/number literals or constants.
-   *  Absent/false = unknown or could be passthrough. */
-  readonly functionDefinitelyClean: Map<string, boolean>;
   lastCreatedNodeId: string | null;
   nodeSequence: number;
   currentScope: any | null;

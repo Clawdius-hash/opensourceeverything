@@ -132,6 +132,11 @@ export interface SemanticSentence {
   nodeId: string;
   /** Taint classification */
   taintClass: 'TAINTED' | 'SAFE' | 'SINK' | 'TRANSFORM' | 'STRUCTURAL' | 'NEUTRAL';
+  /** How the taintClass was determined at walk time.
+   *  SCOPE_LOOKUP = taint came from variable scope resolution
+   *  PHONEME_RESOLUTION = taint came from resolveCallee phoneme result
+   *  PENDING = function call whose return taint is not yet analyzed (resolved post-walk) */
+  taintBasis?: 'SCOPE_LOOKUP' | 'PHONEME_RESOLUTION' | 'PENDING';
   /** True if reconciliation changed this sentence's taintClass */
   reconciled?: boolean;
   /** taintClass before reconciliation (only set when reconciled=true) */
