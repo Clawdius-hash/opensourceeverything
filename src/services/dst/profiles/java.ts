@@ -1495,6 +1495,43 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         if (constantValue) v.constantValue = constantValue;
         if (numericValue !== undefined) v.numericValue = numericValue;
       }
+
+      // V2: Emit sentence for local variable declaration
+      if (valueNode && ctx.addSentence) {
+        const isFromCall = valueNode.type === 'method_invocation';
+        const isConcat = valueNode.type === 'binary_expression' &&
+          (valueNode.text?.includes('+') ?? false);
+        const templateKey = isFromCall ? 'assigned-from-call' : isConcat ? 'string-concatenation' : 'assigned-literal';
+        let slots: Record<string, string>;
+        if (isFromCall) {
+          const callObj = valueNode.childForFieldName('object')?.text?.slice(0, 30) ?? '';
+          const callMethod = valueNode.childForFieldName('name')?.text ?? '?';
+          const callArgs = valueNode.childForFieldName('arguments')?.text?.slice(0, 40) ?? '';
+          slots = { subject: varName, object: callObj, method: callMethod, args: callArgs, context: `line ${node.startPosition.row + 1}` };
+        } else if (isConcat) {
+          const parts: string[] = [];
+          const walkConcat = (n: any) => {
+            if (!n) return;
+            if (n.type === 'identifier') parts.push(n.text);
+            else if (n.type === 'binary_expression') {
+              walkConcat(n.childForFieldName('left'));
+              walkConcat(n.childForFieldName('right'));
+            }
+          };
+          walkConcat(valueNode);
+          slots = { subject: varName, parts: parts.join(', '), context: `line ${node.startPosition.row + 1}` };
+        } else {
+          slots = { subject: varName, value: valueNode.text?.slice(0, 60) ?? '?', context: `line ${node.startPosition.row + 1}` };
+        }
+        const sentTaintClass: SemanticSentence['taintClass'] = tainted ? 'TAINTED' : 'NEUTRAL';
+        const sentenceNode = producingNodeId ? ctx.neuralMap.nodes.find((n: any) => n.id === producingNodeId) : null;
+        const sentence = generateSentence(templateKey, slots, node.startPosition.row + 1, producingNodeId ?? '', sentTaintClass);
+        if (sentenceNode) {
+          if (!sentenceNode.sentences) sentenceNode.sentences = [];
+          sentenceNode.sentences.push(sentence);
+        }
+        ctx.addSentence(sentence);
+      }
     }
     return;
   }
@@ -3021,13 +3058,28 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
       {
         const rhsText = assignRight?.text?.slice(0, 60) ?? '?';
         const isFromCall = assignRight?.type === 'method_invocation';
-        const templateKey = isFromCall ? 'assigned-from-call' : 'assigned-literal';
+        const isConcat = assignRight?.type === 'binary_expression' &&
+          (assignRight.childForFieldName('operator')?.text === '+' || assignRight.text.includes('+'));
+        const templateKey = isFromCall ? 'assigned-from-call' : isConcat ? 'string-concatenation' : 'assigned-literal';
         let slots: Record<string, string>;
         if (isFromCall) {
           const callObj = assignRight!.childForFieldName('object')?.text?.slice(0, 30) ?? '';
           const callMethod = assignRight!.childForFieldName('name')?.text ?? '?';
           const callArgs = assignRight!.childForFieldName('arguments')?.text?.slice(0, 40) ?? '';
           slots = { subject: leftText, object: callObj, method: callMethod, args: callArgs, context: `line ${node.startPosition.row + 1}` };
+        } else if (isConcat) {
+          // Extract all identifier parts from the binary expression tree
+          const parts: string[] = [];
+          const walkConcat = (n: any) => {
+            if (!n) return;
+            if (n.type === 'identifier') parts.push(n.text);
+            else if (n.type === 'binary_expression') {
+              walkConcat(n.childForFieldName('left'));
+              walkConcat(n.childForFieldName('right'));
+            }
+          };
+          walkConcat(assignRight);
+          slots = { subject: leftText, parts: parts.join(', '), context: `line ${node.startPosition.row + 1}` };
         } else {
           slots = { subject: leftText, value: rhsText, context: `line ${node.startPosition.row + 1}` };
         }

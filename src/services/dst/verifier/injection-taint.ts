@@ -243,8 +243,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     const v2 = verifyCWE89_sentences(map);
     if (v2.findings.length > 0) return v2;
   }
-
-  // V1: Legacy BFS + regex path
+  // V1: Legacy BFS + regex path (fallback when V2 finds nothing)
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
 
