@@ -11,8 +11,8 @@
 
 import type { NeuralMap } from '../types';
 import type { VerificationResult, Finding } from './types.ts';
-import { stripComments, stripLiterals, escapeRegExp, wholeWord, detectDeadBranchNeutralization, detectStaticValueNeutralization, resolveMapKeyTaint, detectInterproceduralNeutralization90 } from './source-analysis.ts';
-import { nodeRef, nodesOfType, inferMapLanguage, hasTaintedPathWithoutControl, sharesFunctionScope } from './graph-helpers.ts';
+import { stripComments, stripLiterals, escapeRegExp, wholeWord, detectStaticValueNeutralization, resolveMapKeyTaint, detectInterproceduralNeutralization90 } from './source-analysis.ts';
+import { nodeRef, nodesOfType, inferMapLanguage, hasTaintedPathWithoutControl, sharesFunctionScope, hasDeadBranchForNode, isLineInDeadBranchFunction } from './graph-helpers.ts';
 import { getContainingScopeSnapshots, sinkHasTaintedDataIn, scopeBasedTaintReaches } from '../generated/_helpers.js';
 
 
@@ -58,19 +58,13 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     return true;
   });
 
-  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
-  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch89_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranch89_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranch89 = hasDeadBranch89_regex || hasDeadBranch89_tag;
-
   for (const src of ingress) {
     for (const sink of storage) {
       // Primary: BFS taint path. Fallback (Step 8): check data_in tainted entries on sink.
       const bfsHit89 = hasTaintedPathWithoutControl(map, src.id, sink.id);
       const sinkTaintHit89 = !bfsHit89 && sinkHasTaintedDataIn(map, sink.id);
       if (bfsHit89 || sinkTaintHit89) {
-        if (hasDeadBranch89) continue;
+        if (hasDeadBranchForNode(map, sink.id)) continue;
         // Check if the sink or containing scope uses parameterized queries
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -105,7 +99,7 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
   // Source-line fallback for Java: detect SQL injection inside anonymous inner classes
   // where taint crosses class boundaries (e.g., JWT header.get("kid") → executeQuery).
   // The mapper doesn't trace taint across inner class boundaries, so BFS misses these.
-  if (findings.length === 0 && map.source_code && !hasDeadBranch89 && !map.nodes.some(n => n.metadata?.collectionTaintNeutralized === true) && !(map as any).collectionTaintNeutralized) {
+  if (findings.length === 0 && map.source_code && !map.nodes.some(n => n.metadata?.collectionTaintNeutralized === true) && !(map as any).collectionTaintNeutralized) {
     const sl89 = stripComments(map.source_code);
     const lines89 = sl89.split('\n');
 
@@ -206,15 +200,17 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
     }
 
     if (hasSqlConcat && innerSrcLine > 0) {
-      findings.push({
-        source: { id: `srcline-${innerSrcLine}`, label: `inner class input (line ${innerSrcLine})`, line: innerSrcLine, code: innerSrcCode.slice(0, 200) },
-        sink: { id: `srcline-${sqlLine}`, label: `SQL query (line ${sqlLine})`, line: sqlLine, code: sqlCode.slice(0, 200) },
-        missing: 'CONTROL (input validation or parameterized query)',
-        severity: 'critical',
-        description: `Data extracted inside inner class flows to SQL query at line ${sqlLine} via string concatenation without parameterization.`,
-        fix: 'Use parameterized queries (prepared statements) instead of string concatenation.',
-        via: 'source_line_fallback',
-      });
+      if (!isLineInDeadBranchFunction(map, sqlLine)) {
+        findings.push({
+          source: { id: `srcline-${innerSrcLine}`, label: `inner class input (line ${innerSrcLine})`, line: innerSrcLine, code: innerSrcCode.slice(0, 200) },
+          sink: { id: `srcline-${sqlLine}`, label: `SQL query (line ${sqlLine})`, line: sqlLine, code: sqlCode.slice(0, 200) },
+          missing: 'CONTROL (input validation or parameterized query)',
+          severity: 'critical',
+          description: `Data extracted inside inner class flows to SQL query at line ${sqlLine} via string concatenation without parameterization.`,
+          fix: 'Use parameterized queries (prepared statements) instead of string concatenation.',
+          via: 'source_line_fallback',
+        });
+      }
     }
   }
 
@@ -275,12 +271,6 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
      (n.analysis_snapshot || n.code_snapshot).match(/\b(render_template_string|render_template|Template)\b/i) !== null))
   );
 
-  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
-  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch79_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranch79_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranch79 = hasDeadBranch79_regex || hasDeadBranch79_tag;
-
   // Interprocedural neutralization: inner-class/helper methods that kill taint via
   // static value replacement, HashMap safe-key retrieval, or taint abandonment.
   const hasInterproceduralKill79 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
@@ -321,7 +311,7 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
       const sinkTaintHit79 = !bfsHit79 && sinkHasTaintedDataIn(map, sink.id);
       const scopeTaintHit79 = !bfsHit79 && !sinkTaintHit79 && scopeBasedTaintReaches(map, src.id, sink.id);
       if (bfsHit79 || sinkTaintHit79 || scopeTaintHit79) {
-        if (hasDeadBranch79 || hasInterproceduralKill79 || hasMapKeySafeRetrieval79) continue;
+        if (hasDeadBranchForNode(map, sink.id) || hasInterproceduralKill79 || hasMapKeySafeRetrieval79) continue;
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
         const isEncoded = combinedScope.match(
@@ -790,13 +780,6 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // Path traversal safe patterns: canonicalization + boundary check
   const PATH_SAFE_RE = /\bpath\.resolve\b|\bpath\.normalize\b|\bstartsWith\b|\b\.\.\/\b|\bsanitize.*path|\bgetCanonicalPath\b|\bgetCanonicalFile\b|\bPaths\.get\b.*\bnormalize\b|\brealpath\b|\bfilepath\.Clean\b/i;
 
-  // Java: detect dead-branch taint neutralization patterns in source code.
-  // BenchmarkJava uses ternary/switch with constant conditions to neutralize taint.
-  // The mapper over-approximates these, so we suppress graph-based findings when
-  // the source code proves the tainted branch is never taken.
-  const hasDeadBranchNeutralization_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranchNeutralization_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranchNeutralization = hasDeadBranchNeutralization_regex || hasDeadBranchNeutralization_tag;
   // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
   const hasStaticValueNeutralization22 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   const hasInterproceduralNeutralization22 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
@@ -843,7 +826,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
         // safe-source, or map-key neutralization is detected.
         // The graph tracks taint through all branches, but constant ternary/switch patterns
         // guarantee the tainted branch is never taken.
-        if (hasDeadBranchNeutralization || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasMapKeySafeRetrieval22) continue;
+        if (hasDeadBranchForNode(map, sink.id) || hasStaticValueNeutralization22 || hasInterproceduralNeutralization22 || hasMapKeySafeRetrieval22) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -870,7 +853,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // (getParameter, getCookies, getHeaders) flows to File/FileInputStream/FileOutputStream
   // constructors via local variable assignment + string concatenation, even when
   // the mapper doesn't emit DATA_FLOW edges for the full chain.
-  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
+  if (findings.length === 0 && map.source_code && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
     const src = stripComments(map.source_code);
     // Normalize: collapse whitespace/newlines for multi-line statement parsing
     const normalized = src.replace(/\n\s*/g, ' ');
@@ -961,17 +944,19 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
             (n.analysis_snapshot || n.code_snapshot).match(/new\s+(?:java\.io\.)?(?:File|FileInputStream|FileOutputStream)\s*\(/) !== null
           );
           if (bestSrc && bestSink) {
-            findings.push({
-              source: nodeRef(bestSrc),
-              sink: nodeRef(bestSink),
-              missing: 'CONTROL (path validation / directory restriction)',
-              severity: 'high',
-              description: `User input from ${bestSrc.label} controls a file path at ${bestSink.label} without validation. ` +
-                `An attacker can use ../../ to access files outside the intended directory.`,
-              fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
-                'Never use user input directly in file operations.',
-              via: 'source_line_fallback',
-            });
+            if (!isLineInDeadBranchFunction(map, bestSink.line_start)) {
+              findings.push({
+                source: nodeRef(bestSrc),
+                sink: nodeRef(bestSink),
+                missing: 'CONTROL (path validation / directory restriction)',
+                severity: 'high',
+                description: `User input from ${bestSrc.label} controls a file path at ${bestSink.label} without validation. ` +
+                  `An attacker can use ../../ to access files outside the intended directory.`,
+                fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
+                  'Never use user input directly in file operations.',
+                via: 'source_line_fallback',
+              });
+            }
           }
         }
       }
@@ -984,7 +969,7 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // and uses it in new File(directory, paramName) without canonicalization checks.
   // This catches cross-method taint where a controller passes user input to a helper.
   // Skip when dead-branch neutralization proves taint never reaches the sink.
-  if (findings.length === 0 && map.source_code && !hasDeadBranchNeutralization && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
+  if (findings.length === 0 && map.source_code && !hasStaticValueNeutralization22 && !hasInterproceduralNeutralization22 && !hasMapKeySafeRetrieval22) {
     const sl22m = stripComments(map.source_code);
     const lines22m = sl22m.split('\n');
 
@@ -1067,17 +1052,19 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
       }
 
       if (fileSinkFound && fileParamLine > 0) {
-        findings.push({
-          source: { id: `srcline-${fileParamLine}`, label: `method parameter (line ${fileParamLine})`, line: fileParamLine, code: fileParamCode.slice(0, 200) },
-          sink: { id: `srcline-${fileSinkLine}`, label: `file operation (line ${fileSinkLine})`, line: fileSinkLine, code: fileSinkCode.slice(0, 200) },
-          missing: 'CONTROL (path validation / directory restriction)',
-          severity: 'high',
-          description: `Method parameter used as filename flows to File constructor at line ${fileSinkLine} without path validation. ` +
-            `If the caller passes user-controlled input, an attacker can use ../../ to traverse directories.`,
-          fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
-            'Reject requests where the canonical path escapes the intended directory.',
-          via: 'source_line_fallback',
-        });
+        if (!isLineInDeadBranchFunction(map, fileSinkLine)) {
+          findings.push({
+            source: { id: `srcline-${fileParamLine}`, label: `method parameter (line ${fileParamLine})`, line: fileParamLine, code: fileParamCode.slice(0, 200) },
+            sink: { id: `srcline-${fileSinkLine}`, label: `file operation (line ${fileSinkLine})`, line: fileSinkLine, code: fileSinkCode.slice(0, 200) },
+            missing: 'CONTROL (path validation / directory restriction)',
+            severity: 'high',
+            description: `Method parameter used as filename flows to File constructor at line ${fileSinkLine} without path validation. ` +
+              `If the caller passes user-controlled input, an attacker can use ../../ to traverse directories.`,
+            fix: 'Canonicalize the path with File.getCanonicalPath(), then verify it starts with your allowed base directory. ' +
+              'Reject requests where the canonical path escapes the intended directory.',
+            via: 'source_line_fallback',
+          });
+        }
       }
     }
   }
@@ -1121,16 +1108,11 @@ function verifyCWE23(map: NeuralMap): VerificationResult {
   // CWE-23-specific safe patterns: canonicalization or explicit dot-dot rejection
   const RELATIVE_SAFE_RE = /\bgetCanonicalPath\b|\bgetCanonicalFile\b|\brealpath\b|\bpath\.resolve\b.*\bstartsWith\b|\bstartsWith\b.*\bpath\.resolve\b|\b\.contains\s*\(\s*["']\.\.["']\s*\)|\bindexOf\s*\(\s*["']\.\.["']\s*\)|\bincludes\s*\(\s*["']\.\.["']\s*\)|\bnormalize\b.*\bstartsWith\b|\bfilepath\.Clean\b|\bFilenameUtils\.normalize\b/i;
 
-  // Dead-branch neutralization detection (shared helper, same as CWE-22)
-  const hasDeadBranchNeutralization_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranchNeutralization_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranchNeutralization = hasDeadBranchNeutralization_regex || hasDeadBranchNeutralization_tag;
-
   // --- Strategy 1: Graph-based detection — INGRESS->file-op with path concatenation ---
   for (const src of ingress) {
     for (const sink of fileOps) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (hasDeadBranchNeutralization) continue;
+        if (hasDeadBranchForNode(map, sink.id)) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -1309,16 +1291,11 @@ function verifyCWE36(map: NeuralMap): VerificationResult {
   // CWE-36-specific safe patterns: enforce a base directory prefix, or reject absolute paths
   const ABSOLUTE_SAFE_RE = /\bstartsWith\b|\bisAbsolute\b.*reject|\bisAbsolute\b.*throw|\bisAbsolute\b.*return|\bpath\.relative\b|\bchroot\b|\bjail\b|\bsandbox\b|\bwhitelist\b.*path|\ballowedPaths\b|\bgetCanonicalPath\b.*\bstartsWith\b|\bstartsWith\b.*\bgetCanonicalPath\b|\bFilenameUtils\.normalize\b.*\bstartsWith\b/i;
 
-  // Dead-branch neutralization detection (shared helper, same as CWE-22)
-  const hasDeadBranchNeutralization_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranchNeutralization_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranchNeutralization = hasDeadBranchNeutralization_regex || hasDeadBranchNeutralization_tag;
-
   // --- Strategy 1: Graph-based detection — INGRESS->file-op where input is used as entire path ---
   for (const src of ingress) {
     for (const sink of fileOps) {
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (hasDeadBranchNeutralization) continue;
+        if (hasDeadBranchForNode(map, sink.id)) continue;
 
         const scopeSnapshots = getContainingScopeSnapshots(map, sink.id);
         const combinedScope = stripComments(scopeSnapshots.join('\n') || sink.analysis_snapshot || sink.code_snapshot);
@@ -2850,12 +2827,6 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
   );
   const SAFE643 = /\bescapeXPath\b|\bxpath.*param\b|\bxpath.*compile\b|\bsanitize.*xpath\b|\bXPathVariableResolver\b|\bregister.*variable\b/i;
 
-  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
-  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch643_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranch643_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranch643 = hasDeadBranch643_regex || hasDeadBranch643_tag;
-
   // Interprocedural static neutralization: the called method (e.g., doSomething) abandons
   // the tainted parameter and returns a value derived from a static literal instead.
   const hasInterproceduralStatic643 = map.source_code
@@ -2866,7 +2837,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
     for (const sink of xpSinks643) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (hasDeadBranch643 || hasInterproceduralStatic643) continue;
+        if (hasDeadBranchForNode(map, sink.id) || hasInterproceduralStatic643) continue;
         if (!SAFE643.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE643.test(stripComments(src.analysis_snapshot || src.code_snapshot))) {
           const concat = XP_CAT643.test(sink.analysis_snapshot || sink.code_snapshot);
           findings.push({
@@ -2883,12 +2854,13 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
       }
     }
   }
-  if (findings.length === 0 && ingress643.length > 0 && !hasDeadBranch643 && !hasInterproceduralStatic643) {
+  if (findings.length === 0 && ingress643.length > 0 && !hasInterproceduralStatic643) {
     const xpScope643 = map.nodes.filter(n => n.node_type !== 'META' && n.node_type !== 'STRUCTURAL' && XP_CAT643.test(n.analysis_snapshot || n.code_snapshot));
     for (const src of ingress643) {
       for (const sink of xpScope643) {
         if (src.id === sink.id) continue;
         if (sharesFunctionScope(map, src.id, sink.id) && !SAFE643.test(stripComments(sink.analysis_snapshot || sink.code_snapshot))) {
+          if (isLineInDeadBranchFunction(map, sink.line_start)) continue;
           findings.push({
             source: nodeRef(src), sink: nodeRef(sink),
             missing: 'CONTROL (XPath parameterization or input escaping)',
@@ -2902,7 +2874,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
     }
   }
   // Source-line fallback for Java XPath injection: interprocedural taint tracking
-  if (findings.length === 0 && map.source_code && !hasDeadBranch643 && !hasInterproceduralStatic643) {
+  if (findings.length === 0 && map.source_code && !hasInterproceduralStatic643) {
     // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
     {
       const sl643 = map.source_code.split('\n');
@@ -3006,6 +2978,7 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
                 /\+/.test(window643)) { hit643 = true; break; }
           }
           if (hit643) {
+            if (isLineInDeadBranchFunction(map, i + 1)) continue;
             findings.push({
               source: { id: `srcline-${sln643}`, label: `user input (line ${sln643})`, line: sln643, code: scd643.slice(0, 200) },
               sink: { id: `srcline-${i + 1}`, label: `XPath query (line ${i + 1})`, line: i + 1, code: ln.slice(0, 200) },
@@ -3255,11 +3228,6 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
 
   const LDAP_SAFE90 = /\b(ldap\.escape|escapeLDAP|ldapEscape|escape_filter_chars|filter\.escape|Filter\.(and|or|eq|present|approx)|ldap_escape|sanitizeLdap|escapeDN|escapeFilter)\b/i;
 
-  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
-  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch90_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranch90_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranch90 = hasDeadBranch90_regex || hasDeadBranch90_tag;
   // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
   const hasStaticVal90 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   // Interprocedural neutralization: check if inner-class/helper method kills taint
@@ -3273,7 +3241,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
       const bfsHit90 = hasTaintedPathWithoutControl(map, src.id, sink.id);
       const sinkTaintHit90 = !bfsHit90 && sinkHasTaintedDataIn(map, sink.id);
       if (bfsHit90 || sinkTaintHit90) {
-        if (hasDeadBranch90 || hasStaticVal90 || hasInterproceduralKill90) continue;
+        if (hasDeadBranchForNode(map, sink.id) || hasStaticVal90 || hasInterproceduralKill90) continue;
         const sinkCode90 = stripComments(sink.analysis_snapshot || sink.code_snapshot);
         if (!LDAP_SAFE90.test(sinkCode90)) {
           const usesFilterConcat90 = LDAP_FILTER_CONCAT90.test(sinkCode90);
@@ -3297,7 +3265,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
   }
 
   // Source-line fallback for Java LDAP injection: interprocedural taint tracking
-  if (findings.length === 0 && map.source_code && !hasDeadBranch90) {
+  if (findings.length === 0 && map.source_code) {
     const sl90 = map.source_code.split('\n');
     const SRC90 = /(\w+)\s*=\s*(?:\w+\.)*(?:getParameter|getParameterValues|getHeader|getHeaders|getCookies|getQueryString|getInputStream|getReader|getTheParameter|System\.getenv|getParameterMap)\s*\(/;
     const LDAP_SINK_RE90 = /\b(?:search|DirContext\.search|NamingEnumeration|ctx\.search|dirContext\.search|ldapTemplate\.search|idc\.search)\s*\(/;
@@ -3449,6 +3417,7 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
           }
         }
         if (hit90) {
+          if (isLineInDeadBranchFunction(map, i + 1)) continue;
           findings.push({
             source: { id: `srcline-${sln90}`, label: `user input (line ${sln90})`, line: sln90, code: scd90.slice(0, 200) },
             sink: { id: `srcline-${i + 1}`, label: `LDAP query (line ${i + 1})`, line: i + 1, code: ln.slice(0, 200) },

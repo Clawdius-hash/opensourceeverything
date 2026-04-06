@@ -16,8 +16,8 @@
 
 import type { NeuralMap, NeuralMapNode } from '../types';
 import type { VerificationResult, Finding } from './types.ts';
-import { stripComments, detectDeadBranchNeutralization, resolveMapKeyTaint } from './source-analysis.ts';
-import { FLOW_EDGE_TYPES, nodeRef, nodesOfType, isLibraryCode, hasWebFrameworkContext, hasTaintedPathWithoutControl, hasTaintedPathWithoutAuth, findContainingFunction, sharesFunctionScope } from './graph-helpers.ts';
+import { stripComments, resolveMapKeyTaint } from './source-analysis.ts';
+import { FLOW_EDGE_TYPES, nodeRef, nodesOfType, isLibraryCode, hasWebFrameworkContext, hasTaintedPathWithoutControl, hasTaintedPathWithoutAuth, findContainingFunction, sharesFunctionScope, hasDeadBranchForNode, isLineInDeadBranchFunction } from './graph-helpers.ts';
 
 // Satisfy TS -- FLOW_EDGE_TYPES is used in BFS within verifyCWE352
 void FLOW_EDGE_TYPES;
@@ -1395,17 +1395,11 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
   );
   const SAFE501 = /\bvalidate\s*\(|\bsanitize\s*\(|\bschema\b|\bz\.\w|\bjoi\b|\byup\b|\bclass-?validator\b|\bassert\s*\(|\bverify\s*\(|\bisValid\s*\(|\bclean\s*\(/i;
 
-  // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
-  // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch501_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
-  const hasDeadBranch501_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
-  const hasDeadBranch501 = hasDeadBranch501_regex || hasDeadBranch501_tag;
-
   for (const src of ingress501) {
     for (const sink of trustSinks501) {
       if (src.id === sink.id) continue;
       if (hasTaintedPathWithoutControl(map, src.id, sink.id)) {
-        if (hasDeadBranch501) continue;
+        if (hasDeadBranchForNode(map, sink.id)) continue;
         if (!SAFE501.test(stripComments(sink.analysis_snapshot || sink.code_snapshot)) && !SAFE501.test(stripComments(src.analysis_snapshot || src.code_snapshot))) {
           const st = SESS501.test(sink.analysis_snapshot || sink.code_snapshot) ? 'session' : ENV501.test(sink.analysis_snapshot || sink.code_snapshot) ? 'environment/global' : 'trusted cache/config';
           findings.push({
@@ -1422,7 +1416,7 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
   }
 
   // Phase 2: source-line fallback for Java HttpSession patterns
-  if (findings.length === 0 && map.source_code && !hasDeadBranch501) {
+  if (findings.length === 0 && map.source_code) {
     // Join multi-line assignments: if a line ends without semicolon, join with next line.
     // Strip inline comments (// ...) before checking line endings so that
     // "valuesList.remove(0); // comment" is recognized as ending with ";".
@@ -1675,6 +1669,7 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
       if (sinkM) {
         const sinkVar = sinkM[1] || sinkM[2];
         if (sinkVar && taintedVars.has(sinkVar)) {
+          if (isLineInDeadBranchFunction(map, i + 1)) continue;
           findings.push({
             source: { id: `src-line-${srcLineNum}`, label: `user input (line ${srcLineNum})`, line: srcLineNum, code: srcLineCode.slice(0, 200) },
             sink: { id: `src-line-${i + 1}`, label: `session store (line ${i + 1})`, line: i + 1, code: line.slice(0, 200) },
