@@ -63,44 +63,28 @@ function detectSQLi_pure(map: NeuralMap): { vulnerable: boolean; reason: string;
       }
     }
 
-    // Track assignments — propagate taint
+    // Track assignments — TRUST the sentence taintClass (reconciled by mapper)
     if (templateKey === 'assigned-from-call' || templateKey === 'assigned-literal') {
       const varName = slots.subject || '';
       if (varName) {
         if (taintClass === 'TAINTED') {
           taintMap.set(varName, { tainted: true, reason: sentence.text });
-        } else if (taintClass === 'NEUTRAL') {
-          // Check if RHS references any tainted variable
-          const rhs = `${slots.object || ''}.${slots.method || ''}${slots.args || ''}${slots.value || ''}`;
-          let rhsTainted = false;
-          for (const [tv, info] of taintMap) {
-            if (info.tainted && rhs.includes(tv)) {
-              rhsTainted = true;
-              break;
-            }
-          }
-          if (rhsTainted) {
-            taintMap.set(varName, { tainted: true, reason: 'propagated via: ' + sentence.text });
-          } else {
-            taintMap.set(varName, { tainted: false, reason: 'clean assignment: ' + sentence.text });
-          }
+        } else {
+          // NEUTRAL means mapper says not tainted — trust it
+          taintMap.set(varName, { tainted: false, reason: 'mapper resolved clean: ' + sentence.text });
         }
       }
     }
 
-    // Track string concatenation — propagate taint
+    // Track string concatenation — TRUST the sentence taintClass
     if (templateKey === 'string-concatenation') {
       const varName = slots.subject || '';
-      const parts = slots.parts || '';
-      let partTainted = false;
-      for (const [tv, info] of taintMap) {
-        if (info.tainted && parts.includes(tv)) {
-          partTainted = true;
-          break;
+      if (varName) {
+        if (taintClass === 'TAINTED') {
+          taintMap.set(varName, { tainted: true, reason: 'tainted concat: ' + sentence.text });
+        } else {
+          taintMap.set(varName, { tainted: false, reason: 'clean concat: ' + sentence.text });
         }
-      }
-      if (partTainted && varName) {
-        taintMap.set(varName, { tainted: true, reason: 'concat with tainted: ' + sentence.text });
       }
     }
 
