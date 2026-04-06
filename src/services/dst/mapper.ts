@@ -1293,6 +1293,40 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
 
   // Recurse into children
   const isStatementContainer = profile.isStatementContainer(node.type);
+
+  // ── Inner class pre-walk: for class_body nodes, walk class_declaration children FIRST ──
+  // This ensures inner class methods are fully resolved before outer methods can reference them.
+  if (node.type === 'class_body') {
+    const savedLastNodeId = ctx.lastCreatedNodeId;
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child && child.type === 'class_declaration') {
+        walkWithScopes(child, ctx, profile);
+      }
+    }
+    ctx.lastCreatedNodeId = savedLastNodeId;
+
+    // Now walk non-class-declaration children (methods, fields, etc.)
+    for (let i = 0; i < node.childCount; i++) {
+      if (isStatementContainer) ctx.lastCreatedNodeId = null;
+      const child = node.child(i);
+      if (!child) continue;
+      if (child.type === 'class_declaration') continue; // already walked above
+      walkWithScopes(child, ctx, profile);
+    }
+
+    // Post-visit hooks
+    if (profile.postVisitIteration) {
+      profile.postVisitIteration(node, ctx);
+    }
+    if (profile.postVisitFunction) {
+      profile.postVisitFunction(node, ctx);
+    }
+
+    if (pushedScope) ctx.popScope();
+    return; // skip the normal single-pass iteration below
+  }
+
   for (let i = 0; i < node.childCount; i++) {
     if (isStatementContainer) {
       ctx.lastCreatedNodeId = null;
