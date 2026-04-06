@@ -1307,11 +1307,15 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
       }
 
       // Direct taint extraction from the value expression
-      if (!tainted && valueNode) {
+      if (valueNode) {
         const directTaint = extractTaintSources(valueNode, ctx);
         if (directTaint.length > 0) {
           tainted = true;
           producingNodeId = directTaint[0].nodeId;
+        } else if (valueNode.type === 'ternary_expression' || valueNode.type === 'conditional_expression') {
+          // Dead-branch elimination returned no taint sources — the live branch is safe.
+          // Override any taint from lastCreatedNode.
+          tainted = false;
         }
       }
 
@@ -1757,6 +1761,7 @@ function resolveTaintClass(
   if (nodeType === 'INGRESS') return 'NEUTRAL';
   if (nodeType === 'STORAGE' && (subtype.includes('sql') || subtype.includes('query') || subtype.includes('db_'))) return 'SINK';
   if (nodeType === 'CONTROL') return 'STRUCTURAL';
+  if (tainted) return 'TAINTED';
   return 'NEUTRAL';
 }
 

@@ -110,53 +110,20 @@ function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
           sourceLine: lineNumber,
         });
       } else if (varName && taintClass === 'NEUTRAL') {
-        // Check if RHS references tainted variables
-        const rhsText = (slots.object || '') + '.' + (slots.method || '') + (slots.args || '') + (slots.value || '');
-        let rhsIsTainted = false;
-        for (const [tv, info] of taintMap) {
-          if (info.tainted && rhsText.includes(tv)) {
-            rhsIsTainted = true;
-            taintMap.set(varName, {
-              tainted: true,
-              reason: `Propagated from ${tv}: ${sentence.text}`,
-              sourceNodeId: info.sourceNodeId,
-              sourceLine: info.sourceLine,
-            });
-            break;
-          }
-        }
-        if (!rhsIsTainted) {
-          // Not tainted from this assignment
-          taintMap.set(varName, {
-            tainted: false,
-            reason: sentence.text,
-            sourceNodeId: nodeId,
-            sourceLine: lineNumber,
-          });
-        }
+        // Mapper says this result is not tainted — trust it.
+        taintMap.set(varName, { tainted: false, reason: 'mapper resolved: ' + sentence.text, sourceNodeId: nodeId, sourceLine: lineNumber });
       }
     }
 
-    // 4. Track string concatenation — if any part is tainted, result is tainted
+    // 4. Track string concatenation — mapper taintClass reflects whether the concat result is tainted
     if (templateKey === 'string-concatenation') {
       const varName = slots.subject || '';
-      const parts = slots.parts || '';
-      let concatTainted = false;
-      let concatSource: VarTaintInfo | undefined;
-      for (const [tv, info] of taintMap) {
-        if (info.tainted && parts.includes(tv)) {
-          concatTainted = true;
-          concatSource = info;
-          break;
+      if (varName) {
+        if (taintClass === 'TAINTED') {
+          taintMap.set(varName, { tainted: true, reason: 'tainted concat: ' + sentence.text, sourceNodeId: nodeId, sourceLine: lineNumber });
+        } else {
+          taintMap.set(varName, { tainted: false, reason: 'clean concat: ' + sentence.text, sourceNodeId: nodeId, sourceLine: lineNumber });
         }
-      }
-      if (concatTainted && varName && concatSource) {
-        taintMap.set(varName, {
-          tainted: true,
-          reason: `Concatenated with tainted data: ${sentence.text}`,
-          sourceNodeId: concatSource.sourceNodeId,
-          sourceLine: concatSource.sourceLine,
-        });
       }
     }
 
