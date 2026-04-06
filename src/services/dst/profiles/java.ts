@@ -1353,9 +1353,10 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         if (directTaint.length > 0) {
           tainted = true;
           producingNodeId = directTaint[0].nodeId;
-        } else if (valueNode.type === 'ternary_expression' || valueNode.type === 'conditional_expression') {
-          // Dead-branch elimination returned no taint sources — the live branch is safe.
-          // Override any taint from lastCreatedNode.
+        } else if (tainted) {
+          // extractTaintSources found NO taint, but lastCreatedNode said tainted.
+          // Trust extractTaintSources — it includes dead-branch elimination, safe-source
+          // detection, and functionDefinitelyClean suppression. Override lastCreatedNode.
           tainted = false;
         }
       }
@@ -3300,11 +3301,39 @@ function isDefinitelyCleanExpression(expr: SyntaxNode, ctx: MapperContextLike): 
 // ---------------------------------------------------------------------------
 
 function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
-  if (node.type !== 'method_declaration' && node.type !== 'constructor_declaration' && node.type !== 'lambda_expression') {
+  // Accept method/constructor/lambda directly, OR accept a block that is the body of one.
+  // The block-scope call happens while local variables are still accessible.
+  // The method_declaration call happens after the block scope is popped (used as no-op guard).
+  let targetNode = node;
+  if (node.type === 'block') {
+    const parent = node.parent;
+    if (parent && (parent.type === 'method_declaration' || parent.type === 'constructor_declaration' || parent.type === 'lambda_expression')) {
+      targetNode = parent; // Use the parent for name/param extraction, but we have block scope
+    } else {
+      return; // Not a function body block
+    }
+  } else if (node.type !== 'method_declaration' && node.type !== 'constructor_declaration' && node.type !== 'lambda_expression') {
     return;
   }
 
-  const body = node.childForFieldName('body');
+  // Resolve the function's NeuralMapNode ID.
+  // When called on a `block` node, ctx.currentScope is the block scope (containerNodeId=null),
+  // so we must walk up the stack via getCurrentContainerId() to reach the function scope.
+  // When called on a method_declaration/etc., ctx.currentScope IS the function scope.
+  const resolvedFuncNodeId = ctx.getCurrentContainerId();
+
+  // When called on method_declaration/constructor_declaration/lambda_expression directly,
+  // the block scope has already been popped. If the block-scope call already ran and set
+  // the result, skip to avoid clobbering with stale (post-pop) scope state.
+  if (node.type !== 'block') {
+    if (resolvedFuncNodeId && (ctx.functionReturnTaint.has(resolvedFuncNodeId) || ctx.functionDefinitelyClean.has(resolvedFuncNodeId))) {
+      return; // Already processed by the block-scope call
+    }
+  }
+
+  // When called on a block node, body IS the block itself (we're already inside it).
+  // When called on a method_declaration/etc., body is extracted from targetNode as before.
+  const body = targetNode.childForFieldName('body') ?? (node.type === 'block' ? node : null);
   if (!body) return;
 
   // Check for return statements with tainted expressions
@@ -3315,7 +3344,7 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
       if (retExpr) {
         const taintSources = extractTaintSources(retExpr, ctx);
         if (taintSources.length > 0) {
-          const funcNodeId = ctx.currentScope?.containerNodeId;
+          const funcNodeId = resolvedFuncNodeId;
           if (funcNodeId) {
             const funcNode = ctx.neuralMap.nodes.find((n: any) => n.id === funcNodeId);
             if (funcNode && !funcNode.data_out.some((d: any) => d.tainted)) {
@@ -3333,30 +3362,18 @@ function postVisitFunction(node: SyntaxNode, ctx: MapperContextLike): void {
   }
   // No tainted return found — explicitly mark as clean (false).
   // Distinguishes "analyzed, returns clean" from "never analyzed" (undefined).
-  const cleanFuncNodeId = ctx.currentScope?.containerNodeId;
+  const cleanFuncNodeId = resolvedFuncNodeId;
   if (cleanFuncNodeId && !ctx.functionReturnTaint.has(cleanFuncNodeId)) {
     ctx.functionReturnTaint.set(cleanFuncNodeId, false);
   }
 
-  // Determine if function is DEFINITELY clean (all return paths are provably literals/constants).
-  // Stricter than functionReturnTaint === false — won't flag passthroughs as clean.
-  const defCleanId = ctx.currentScope?.containerNodeId;
-  if (defCleanId) {
-    const allReturns = body.descendantsOfType('return_statement');
-    if (allReturns.length === 0) {
-      ctx.functionDefinitelyClean.set(defCleanId, true);
-    } else {
-      let allClean = true;
-      for (const ret of allReturns) {
-        const retExpr = ret.namedChild(0);
-        if (!retExpr) continue; // bare return; is clean
-        if (!isDefinitelyCleanExpression(retExpr, ctx)) {
-          allClean = false;
-          break;
-        }
-      }
-      ctx.functionDefinitelyClean.set(defCleanId, allClean);
-    }
+  // If we reached here, extractTaintSources found NO taint in ANY return expression.
+  // Combined with the scope being active (block-level call), this means the function's
+  // return value is proven clean — not just "we didn't see taint" but "we checked with
+  // full variable resolution including dead-branch elimination and found nothing."
+  // This IS functionDefinitelyClean.
+  if (resolvedFuncNodeId) {
+    ctx.functionDefinitelyClean.set(resolvedFuncNodeId, true);
   }
 }
 
