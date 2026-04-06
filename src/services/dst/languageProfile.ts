@@ -244,6 +244,10 @@ export interface LanguageProfile {
    * Used by walkWithScopes to skip dead branches in if_statement nodes.
    */
   tryEvalCondition?: (condNode: SyntaxNode, ctx: MapperContextLike) => boolean | null;
+
+  /** Evaluate a switch expression's target to a constant string value.
+   *  Returns the resolved constant (e.g., 'B' for a char) or null if unresolvable. */
+  tryEvalSwitchTarget?: (condNode: SyntaxNode, ctx: MapperContextLike) => string | null;
 }
 
 // ─── Minimal context interface ─────────────────────────────────────────

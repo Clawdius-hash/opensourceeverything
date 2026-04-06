@@ -1198,6 +1198,25 @@ export function buildNeuralMap(
   return { map: ctx.neuralMap, ctx };
 }
 
+/** Extract constant value from a switch case label */
+function tryFoldCaseLabel(expr: SyntaxNode): string | null {
+  if (expr.type === 'character_literal') return expr.text.replace(/^'|'$/g, '');
+  if (expr.type === 'string_literal') return expr.text.replace(/^"|"$/g, '');
+  if (expr.type === 'decimal_integer_literal') return expr.text;
+  return null;
+}
+
+/** Check if a switch group ends with break/return/throw */
+function groupEndsWithBreak(group: SyntaxNode): boolean {
+  for (let i = group.namedChildCount - 1; i >= 0; i--) {
+    const child = group.namedChild(i);
+    if (!child || child.type === 'switch_label') continue;
+    return child.type === 'break_statement' || child.type === 'return_statement'
+        || child.type === 'throw_statement' || child.type === 'continue_statement';
+  }
+  return false;
+}
+
 /**
  * Walk the tree with proper scope push/pop on enter and leave.
  * This is a recursive walk that gives us both pre-order and post-order hooks.
@@ -1294,6 +1313,74 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
   // Recurse into children
   const isStatementContainer = profile.isStatementContainer(node.type);
 
+  // ── Dead-branch elimination for switch blocks ──
+  // NOTE: tree-sitter creates new JS wrapper objects on each node access, so
+  // Set<SyntaxNode> identity comparisons do NOT work. Use Set<number> (node.id) instead.
+  const isSwitchBlock = node.type === 'switch_block';
+  const deadSwitchChildIds = new Set<number>();
+  if (isSwitchBlock && profile.tryEvalSwitchTarget && node.parent?.type === 'switch_expression') {
+    const condNode = node.parent.childForFieldName('condition');
+    if (condNode) {
+      const targetValue = profile.tryEvalSwitchTarget(condNode, ctx);
+      if (targetValue !== null) {
+        // Find which groups are live vs dead
+        const allGroups: SyntaxNode[] = [];
+        for (let i = 0; i < node.namedChildCount; i++) {
+          const g = node.namedChild(i);
+          if (g && (g.type === 'switch_block_statement_group' || g.type === 'switch_rule')) {
+            allGroups.push(g);
+          }
+        }
+
+        let matchedIdx = -1;
+        let defaultIdx = -1;
+        for (let i = 0; i < allGroups.length; i++) {
+          const group = allGroups[i];
+          let isDefault = false;
+          let matches = false;
+          for (let j = 0; j < group.namedChildCount; j++) {
+            const child = group.namedChild(j);
+            if (child?.type !== 'switch_label') continue;
+            const labelExpr = child.namedChild(0);
+            if (!labelExpr) { isDefault = true; }
+            else {
+              const labelValue = tryFoldCaseLabel(labelExpr);
+              if (labelValue === targetValue) matches = true;
+            }
+          }
+          if (matches && matchedIdx === -1) matchedIdx = i;
+          if (isDefault) defaultIdx = i;
+        }
+
+        // Determine live group(s)
+        const liveIdx = matchedIdx !== -1 ? matchedIdx : defaultIdx;
+        if (liveIdx !== -1) {
+          const liveGroupIds = new Set<number>();
+          liveGroupIds.add(allGroups[liveIdx].id);
+          // Handle fall-through
+          if (allGroups[liveIdx].type !== 'switch_rule' && !groupEndsWithBreak(allGroups[liveIdx])) {
+            for (let k = liveIdx + 1; k < allGroups.length; k++) {
+              liveGroupIds.add(allGroups[k].id);
+              if (allGroups[k].type === 'switch_rule' || groupEndsWithBreak(allGroups[k])) break;
+            }
+          }
+          // Mark dead groups by their node ID
+          for (const g of allGroups) {
+            if (!liveGroupIds.has(g.id)) deadSwitchChildIds.add(g.id);
+          }
+          // Tag container for diagnostics
+          const _dbContainerId = ctx.getCurrentContainerId();
+          if (_dbContainerId) {
+            const _dbContainer = ctx.nodeById.get(_dbContainerId);
+            if (_dbContainer && !_dbContainer.metadata.dead_branch_eliminated) {
+              _dbContainer.metadata.dead_branch_eliminated = true;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ── Inner class pre-walk: for class_body nodes, walk class_declaration children FIRST ──
   // This ensures inner class methods are fully resolved before outer methods can reference them.
   if (node.type === 'class_body') {
@@ -1340,6 +1427,8 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
         if (skipConsequence && fieldName === 'consequence') continue;
         if (skipAlternative && fieldName === 'alternative') continue;
       }
+      // Dead-branch skip: if the child is a dead switch group, skip it.
+      if (deadSwitchChildIds.size > 0 && deadSwitchChildIds.has(child.id)) continue;
       walkWithScopes(child, ctx, profile);
     }
   }

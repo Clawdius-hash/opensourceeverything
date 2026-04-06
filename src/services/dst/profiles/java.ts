@@ -290,6 +290,37 @@ function tryEvalCondition(cond: SyntaxNode, ctx: MapperContextLike): boolean | n
 }
 
 /**
+ * Evaluate a switch expression's condition to a constant string value.
+ * Handles: charAt on constant strings, identifier resolving to a known constant char,
+ * numeric constants, and direct character literals.
+ * Returns the resolved constant (e.g., 'B' for a char) or null if unresolvable.
+ */
+function tryEvalSwitchTarget(condNode: SyntaxNode, ctx: MapperContextLike): string | null {
+  let expr = condNode;
+  if (expr.type === 'parenthesized_expression') expr = expr.namedChild(0) ?? expr;
+
+  // charAt on constant string: "ABC".charAt(1) → 'B'
+  const charAtResult = tryResolveCharAt(expr, ctx);
+  if (charAtResult !== null) return charAtResult;
+
+  // Identifier referencing a known constant char
+  if (expr.type === 'identifier') {
+    const v = ctx.resolveVariable(expr.text);
+    if (v?.constantValue !== undefined && v.constantValue.length === 1) return v.constantValue;
+    if (v?.numericValue !== undefined) return String(v.numericValue);
+  }
+
+  // Numeric constant
+  const numResult = tryFoldNumeric(expr, ctx);
+  if (numResult !== null) return String(numResult);
+
+  // Character literal directly
+  if (expr.type === 'character_literal') return expr.text.replace(/^'|'$/g, '');
+
+  return null;
+}
+
+/**
  * Try to resolve a charAt() call on a constant string variable.
  * Handles: guess.charAt(N) where guess is a constant string.
  * Returns the single character as a string, or null if unresolvable.
@@ -3370,6 +3401,8 @@ export const javaProfile: LanguageProfile = {
 
   // Dead-branch elimination: evaluate if conditions for constant folding
   tryEvalCondition: (condNode: any, ctx: any) => tryEvalCondition(condNode, ctx),
+  // Dead-branch elimination: evaluate switch expression target to a constant value
+  tryEvalSwitchTarget: (condNode: any, ctx: any) => tryEvalSwitchTarget(condNode, ctx),
 
   // Utility predicates
   isValueFirstDeclaration: (nodeType: string) =>
