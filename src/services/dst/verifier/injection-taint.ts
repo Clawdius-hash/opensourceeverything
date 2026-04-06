@@ -60,7 +60,9 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
 
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch89 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch89_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch89_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranch89 = hasDeadBranch89_regex || hasDeadBranch89_tag;
 
   for (const src of ingress) {
     for (const sink of storage) {
@@ -275,7 +277,9 @@ function verifyCWE79(map: NeuralMap): VerificationResult {
 
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch79 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch79_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch79_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranch79 = hasDeadBranch79_regex || hasDeadBranch79_tag;
 
   // Interprocedural neutralization: inner-class/helper methods that kill taint via
   // static value replacement, HashMap safe-key retrieval, or taint abandonment.
@@ -790,7 +794,9 @@ function verifyCWE22(map: NeuralMap): VerificationResult {
   // BenchmarkJava uses ternary/switch with constant conditions to neutralize taint.
   // The mapper over-approximates these, so we suppress graph-based findings when
   // the source code proves the tainted branch is never taken.
-  const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranchNeutralization_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranchNeutralization_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranchNeutralization = hasDeadBranchNeutralization_regex || hasDeadBranchNeutralization_tag;
   // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
   const hasStaticValueNeutralization22 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   const hasInterproceduralNeutralization22 = map.source_code ? detectInterproceduralNeutralization90(map.source_code) : false;
@@ -1116,7 +1122,9 @@ function verifyCWE23(map: NeuralMap): VerificationResult {
   const RELATIVE_SAFE_RE = /\bgetCanonicalPath\b|\bgetCanonicalFile\b|\brealpath\b|\bpath\.resolve\b.*\bstartsWith\b|\bstartsWith\b.*\bpath\.resolve\b|\b\.contains\s*\(\s*["']\.\.["']\s*\)|\bindexOf\s*\(\s*["']\.\.["']\s*\)|\bincludes\s*\(\s*["']\.\.["']\s*\)|\bnormalize\b.*\bstartsWith\b|\bfilepath\.Clean\b|\bFilenameUtils\.normalize\b/i;
 
   // Dead-branch neutralization detection (shared helper, same as CWE-22)
-  const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranchNeutralization_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranchNeutralization_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranchNeutralization = hasDeadBranchNeutralization_regex || hasDeadBranchNeutralization_tag;
 
   // --- Strategy 1: Graph-based detection — INGRESS->file-op with path concatenation ---
   for (const src of ingress) {
@@ -1302,7 +1310,9 @@ function verifyCWE36(map: NeuralMap): VerificationResult {
   const ABSOLUTE_SAFE_RE = /\bstartsWith\b|\bisAbsolute\b.*reject|\bisAbsolute\b.*throw|\bisAbsolute\b.*return|\bpath\.relative\b|\bchroot\b|\bjail\b|\bsandbox\b|\bwhitelist\b.*path|\ballowedPaths\b|\bgetCanonicalPath\b.*\bstartsWith\b|\bstartsWith\b.*\bgetCanonicalPath\b|\bFilenameUtils\.normalize\b.*\bstartsWith\b/i;
 
   // Dead-branch neutralization detection (shared helper, same as CWE-22)
-  const hasDeadBranchNeutralization = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranchNeutralization_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranchNeutralization_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranchNeutralization = hasDeadBranchNeutralization_regex || hasDeadBranchNeutralization_tag;
 
   // --- Strategy 1: Graph-based detection — INGRESS->file-op where input is used as entire path ---
   for (const src of ingress) {
@@ -2842,7 +2852,9 @@ function verifyCWE643(map: NeuralMap): VerificationResult {
 
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch643 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch643_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch643_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranch643 = hasDeadBranch643_regex || hasDeadBranch643_tag;
 
   // Interprocedural static neutralization: the called method (e.g., doSomething) abandons
   // the tainted parameter and returns a value derived from a static literal instead.
@@ -3245,7 +3257,9 @@ function verifyCWE90(map: NeuralMap): VerificationResult {
 
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch90 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch90_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch90_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranch90 = hasDeadBranch90_regex || hasDeadBranch90_tag;
   // Per-index collection taint tracking now handled by the mapper (collectionTaint on VariableInfo).
   const hasStaticVal90 = map.source_code ? detectStaticValueNeutralization(map.source_code) : false;
   // Interprocedural neutralization: check if inner-class/helper method kills taint

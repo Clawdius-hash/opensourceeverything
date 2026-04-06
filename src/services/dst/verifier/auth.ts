@@ -1397,7 +1397,9 @@ function verifyCWE501(map: NeuralMap): VerificationResult {
 
   // Dead-branch neutralization: suppress findings when constant arithmetic ternary/switch
   // guarantees the tainted branch is never taken (BenchmarkJava false-positive pattern).
-  const hasDeadBranch501 = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch501_regex = map.source_code ? detectDeadBranchNeutralization(map.source_code) : false;
+  const hasDeadBranch501_tag = map.nodes.some(n => n.metadata?.dead_branch_eliminated === true);
+  const hasDeadBranch501 = hasDeadBranch501_regex || hasDeadBranch501_tag;
 
   for (const src of ingress501) {
     for (const sink of trustSinks501) {

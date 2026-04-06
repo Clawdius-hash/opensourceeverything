@@ -1263,6 +1263,15 @@ function walkWithScopes(node: SyntaxNode, ctx: MapperContext, profile: LanguageP
       const condResult = profile.tryEvalCondition(condNode, ctx);
       if (condResult === true) skipAlternative = true;   // condition always true: skip else
       if (condResult === false) skipConsequence = true;  // condition always false: skip then
+      if (condResult === true || condResult === false) {
+        const _dbContainerId = ctx.getCurrentContainerId();
+        if (_dbContainerId) {
+          const _dbContainer = ctx.nodeById.get(_dbContainerId);
+          if (_dbContainer && !_dbContainer.metadata.dead_branch_eliminated) {
+            _dbContainer.metadata.dead_branch_eliminated = true;
+          }
+        }
+      }
     }
   }
 

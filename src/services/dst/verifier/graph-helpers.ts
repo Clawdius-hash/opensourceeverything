@@ -247,6 +247,32 @@ export function findContainingFunction(map: NeuralMap, nodeId: string): string |
 }
 
 /**
+ * Check whether the function containing the given node had dead branches
+ * eliminated by the mapper's constant evaluation.
+ */
+export function hasDeadBranchForNode(map: NeuralMap, nodeId: string): boolean {
+  const funcId = findContainingFunction(map, nodeId);
+  if (!funcId) return false;
+  const funcNode = map.nodes.find(n => n.id === funcId);
+  return funcNode?.metadata?.dead_branch_eliminated === true;
+}
+
+/**
+ * Check whether a given source line falls within a function that had dead
+ * branches eliminated by the mapper.
+ */
+export function isLineInDeadBranchFunction(map: NeuralMap, line: number): boolean {
+  for (const n of map.nodes) {
+    if (n.node_type === 'STRUCTURAL' &&
+        n.metadata?.dead_branch_eliminated === true &&
+        n.line_start <= line && n.line_end >= line) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * STRUCTURAL node subtypes that represent function-level scopes.
  * 'function' covers: function/method declarations, constructors, arrow functions, lambdas, closures, generators
  * 'route' covers: route-annotated methods (@GetMapping, [HttpGet], etc.)
