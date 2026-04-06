@@ -1520,6 +1520,21 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
           };
           walkConcat(valueNode);
           slots = { subject: varName, parts: parts.join(', '), context: `line ${node.startPosition.row + 1}` };
+        } else if (valueNode.type === 'ternary_expression') {
+          // Dead-branch ternary: only include the LIVE branch text
+          const condition = valueNode.childForFieldName('condition');
+          const consequence = valueNode.childForFieldName('consequence');
+          const alternative = valueNode.childForFieldName('alternative');
+          let liveText = valueNode.text?.slice(0, 60) ?? '?';
+          if (condition) {
+            const condResult = tryEvalCondition(condition, ctx);
+            if (condResult === true && consequence) {
+              liveText = consequence.text?.slice(0, 60) ?? '?';
+            } else if (condResult === false && alternative) {
+              liveText = alternative.text?.slice(0, 60) ?? '?';
+            }
+          }
+          slots = { subject: varName, value: liveText, context: `line ${node.startPosition.row + 1}` };
         } else {
           slots = { subject: varName, value: valueNode.text?.slice(0, 60) ?? '?', context: `line ${node.startPosition.row + 1}` };
         }
@@ -1736,10 +1751,11 @@ function resolveTaintClass(
   subtype: string,
   tainted: boolean,
 ): SemanticSentence['taintClass'] {
+  // Safe sources/sanitizers/encoders take priority — they neutralize taint regardless of node type
+  if (subtype === 'safe_source' || subtype === 'sanitize' || subtype === 'encode') return 'SAFE';
   if (nodeType === 'INGRESS' && tainted) return 'TAINTED';
   if (nodeType === 'INGRESS') return 'NEUTRAL';
   if (nodeType === 'STORAGE' && (subtype.includes('sql') || subtype.includes('query') || subtype.includes('db_'))) return 'SINK';
-  if (nodeType === 'TRANSFORM' && subtype === 'sanitize') return 'SAFE';
   if (nodeType === 'CONTROL') return 'STRUCTURAL';
   return 'NEUTRAL';
 }
@@ -3080,6 +3096,21 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           };
           walkConcat(assignRight);
           slots = { subject: leftText, parts: parts.join(', '), context: `line ${node.startPosition.row + 1}` };
+        } else if (assignRight?.type === 'ternary_expression') {
+          // Dead-branch ternary: only include the LIVE branch text
+          const condition = assignRight.childForFieldName('condition');
+          const consequence = assignRight.childForFieldName('consequence');
+          const alternative = assignRight.childForFieldName('alternative');
+          let liveText = assignRight.text?.slice(0, 60) ?? '?';
+          if (condition) {
+            const condResult = tryEvalCondition(condition, ctx);
+            if (condResult === true && consequence) {
+              liveText = consequence.text?.slice(0, 60) ?? '?';
+            } else if (condResult === false && alternative) {
+              liveText = alternative.text?.slice(0, 60) ?? '?';
+            }
+          }
+          slots = { subject: leftText, value: liveText, context: `line ${node.startPosition.row + 1}` };
         } else {
           slots = { subject: leftText, value: rhsText, context: `line ${node.startPosition.row + 1}` };
         }
