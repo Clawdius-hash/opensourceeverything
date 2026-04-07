@@ -51,6 +51,10 @@ function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
   // so we trust it directly without second-guessing node.data_out.
   const taintMap = new Map<string, VarTaintInfo>();
 
+  // Variables explicitly resolved clean by the sentence-resolver (reconciled=true).
+  // These override stale walk-time taintClass on downstream concat sentences.
+  const resolvedCleanVars = new Set<string>();
+
   // Statement objects that have been parameterized (parameter-binding seen)
   const parameterizedObjects = new Set<string>();
 
@@ -61,6 +65,29 @@ function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
     const sentence = map.story[si]!;
     const { templateKey, slots, taintClass, nodeId, lineNumber } = sentence;
     const varName = slots.subject || slots.data_type || '';
+
+    // Track variables resolved clean by the sentence-resolver
+    if ((sentence as any).reconciled && taintClass === 'NEUTRAL' && varName) {
+      resolvedCleanVars.add(varName);
+    }
+
+    // ── String concatenation: MUST run before the generic TAINTED check ──
+    // The generic TAINTED handler has a `continue` that would skip this.
+    // Concat needs resolver-aware logic: if all parts were resolved clean,
+    // the stale walk-time TAINTED taintClass should be overridden.
+    if (templateKey === 'string-concatenation' && varName) {
+      const parts = (slots.parts || '').split(/[,\s]+/).filter(Boolean);
+      const allPartsResolvedClean = parts.length > 0 &&
+        parts.every(p => resolvedCleanVars.has(p) && taintMap.get(p)?.tainted !== true);
+      const isTainted = allPartsResolvedClean ? false : taintClass === 'TAINTED';
+      taintMap.set(varName, {
+        tainted: isTainted,
+        reason: (isTainted ? 'tainted concat: ' : 'concat parts resolved clean: ') + sentence.text,
+        sourceNodeId: nodeId,
+        sourceLine: lineNumber,
+      });
+      continue;
+    }
 
     // ── TAINTED assignments: mark variable tainted ──
     if (taintClass === 'TAINTED' && varName) {
@@ -76,11 +103,9 @@ function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
     // ── NEUTRAL/SAFE assignments: mark variable clean ──
     if ((taintClass === 'NEUTRAL' || taintClass === 'SAFE') && varName) {
       if (templateKey === 'parameter-binding') {
-        // Mark the statement object as parameterized
         if (varName) parameterizedObjects.add(varName);
       } else if (templateKey === 'assigned-from-call' || templateKey === 'assigned-literal' ||
                  templateKey === 'creates-instance' || templateKey === 'calls-method') {
-        // Resolved clean by mapper/sentence-resolver — trust it
         if (varName && varName !== 'result') {
           taintMap.set(varName, {
             tainted: false,
@@ -90,17 +115,6 @@ function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
           });
         }
       }
-    }
-
-    // ── String concatenation: taintClass reflects resolved taint ──
-    if (templateKey === 'string-concatenation' && varName) {
-      taintMap.set(varName, {
-        tainted: taintClass === 'TAINTED',
-        reason: (taintClass === 'TAINTED' ? 'tainted concat: ' : 'clean concat: ') + sentence.text,
-        sourceNodeId: nodeId,
-        sourceLine: lineNumber,
-      });
-      continue;
     }
 
     // ── SINK detection: tainted data reaches SQL query ──
@@ -188,12 +202,13 @@ function verifyCWE89_sentences(map: NeuralMap): VerificationResult {
  * Property: All database queries use parameterized statements when handling user input
  */
 function verifyCWE89(map: NeuralMap): VerificationResult {
-  // V2: Try sentence-based detection first
+  // V2: Sentence-based detection is authoritative when a story exists.
+  // V2 has resolver + HashMap tracking + assignment clearing — trust its verdict.
+  // Only fall back to V1 when there is NO story (no sentences emitted).
   if (map.story && map.story.length > 0) {
-    const v2 = verifyCWE89_sentences(map);
-    if (v2.findings.length > 0) return v2;
+    return verifyCWE89_sentences(map);
   }
-  // V1: Legacy BFS + regex path (fallback when V2 finds nothing)
+  // V1: Legacy BFS + regex path (fallback when no story exists)
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
 

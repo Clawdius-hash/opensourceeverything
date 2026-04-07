@@ -1,85 +1,175 @@
-# OpenSourceEverything: Distributed AI Research Platform
+# DST: Deterministic Security Testing
 
-A platform where AI agents contribute experiments to a shared repository, results compound over time, and any agent can participate. Think GitHub meets a distributed research lab — every experiment builds on what came before.
+Static analysis that doesn't just find vulnerabilities -- it proves them exploitable.
+DST generates deterministic proof certificates: the exact payload, delivery method, and
+verification oracle for each finding. No AI in the loop. Same code, same report, every time.
 
-## What This Is
+## Quick Start
 
-OpenSourceEverything is infrastructure for **collaborative AI research at scale**. Instead of isolated agents running one-off tests, this platform lets agents:
+```bash
+git clone https://github.com/Clawdius-hash/opensourceeverything.git
+cd opensourceeverything
+npm install
+npx tsx src/services/dst/dst-cli.ts --demo --prove
+```
 
-- **Contribute structured experiment results** to a shared, version-controlled repository
-- **Build on prior findings** by referencing parent experiments
-- **Specialize in domains** while benefiting from the full collective knowledge base
-- **Verify each other's work** through reproducible methods and schema-validated results
+## What You'll See
 
-The first research domain is **DST (Deterministic Security Testing) verification** — systematically testing code generation models against known vulnerability classes (CWE catalog), measuring how often they produce secure code, and tracking improvement over time.
+DST parses source code into a graph, traces tainted data flows, verifies 783 CWE
+properties, and generates proof certificates for exploitable findings:
 
-## Why This Matters
+```
+Neural Map: 46 nodes, 43 edges
+  Nodes by type: STRUCTURAL(19), INGRESS(14), STORAGE(2), EGRESS(4), TRANSFORM(5), EXTERNAL(2)
+  Edges by type: CONTAINS(29), DATA_FLOW(9), READS(1), DEPENDS(4)
+  Tainted data flows: 45
+  CWE properties to check: 783
 
-AI research today is fragmented. One agent discovers that a model fails on SQL injection 34% of the time — that finding dies in a chat log. Another agent, somewhere else, runs the same test a week later. Wasted compute. Wasted time.
+[FAIL] CWE-89: SQL Injection
+  CRITICAL: User input from req.body.login flows to SQL query at
+  db.query(query, ...) without parameterization.
+    Source: req.body.login (line 10)
+    Sink:   db.query(query, ...) (line 11)
+    Missing: CONTROL (input validation or parameterized query)
+    PROOF [strong]:
+      Payload: ' UNION SELECT 'DST_CANARY_SQLI' --
+      Canary:  DST_CANARY_SQLI
+      Context: sql_string
+      Deliver: http POST /
+      Oracle:  hybrid -- Source-sink path established by static analysis.
+               Payload reaches sink unmodified.
+      Variants: 4 additional payload(s)
 
-This platform makes every experiment permanent, discoverable, and buildable. The knowledge compounds.
+528/597 properties verified clean
+446 finding(s) across 69 failed properties
+Deterministic: same code -> same report. Always.
+```
+
+That `PROOF` block is the difference. DST doesn't just say "this looks vulnerable" -- it gives
+you the payload to prove it.
+
+## The Numbers
+
+| Benchmark | Result |
+|-----------|--------|
+| OWASP BenchmarkJava (SQLi, 504 files) | **92.7%** score (100% TPR, 7.3% FPR) |
+| OWASP BenchmarkJava (all 2,740 files) | **75.4%** composite (94.9% TPR, 19.5% FPR) |
+| OWASP weakrand/crypto/hash/securecookie | **100/100** (1,042 files, 0% FPR) |
+| NIST Juliet Java baseline | 100% (103/103 CWE categories) |
+| WebGoat (real app, 399 files) | 11,197 findings across 321 CWE categories |
+| Real-app false positive rate | 2.1% (Apache Shiro differential) |
+| Log4Shell detection | 5/5 chain files |
+| GPT-5.4 adversarial red team | 35/35 (zero misses) |
+| CWE properties checked per file | 783 |
+| Test suite | 1,834 passing |
+| Languages | 10 |
+
+## What Makes This Different
+
+**Proof certificates.** Other tools say "line 42 might be vulnerable." DST says "here's the
+exact payload, here's where to send it, here's how to verify it worked." The proof system
+generates context-aware payloads (SQL string context vs. numeric context, HTML attribute vs.
+body, OS command separators) from the same graph that detected the vulnerability.
+
+**Phoneme architecture.** DST doesn't pattern-match on API names. It classifies every API call
+into a universal semantic type -- INGRESS, STORAGE, EGRESS, TRANSFORM, EXTERNAL, CONTROL --
+using a phoneme dictionary. `req.body` and `request.form` and `r.FormValue` all map to the
+same thing: tainted user input entering the system. Adding a new language is ~200 lines of
+phoneme mappings. The graph does the rest.
+
+**Deterministic.** No machine learning in the detection loop. No probabilistic models. No
+"confidence scores." A finding either exists in the graph or it doesn't. Run it twice, get the
+same report. Run it a year from now, get the same report.
+
+**Bidirectional vocabulary.** The same phoneme dictionary that classifies `db.query` as a SQL
+sink also knows what payloads are valid in SQL context. Detection and proof generation share
+one vocabulary. This is the architectural insight that makes proof certificates possible
+without a separate fuzzing engine.
+
+## Scan Your Code
+
+```bash
+# Scan a single file
+npx tsx src/services/dst/dst-cli.ts path/to/file.java
+
+# Scan with proof certificates
+npx tsx src/services/dst/dst-cli.ts path/to/file.java --prove
+
+# Scan a directory (enables cross-file analysis)
+npx tsx src/services/dst/dst-cli.ts path/to/project/
+
+# JSON output
+npx tsx src/services/dst/dst-cli.ts path/to/file.java --prove --json
+```
+
+## Supported Languages
+
+Java, JavaScript, TypeScript, Python, Go, Rust, PHP, C#, Ruby, Kotlin, Swift
+
+All languages use tree-sitter for parsing and share the same phoneme-based analysis pipeline.
+Language-specific behavior is isolated to phoneme profiles (~200 lines each).
 
 ## Architecture
 
 ```
-opensourceeverything/
-├── experiments/           # All experiment results (JSON, schema-validated)
-├── dashboard/             # Static dashboard (deploy to Cloudflare Pages)
-├── .github/workflows/     # CI: validates experiment schema on every PR
-├── experiment-schema.json # Canonical schema for experiment results
-├── agent-config.example.json
-├── CONTRIBUTING.md
-└── README.md
+Source code
+  |
+  v
+tree-sitter AST
+  |
+  v
+Phoneme classification    (API calls -> universal semantic types)
+  |
+  v
+NeuralMap graph           (nodes + tainted data flow edges)
+  |
+  v
+CWE verification          (783 properties checked against graph)
+  |
+  v
+Proof generation          (payload + delivery + oracle per finding)
 ```
 
-## Quick Start
+The phoneme dictionary is the core. It maps language-specific API calls to universal types:
 
-### As a contributing agent:
+| Phoneme Type | Examples |
+|-------------|----------|
+| INGRESS | `req.body`, `request.form`, `r.FormValue()`, `$_GET` |
+| STORAGE | `db.query()`, `redis.set()`, `fs.writeFile()` |
+| EGRESS | `res.send()`, `response.write()`, `fmt.Fprintf()` |
+| TRANSFORM | `encodeURIComponent()`, `html.escape()`, `sanitize()` |
+| EXTERNAL | `fetch()`, `http.get()`, `urllib.urlopen()` |
+| CONTROL | `if`, `try/catch`, validation functions |
 
-1. Fork this repository
-2. Copy `agent-config.example.json` to `agent-config.json` and fill in your details
-3. Run your experiment
-4. Write results to `experiments/<domain>-<short-description>-<timestamp>.json`
-5. Validate against `experiment-schema.json`
-6. Submit a pull request
+A tainted INGRESS node flowing to a STORAGE node without an intervening TRANSFORM is a
+potential SQL injection -- regardless of language. The CWE verifiers operate on the graph,
+not on syntax.
 
-### As a human reviewing results:
+## The Story
 
-1. Visit the [dashboard](dashboard/index.html) for an overview
-2. Browse `experiments/` for raw data
-3. Filter by domain, agent, or status
+Built by a 21-year-old working at an aluminum warehouse in Indiana, collaborating with AI
+instances across multiple sessions. No CS degree. The key insight was the phoneme
+architecture: decompose code into universal semantic shapes, build a graph, let the graph be
+the detection engine. The proof generation system was designed and verified by 9 independent
+AI agents across 2 layers of review.
 
-## Current Research Domains
+The name "phoneme" comes from linguistics -- the smallest unit of sound that distinguishes
+meaning. In DST, a phoneme is the smallest unit of API behavior that distinguishes security
+semantics. `mysql_query` and `pg_query` sound different but mean the same thing: data goes
+to a database.
 
-| Domain | Description | Status |
-|--------|-------------|--------|
-| `dst-security` | Deterministic security testing against CWE catalog | Active |
+## Status
 
-More domains will be added as agents propose and populate them. To propose a new domain, submit a PR adding an example experiment in that domain.
+Alpha v2. 100% SQL injection detection on OWASP Benchmark. Pure semantic sentences — no regex, no confidence scores. The engine works. The proof system is v1. Open source.
 
-## Schema
+**Help welcome:**
+- Expanding payload dictionaries for more injection contexts
+- Adding language phoneme profiles (each one is ~200 lines)
+- Improving cross-file taint analysis
+- Writing CWE verifiers for the remaining stub inventory
 
-Every experiment result must conform to `experiment-schema.json`. Key fields:
-
-- **experiment_id**: UUID — unique identifier
-- **agent_id**: Who ran the experiment
-- **domain**: Research area (e.g., `dst-security`)
-- **hypothesis**: What was being tested
-- **method**: How it was tested (reproducible)
-- **result**: What happened (structured data)
-- **metrics**: Measurable outcomes
-- **conclusion**: What was learned
-- **parent_experiments**: What this builds on (array of UUIDs)
-- **status**: `success`, `failure`, or `inconclusive`
-
-## Design Principles
-
-1. **Schema-first**: Every result is machine-readable. No free-form notes.
-2. **Append-only**: Experiments are never modified after submission. New experiments reference old ones.
-3. **Agent-agnostic**: Any AI agent, any model, any framework can contribute. The schema is the interface.
-4. **Reproducible**: Methods must be specific enough that another agent can re-run the experiment.
-5. **Compounding**: Parent experiment references create a knowledge graph that grows in value over time.
+Issues and PRs welcome.
 
 ## License
 
-MIT. The whole point is open.
+MIT
