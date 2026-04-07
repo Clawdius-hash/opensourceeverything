@@ -1073,7 +1073,129 @@ function verifyCWE83(map: NeuralMap): VerificationResult {
  * Pattern: INGRESS → STORAGE(filesystem) without CONTROL(path validation)
  * Property: All file operations validate that paths stay within allowed directories
  */
+
+/**
+ * CWE-22 sentence verifier: walks the story forward, looking for
+ * tainted data that reaches an accesses-path sentence without path validation.
+ * Same architecture as CWE-89 (SQLi) and CWE-79 (XSS).
+ */
+function verifyCWE22_sentences(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  if (!map.story || map.story.length === 0) {
+    return { cwe: 'CWE-22', name: 'Path Traversal', holds: true, findings: [] };
+  }
+
+  const taintMap = new Map<string, VarTaintInfo>();
+  const resolvedCleanVars = new Set<string>();
+  const validatedVars = new Set<string>();
+
+  for (let si = 0; si < map.story.length; si++) {
+    const sentence = map.story[si]!;
+    const { templateKey, slots, taintClass, nodeId, lineNumber } = sentence;
+    const varName = slots.subject || slots.data_type || '';
+
+    // Track resolver-proven clean variables
+    if ((sentence as any).reconciled && taintClass === 'NEUTRAL' && varName) {
+      resolvedCleanVars.add(varName);
+    }
+
+    // Track path-validated variables — SAFE calls-method with path-related methods
+    if (taintClass === 'SAFE' && templateKey === 'calls-method' && varName) {
+      validatedVars.add(varName);
+    }
+
+    // String concatenation — resolver-aware
+    if (templateKey === 'string-concatenation' && varName) {
+      const parts = (slots.parts || '').split(/[,\s]+/).filter(Boolean);
+      const allPartsResolvedClean = parts.length > 0 &&
+        parts.every(p => resolvedCleanVars.has(p) && taintMap.get(p)?.tainted !== true);
+      const isTainted = allPartsResolvedClean ? false : taintClass === 'TAINTED';
+      taintMap.set(varName, {
+        tainted: isTainted,
+        reason: (isTainted ? 'tainted concat: ' : 'concat resolved clean: ') + sentence.text,
+        sourceNodeId: nodeId, sourceLine: lineNumber,
+      });
+      continue;
+    }
+
+    // SINK: accesses-path — check BEFORE generic TAINTED handler
+    if (templateKey === 'accesses-path') {
+      const variables = slots.variables || '';
+      if (!variables) continue;
+      const varNames = variables.split(/[,\s]+/).filter(Boolean);
+
+      for (const argVar of varNames) {
+        const info = taintMap.get(argVar);
+        if (!info?.tainted) continue;
+        if (validatedVars.has(argVar)) continue;
+
+        const sinkNode = map.nodes.find(n => n.id === nodeId);
+        if (sinkNode && hasDeadBranchForNode(map, sinkNode.id)) continue;
+
+        const sourceNode = map.nodes.find(n => n.id === info.sourceNodeId);
+        const sourceRef: NodeRef = sourceNode
+          ? { id: sourceNode.id, label: sourceNode.label, line: sourceNode.line_start, code: sourceNode.code_snapshot.slice(0, 200) }
+          : { id: info.sourceNodeId, label: `taint source (line ${info.sourceLine})`, line: info.sourceLine, code: '' };
+        const sinkRef: NodeRef = sinkNode
+          ? { id: sinkNode.id, label: sinkNode.label, line: sinkNode.line_start, code: sinkNode.code_snapshot.slice(0, 200) }
+          : { id: nodeId, label: `file access (line ${lineNumber})`, line: lineNumber, code: '' };
+
+        findings.push({
+          source: sourceRef,
+          sink: sinkRef,
+          missing: 'CONTROL (path validation / directory restriction)',
+          severity: 'high',
+          description: `User input "${argVar}" from ${sourceRef.label} controls a file path at ${sinkRef.label} without validation. ` +
+            `An attacker can use ../../ to access files outside the intended directory.`,
+          fix: 'Resolve the full path with getCanonicalPath(), then verify it starts with your allowed base directory. ' +
+            'Never use user input directly in file operations.',
+          via: 'v2_sentences',
+        });
+        break;
+      }
+    }
+
+    // TAINTED → mark tainted
+    if (taintClass === 'TAINTED' && varName) {
+      taintMap.set(varName, {
+        tainted: true, reason: sentence.text,
+        sourceNodeId: nodeId, sourceLine: lineNumber,
+      });
+      continue;
+    }
+
+    // NEUTRAL/SAFE assignments → mark clean
+    if ((taintClass === 'NEUTRAL' || taintClass === 'SAFE') && varName) {
+      if (templateKey === 'assigned-from-call' || templateKey === 'assigned-literal' ||
+          templateKey === 'creates-instance' || templateKey === 'calls-method') {
+        if (varName && varName !== 'result') {
+          taintMap.set(varName, {
+            tainted: false,
+            reason: taintClass === 'SAFE' ? `Validated: ${sentence.text}` : `Clean: ${sentence.text}`,
+            sourceNodeId: nodeId, sourceLine: lineNumber,
+          });
+          if (taintClass === 'SAFE') validatedVars.add(varName);
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-22',
+    name: 'Path Traversal',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
 function verifyCWE22(map: NeuralMap): VerificationResult {
+  // V2: Try sentence-based detection first. V1 fallback — 22 FNs remain in V2.
+  if (map.story && map.story.length > 0) {
+    const v2 = verifyCWE22_sentences(map);
+    if (v2.findings.length > 0) return v2;
+  }
+  // V1: BFS + regex fallback (still needed until accesses-path vocabulary is complete)
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
   const fileOps = map.nodes.filter(n =>

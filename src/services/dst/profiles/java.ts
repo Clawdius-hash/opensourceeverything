@@ -2987,9 +2987,16 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
           if (className === 'PreparedStatement' || className.endsWith('PreparedStatement')) {
             sentTaintClass = 'SAFE';
           }
+          // Use accesses-path for file operations, creates-instance for everything else.
+          const isFileOp = resolution.subtype === 'file_read' || resolution.subtype === 'file_write' ||
+            resolution.subtype === 'file_access' || resolution.subtype === 'file_serve';
+          const templateKey = isFileOp ? 'accesses-path' : 'creates-instance';
+          const slots = isFileOp
+            ? { subject: varNameFromContext(node, ctx), class: className, args: ctorArgsText, variables: collectArgIdentifiers(argsNode), context: `line ${node.startPosition.row + 1}` }
+            : { subject: varNameFromContext(node, ctx), class: className, args: ctorArgsText, context: `line ${node.startPosition.row + 1}` };
           const sentence = generateSentence(
-            'creates-instance',
-            { subject: varNameFromContext(node, ctx), class: className, args: ctorArgsText, context: `line ${node.startPosition.row + 1}` },
+            templateKey,
+            slots,
             node.startPosition.row + 1,
             n.id,
             sentTaintClass,

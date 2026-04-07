@@ -11,7 +11,7 @@ const NODE_TYPE_TO_TEMPLATE: Record<string, Record<string, string>> = {
     http_param: 'retrieves-from-source',
     cli_input: 'retrieves-from-source',
     env_variable: 'retrieves-from-source',
-    file_read: 'retrieves-from-source',
+    file_read: 'accesses-path',
     socket_read: 'retrieves-from-source',
     _default: 'retrieves-from-source',
   },
@@ -20,7 +20,7 @@ const NODE_TYPE_TO_TEMPLATE: Record<string, Record<string, string>> = {
     db_read: 'executes-query',
     db_write: 'executes-query',
     db_stored_proc: 'executes-query',
-    file_write: 'calls-method',
+    file_write: 'accesses-path',
     cache_write: 'calls-method',
     _default: 'calls-method',
   },
@@ -45,6 +45,8 @@ const NODE_TYPE_TO_TEMPLATE: Record<string, Record<string, string>> = {
   EGRESS: {
     http_response: 'writes-response',
     redirect: 'writes-response',
+    file_write: 'accesses-path',
+    file_serve: 'accesses-path',
     _default: 'calls-method',
   },
 };
