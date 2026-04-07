@@ -43,7 +43,8 @@ const NODE_TYPE_TO_TEMPLATE: Record<string, Record<string, string>> = {
     _default: 'calls-method',
   },
   EGRESS: {
-    http_response: 'calls-method',
+    http_response: 'writes-response',
+    redirect: 'writes-response',
     _default: 'calls-method',
   },
 };

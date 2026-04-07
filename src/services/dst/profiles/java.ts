@@ -685,6 +685,41 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
           chain,
         };
       }
+      // STEP 1b: Chained output methods → EGRESS/http_response.
+      // response.getWriter().println(bar) → chain = ['response', 'getWriter', 'println']
+      // response.getOutputStream().write(bar) → chain = ['response', 'getOutputStream', 'write']
+      const SERVLET_OUTPUT_METHODS = new Set(['println', 'print', 'write', 'append', 'format']);
+      const SERVLET_WRITER_GETTERS = new Set(['getWriter', 'getOutputStream']);
+      const lastMethod = chain[chain.length - 1];
+      if (lastMethod && SERVLET_OUTPUT_METHODS.has(lastMethod) &&
+          chain.some(c => SERVLET_WRITER_GETTERS.has(c))) {
+        return {
+          nodeType: 'EGRESS',
+          subtype: 'http_response',
+          tainted: false,
+          chain,
+        };
+      }
+      // STEP 1c: Sanitizer/encoder methods → TRANSFORM/sanitize.
+      // StringEscapeUtils.escapeHtml(x), ESAPI.encoder().encodeForHTML(x), etc.
+      // Recognised by method name regardless of receiver chain.
+      const SANITIZER_METHODS = new Set([
+        'escapeHtml', 'escapeHtml4', 'escapeHtml3', 'escapeXml', 'escapeXml10', 'escapeXml11',
+        'escapeEcmaScript', 'escapeJson', 'escapeSql', 'escapeCsv', 'escapeJava',
+        'encodeForHTML', 'encodeForHTMLAttribute', 'encodeForJavaScript', 'encodeForCSS',
+        'encodeForURL', 'encodeForXML', 'encodeForXMLAttribute', 'encodeForLDAP', 'encodeForDN',
+        'encodeForSQL', 'encodeForOS', 'encodeForVBScript', 'encodeForXPath',
+        'htmlEscape', 'javaScriptEscape', 'urlEncode',
+        'sanitize', 'clean', 'stripXSS', 'stripTags',
+      ]);
+      if (lastMethod && SANITIZER_METHODS.has(lastMethod)) {
+        return {
+          nodeType: 'TRANSFORM',
+          subtype: 'sanitize',
+          tainted: false,
+          chain,
+        };
+      }
     } else if (name) {
       // Bare method call — check direct call patterns
       const chain = [name.text];

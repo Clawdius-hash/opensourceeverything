@@ -36,12 +36,22 @@ async function main() {
   }
 
   const results = verifyAll(map, 'java');
-  const cwe89 = results.find(r => r.cwe === 'CWE-89');
-  console.log('\nCWE-89 holds:', cwe89?.holds, 'findings:', cwe89?.findings?.length);
-  if (cwe89?.findings?.length) {
-    for (const f of cwe89.findings) {
-      console.log('  Finding:', f.description?.substring(0, 150));
-      console.log('  Via:', (f as any).via);
+  for (const cwe of ['CWE-89', 'CWE-79']) {
+    const r = results.find(r => r.cwe === cwe);
+    console.log(`\n${cwe} holds:`, r?.holds, 'findings:', r?.findings?.length);
+    if (r?.findings?.length) {
+      for (const f of r.findings) {
+        console.log('  Finding:', f.description?.substring(0, 150));
+        console.log('  Via:', (f as any).via);
+      }
+    }
+  }
+
+  // Check writes-response sentences
+  console.log('\n--- writes-response sentences ---');
+  for (const s of map.story || []) {
+    if (s.templateKey === 'writes-response') {
+      console.log(`  [L${s.lineNumber}] ${s.taintClass} args=${s.slots.args?.substring(0, 60)}`);
     }
   }
 }

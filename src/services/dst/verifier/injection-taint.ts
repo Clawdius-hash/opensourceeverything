@@ -441,7 +441,133 @@ function verifyCWE89(map: NeuralMap): VerificationResult {
  * Pattern: INGRESS → EGRESS(html/response) without CONTROL(encoding)
  * Property: All user input is encoded before being included in HTML output
  */
+
+/**
+ * CWE-79 sentence verifier: walks the semantic story forward, looking for
+ * tainted data that reaches a writes-response sentence without sanitization.
+ * Same architecture as verifyCWE89_sentences — different sink, different defense.
+ */
+function verifyCWE79_sentences(map: NeuralMap): VerificationResult {
+  const findings: Finding[] = [];
+
+  if (!map.story || map.story.length === 0) {
+    return { cwe: 'CWE-79', name: 'Cross-Site Scripting (XSS)', holds: true, findings: [] };
+  }
+
+  const taintMap = new Map<string, VarTaintInfo>();
+  const resolvedCleanVars = new Set<string>();
+  const sanitizedVars = new Set<string>();
+
+  for (let si = 0; si < map.story.length; si++) {
+    const sentence = map.story[si]!;
+    const { templateKey, slots, taintClass, nodeId, lineNumber } = sentence;
+    const varName = slots.subject || slots.data_type || '';
+
+    // Track resolver-proven clean variables
+    if ((sentence as any).reconciled && taintClass === 'NEUTRAL' && varName) {
+      resolvedCleanVars.add(varName);
+    }
+
+    // Track sanitized variables — SAFE calls-method means encoder/sanitizer
+    if (taintClass === 'SAFE' && templateKey === 'calls-method' && varName) {
+      sanitizedVars.add(varName);
+    }
+
+    // String concatenation — resolver-aware (same as SQLi)
+    if (templateKey === 'string-concatenation' && varName) {
+      const parts = (slots.parts || '').split(/[,\s]+/).filter(Boolean);
+      const allPartsResolvedClean = parts.length > 0 &&
+        parts.every(p => resolvedCleanVars.has(p) && taintMap.get(p)?.tainted !== true);
+      const isTainted = allPartsResolvedClean ? false : taintClass === 'TAINTED';
+      taintMap.set(varName, {
+        tainted: isTainted,
+        reason: (isTainted ? 'tainted concat: ' : 'concat resolved clean: ') + sentence.text,
+        sourceNodeId: nodeId, sourceLine: lineNumber,
+      });
+      continue;
+    }
+
+    // SINK: writes-response — check BEFORE generic TAINTED handler
+    // (TAINTED handler has continue that would skip this)
+    if (templateKey === 'writes-response' && taintClass !== 'NEUTRAL') {
+      const args = slots.args || '';
+      // Extract variable names from the args
+      const argVarNames = args.match(/\b([a-zA-Z_]\w*)\b/g) || [];
+
+      for (const argVar of argVarNames) {
+        const info = taintMap.get(argVar);
+        if (!info?.tainted) continue;
+        if (sanitizedVars.has(argVar)) continue;
+
+        // Dead branch suppression
+        const sinkNode = map.nodes.find(n => n.id === nodeId);
+        if (sinkNode && hasDeadBranchForNode(map, sinkNode.id)) continue;
+
+        const sourceNode = map.nodes.find(n => n.id === info.sourceNodeId);
+        const sourceRef: NodeRef = sourceNode
+          ? { id: sourceNode.id, label: sourceNode.label, line: sourceNode.line_start, code: sourceNode.code_snapshot.slice(0, 200) }
+          : { id: info.sourceNodeId, label: `taint source (line ${info.sourceLine})`, line: info.sourceLine, code: '' };
+        const sinkRef: NodeRef = sinkNode
+          ? { id: sinkNode.id, label: sinkNode.label, line: sinkNode.line_start, code: sinkNode.code_snapshot.slice(0, 200) }
+          : { id: nodeId, label: `response output (line ${lineNumber})`, line: lineNumber, code: '' };
+
+        findings.push({
+          source: sourceRef,
+          sink: sinkRef,
+          missing: 'CONTROL (output encoding or sanitization)',
+          severity: 'high',
+          description: `User input "${argVar}" from ${sourceRef.label} flows to response output at ${sinkRef.label} without encoding. ` +
+            `This allows script injection (XSS). Story trace: ${info.reason}`,
+          fix: 'Encode output for the HTML context. Use ESAPI.encoder().encodeForHTML(), ' +
+            'StringEscapeUtils.escapeHtml(), or equivalent before writing to response.',
+          via: 'v2_sentences',
+        });
+        break; // one finding per sink
+      }
+    }
+
+    // TAINTED → mark tainted
+    if (taintClass === 'TAINTED' && varName) {
+      taintMap.set(varName, {
+        tainted: true, reason: sentence.text,
+        sourceNodeId: nodeId, sourceLine: lineNumber,
+      });
+      continue;
+    }
+
+    // NEUTRAL/SAFE assignments → mark clean
+    if ((taintClass === 'NEUTRAL' || taintClass === 'SAFE') && varName) {
+      if (templateKey === 'assigned-from-call' || templateKey === 'assigned-literal' ||
+          templateKey === 'creates-instance' || templateKey === 'calls-method') {
+        if (varName && varName !== 'result') {
+          taintMap.set(varName, {
+            tainted: false,
+            reason: taintClass === 'SAFE' ? `Sanitized: ${sentence.text}` : `Clean: ${sentence.text}`,
+            sourceNodeId: nodeId, sourceLine: lineNumber,
+          });
+          if (taintClass === 'SAFE') sanitizedVars.add(varName);
+        }
+      }
+    }
+  }
+
+  return {
+    cwe: 'CWE-79',
+    name: 'Cross-Site Scripting (XSS)',
+    holds: findings.length === 0,
+    findings,
+  };
+}
+
 function verifyCWE79(map: NeuralMap): VerificationResult {
+  // V2: Try sentence-based detection first. V2 is NOT yet authoritative for XSS —
+  // the EGRESS vocabulary is incomplete (not all output methods classified yet).
+  // Once vocabulary covers all output patterns, make V2 authoritative like CWE-89.
+  if (map.story && map.story.length > 0) {
+    const v2 = verifyCWE79_sentences(map);
+    if (v2.findings.length > 0) return v2;
+  }
+  // V1: BFS + regex fallback (still needed until EGRESS vocabulary is complete)
   const findings: Finding[] = [];
   const ingress = nodesOfType(map, 'INGRESS');
   const egress = map.nodes.filter(n =>

@@ -15,6 +15,7 @@ export const SENTENCE_TEMPLATES: Record<string, string> = {
   'gate-conditional': 'IF {condition} THEN following block executes, gate type: {gate_type}',
   'iterates-over': '{subject} iterates over {collection}, {context}',
   'creates-instance': '{subject} creates new {class} with {args}, {context}',
+  'writes-response': '{subject} writes {args} to client response, {context}',
 };
 
 /**
