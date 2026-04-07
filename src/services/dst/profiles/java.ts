@@ -688,7 +688,7 @@ function resolveCallee(node: SyntaxNode): ResolvedCalleeResult | null {
       // STEP 1b: Chained output methods → EGRESS/http_response.
       // response.getWriter().println(bar) → chain = ['response', 'getWriter', 'println']
       // response.getOutputStream().write(bar) → chain = ['response', 'getOutputStream', 'write']
-      const SERVLET_OUTPUT_METHODS = new Set(['println', 'print', 'write', 'append', 'format']);
+      const SERVLET_OUTPUT_METHODS = new Set(['println', 'print', 'write', 'append', 'format', 'printf']);
       const SERVLET_WRITER_GETTERS = new Set(['getWriter', 'getOutputStream']);
       const lastMethod = chain[chain.length - 1];
       if (lastMethod && SERVLET_OUTPUT_METHODS.has(lastMethod) &&
@@ -1352,6 +1352,18 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
       return right ? extractTaintSources(right, ctx) : [];
     }
 
+    // -- Array initializer: {"a", bar} or new String[]{"a", bar} --
+    // Recurse into elements to find tainted variables inside array/object literals.
+    case 'array_initializer':
+    case 'array_creation_expression': {
+      const sources: TaintSourceResult[] = [];
+      for (let i = 0; i < expr.namedChildCount; i++) {
+        const elem = expr.namedChild(i);
+        if (elem) sources.push(...extractTaintSources(elem, ctx));
+      }
+      return sources;
+    }
+
     default:
       return [];
   }
@@ -1851,6 +1863,39 @@ function collectArgVarNames(argsNode: SyntaxNode | null): string {
     }
   }
   return names.join(', ');
+}
+
+/**
+ * Extract ONLY identifier variable names from method arguments.
+ * Skips string literals, class/package names (contain dots), numeric literals.
+ * Used for writes-response 'variables' slot so the verifier doesn't need regex.
+ */
+function collectArgIdentifiers(argsNode: SyntaxNode | null): string {
+  if (!argsNode) return '';
+  const names: string[] = [];
+  const walk = (n: SyntaxNode) => {
+    if (n.type === 'identifier') {
+      // Skip common non-variable identifiers (class names start with uppercase,
+      // but also skip known packages/types)
+      const text = n.text;
+      if (text && !text.match(/^[A-Z][A-Z_0-9]*$/) && !text.match(/^(java|javax|org|com|net|io|util|lang|sql|servlet|http|String|Integer|Long|Boolean|Object|Locale|System|Math|Arrays|Collections)$/)) {
+        names.push(text);
+      }
+    } else if (n.type !== 'string_literal' && n.type !== 'decimal_integer_literal' &&
+               n.type !== 'character_literal' && n.type !== 'null_literal' &&
+               n.type !== 'true' && n.type !== 'false') {
+      for (let c = 0; c < n.childCount; c++) {
+        const ch = n.child(c);
+        if (ch) walk(ch);
+      }
+    }
+  };
+  for (let i = 0; i < argsNode.namedChildCount; i++) {
+    const arg = argsNode.namedChild(i);
+    if (arg) walk(arg);
+  }
+  // Deduplicate
+  return [...new Set(names)].join(', ');
 }
 
 /** Determine the taint class for a sentence based on node type, subtype, and taint state. */
@@ -2397,6 +2442,11 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
             const indexArg = argsNode?.namedChild(0)?.text ?? '?';
             const valueArg = argsNode?.namedChild(1)?.text?.slice(0, 40) ?? '?';
             slots = { subject: objText || methodName, variable: valueArg, index: indexArg, context: `line ${node.startPosition.row + 1}` };
+          } else if (templateKey === 'writes-response') {
+            // Collect only identifier variable names for the 'variables' slot.
+            // The verifier reads this directly — no regex parsing needed.
+            const varNames = collectArgIdentifiers(argsNode);
+            slots = { subject: objText || '?', method: methodName, object: objText, args: argsText, variables: varNames, context: `line ${node.startPosition.row + 1}` };
           } else {
             slots = { subject: objText || '?', method: methodName, object: objText, args: argsText, context: `line ${node.startPosition.row + 1}` };
           }
@@ -2563,6 +2613,9 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                   const idxArg = aliasArgs?.namedChild(0)?.text ?? '?';
                   const valArg = aliasArgs?.namedChild(1)?.text?.slice(0, 40) ?? '?';
                   aliasSlots = { subject: aliasObjText, variable: valArg, index: idxArg, context: `line ${node.startPosition.row + 1}` };
+                } else if (aliasTemplateKey === 'writes-response') {
+                  const aliasVarNames = collectArgIdentifiers(aliasArgs);
+                  aliasSlots = { subject: aliasObjText || '?', method: aliasMethodName, object: aliasObjText, args: aliasArgsText, variables: aliasVarNames, context: `line ${node.startPosition.row + 1}` };
                 } else {
                   aliasSlots = { subject: aliasObjText || '?', method: aliasMethodName, object: aliasObjText, args: aliasArgsText, context: `line ${node.startPosition.row + 1}` };
                 }
