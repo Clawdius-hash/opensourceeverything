@@ -60,6 +60,10 @@ export interface VariableInfo {
    *  When undefined, falls back to whole-collection taint (receiverVar.tainted).
    *  Populated by .add(), updated by .remove(), resolved by .get(). */
   collectionTaint?: Array<{ tainted: boolean; producingNodeId: string | null }>;
+  /** Per-key taint tracking for Map/HashMap variables.
+   *  When present, tracks the taint state of each value by string key.
+   *  Populated by .put(key, value), resolved by .get(key). */
+  keyedTaint?: Map<string, { tainted: boolean; producingNodeId: string | null }>;
   /** If this variable has been range-checked by a CONTROL node,
    *  stores the inferred numeric bounds. Used by integer/arithmetic
    *  verifiers to suppress findings on bounded variables. */
@@ -521,6 +525,115 @@ export class MapperContext {
     this.markLocalCallsReturnTainted(allLocalCalls, containedMap);
     this.connectTaintedLocalCallsToSinks(summaries);
     this.propagateEventEmitterTaint();
+  }
+
+  /**
+   * Correct functionReturnTaint for passthrough functions where the call-site
+   * argument is actually clean. Auto-taint marks all String params as tainted
+   * during the walk, but if the caller passes clean data, the function should
+   * be considered clean.
+   */
+  private correctPassthroughReturnTaint(allLocalCalls: NeuralMapNode[]): void {
+    const nodeById = this.nodeById;
+    const REQUEST_TYPES = /\b(HttpServletRequest|ServletRequest|WebRequest|HttpRequest|HttpServletResponse|ServletResponse)\b/;
+
+    for (const [funcName, funcNodeId] of this.functionRegistry) {
+      if (funcName.includes(':')) continue;
+      if (this.functionReturnTaint.get(funcNodeId) !== true) continue;
+
+      const funcNode = nodeById.get(funcNodeId);
+      if (!funcNode?.param_names || funcNode.param_names.length === 0) continue;
+
+      const snap = funcNode.analysis_snapshot || funcNode.code_snapshot || '';
+      const escaped = funcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Find non-request params
+      const sigMatch = snap.match(new RegExp(escaped + '\\s*\\(([^)]*)\\)'));
+      const sigText = sigMatch?.[1] ?? '';
+      const nonRequestParams: string[] = [];
+      for (const pn of funcNode.param_names) {
+        const paramTypeRe = new RegExp('(\\w+(?:\\.\\w+)*)\\s+' + pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+        const ptMatch = sigText.match(paramTypeRe);
+        if (!ptMatch || !REQUEST_TYPES.test(ptMatch[1]!)) {
+          nonRequestParams.push(pn);
+        }
+      }
+      if (nonRequestParams.length === 0) continue;
+
+      // Check if return depends on a non-request param (passthrough pattern)
+      const bodyMatch = snap.match(/\{([\s\S]*)\}/);
+      const body = bodyMatch ? bodyMatch[1]! : snap;
+      const lines = body.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('//') && !l.startsWith('*'));
+      const aliases = new Set(nonRequestParams);
+      for (const ln of lines) {
+        const assignMatch = ln.match(/^(?:(?:final\s+)?[\w.<>\[\]]+\s+)?(\w+)\s*=\s*(.*)/);
+        if (assignMatch) {
+          const lhs = assignMatch[1]!;
+          let rhs = assignMatch[2]!;
+          for (const a of aliases) {
+            if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(rhs)) {
+              aliases.add(lhs);
+              break;
+            }
+          }
+        }
+        // Track switch case assignments: case 'X': bar = param;
+        if (ln.startsWith('case ') || ln.startsWith('default:')) {
+          const caseAssign = ln.match(/\b(\w+)\s*=\s*(\w+)\s*;/);
+          if (caseAssign) {
+            for (const a of aliases) {
+              if (caseAssign[2] === a) { aliases.add(caseAssign[1]!); break; }
+            }
+          }
+        }
+        // Track if/else inline assignments
+        if (ln.startsWith('if ') || ln.startsWith('if(') || ln.startsWith('else ')) {
+          const ifAssign = ln.match(/\b(\w+)\s*=\s*([^;]+);/);
+          if (ifAssign) {
+            for (const a of aliases) {
+              if (new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(ifAssign[2]!)) {
+                aliases.add(ifAssign[1]!); break;
+              }
+            }
+          }
+        }
+      }
+
+      const returnMatch = body.match(/return\s+(\w+)\s*;/);
+      if (!returnMatch || !aliases.has(returnMatch[1]!)) continue;
+
+      // Function IS a passthrough. Check ALL call sites: are the non-request args clean?
+      for (const lc of allLocalCalls) {
+        const lcSnap = lc.analysis_snapshot || lc.code_snapshot || '';
+        if (!lcSnap.match(new RegExp('\\b' + escaped + '\\s*\\('))) continue;
+
+        const callArgMatch = lcSnap.match(new RegExp(escaped + '\\s*\\(([^)]*)\\)'));
+        if (!callArgMatch) continue;
+        const callArgs = callArgMatch[1]!.split(',').map(a => a.trim());
+
+        let allPassthroughArgsClean = true;
+        for (let pi = 0; pi < funcNode.param_names.length; pi++) {
+          const pn = funcNode.param_names[pi]!;
+          if (!nonRequestParams.includes(pn)) continue;
+          if (!aliases.has(pn)) continue;
+          const argName = callArgs[pi];
+          if (!argName) continue;
+          // Check if this argument is tainted at the call site
+          const argIsTainted = lc.data_in.some(d =>
+            d.tainted && d.name && new RegExp('\\b' + argName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(d.name)
+          );
+          if (argIsTainted) {
+            allPassthroughArgsClean = false;
+            break;
+          }
+        }
+
+        if (allPassthroughArgsClean) {
+          // The caller passes clean data — function return is actually clean
+          this.functionReturnTaint.set(funcNodeId, false);
+        }
+      }
+    }
   }
 
   // ── PASS 2 sub-steps ────────────────────────────────────────────────

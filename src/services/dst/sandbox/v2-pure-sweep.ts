@@ -33,10 +33,17 @@ function detectSQLi_pure(map: NeuralMap): { vulnerable: boolean; reason: string;
 
   const taintMap = new Map<string, { tainted: boolean; reason: string }>();
   const parameterizedObjects = new Set<string>();
+  const resolvedCleanVars = new Set<string>();
   const findings: string[] = [];
 
   for (const sentence of map.story) {
     const { templateKey, slots, taintClass } = sentence;
+
+    // Track variables explicitly resolved clean by the sentence-resolver.
+    if ((sentence as any).reconciled && taintClass === 'NEUTRAL') {
+      const varName = slots.subject || '';
+      if (varName) resolvedCleanVars.add(varName);
+    }
 
     // Track tainted sources
     if (taintClass === 'TAINTED') {
@@ -76,11 +83,20 @@ function detectSQLi_pure(map: NeuralMap): { vulnerable: boolean; reason: string;
       }
     }
 
-    // Track string concatenation — TRUST the sentence taintClass
+    // Track string concatenation.
+    // Default: trust the sentence taintClass (walk-time scope knowledge).
+    // Override: if a concat part was RESOLVED CLEAN by the sentence-resolver
+    // (reconciled=true via functionReturnTaint), trust the resolution.
     if (templateKey === 'string-concatenation') {
       const varName = slots.subject || '';
+      const parts = slots.parts || '';
       if (varName) {
-        if (taintClass === 'TAINTED') {
+        const partNames = parts.split(/[,\s]+/).filter(Boolean);
+        const allPartsResolvedClean = partNames.length > 0 &&
+          partNames.every(p => resolvedCleanVars.has(p) && taintMap.get(p)?.tainted !== true);
+        if (allPartsResolvedClean) {
+          taintMap.set(varName, { tainted: false, reason: 'concat part resolved clean: ' + sentence.text });
+        } else if (taintClass === 'TAINTED') {
           taintMap.set(varName, { tainted: true, reason: 'tainted concat: ' + sentence.text });
         } else {
           taintMap.set(varName, { tainted: false, reason: 'clean concat: ' + sentence.text });

@@ -30,21 +30,15 @@ export function resolveSentences(ctx: ResolverContext): void {
     // Only resolve sentences that are PENDING (function call returns not yet analyzed)
     if (sentence.taintBasis !== 'PENDING') continue;
 
-    // Find the node associated with this sentence
-    const node = ctx.nodeById.get(sentence.nodeId);
-    if (!node) continue;
+    // Read the method name directly from the sentence's slots.
+    // The sentence knows what function it called — no need to go through the node.
+    const calledMethod = sentence.slots?.method || sentence.slots?.value || '';
 
-    // Accept local_call/passthrough nodes directly, OR assignment nodes
-    // whose code references a local function call
-    const isLocalCallNode = node.node_subtype === 'local_call' || node.node_subtype === 'passthrough';
-    const isAssignmentNode = node.node_subtype === 'assignment' || node.node_subtype === 'variable';
-    if (!isLocalCallNode && !isAssignmentNode) continue;
-
-    // Look up function return taint from the code snapshot
-    const snap = node.analysis_snapshot || node.code_snapshot || '';
+    let resolved = false;
     for (const [funcName, funcNodeId] of ctx.functionRegistry) {
       if (funcName.includes(':')) continue;
-      if (snap.includes(funcName + '(') || snap.includes(funcName + ' (')) {
+      // Match: slot method IS the function, or the slot text contains the call
+      if (calledMethod === funcName || calledMethod.includes(funcName + '(') || calledMethod.includes(funcName + ' (')) {
         const returnTaint = ctx.functionReturnTaint.get(funcNodeId);
         if (returnTaint === false) {
           // Function proven clean — resolve to NEUTRAL
@@ -62,7 +56,35 @@ export function resolveSentences(ctx: ResolverContext): void {
           }
         }
         // undefined = unanalyzed, leave as TAINTED (conservative)
+        resolved = true;
         break;
+      }
+    }
+
+    // Fallback: if slots didn't match, try the node snapshot (for edge cases)
+    if (!resolved) {
+      const node = ctx.nodeById.get(sentence.nodeId);
+      if (!node) continue;
+      const snap = node.analysis_snapshot || node.code_snapshot || '';
+      for (const [funcName, funcNodeId] of ctx.functionRegistry) {
+        if (funcName.includes(':')) continue;
+        if (snap.includes(funcName + '(') || snap.includes(funcName + ' (')) {
+          const returnTaint = ctx.functionReturnTaint.get(funcNodeId);
+          if (returnTaint === false) {
+            sentence.reconciled = true;
+            sentence.originalTaintClass = sentence.taintClass;
+            sentence.taintClass = 'NEUTRAL';
+            sentence.reconciliationReason = `Resolved clean: ${funcName} does not return tainted data`;
+          } else if (returnTaint === true) {
+            if (sentence.taintClass !== 'TAINTED') {
+              sentence.reconciled = true;
+              sentence.originalTaintClass = sentence.taintClass;
+              sentence.taintClass = 'TAINTED';
+              sentence.reconciliationReason = `Resolved tainted: ${funcName} returns tainted data`;
+            }
+          }
+          break;
+        }
       }
     }
   }

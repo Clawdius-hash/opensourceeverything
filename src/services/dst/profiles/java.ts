@@ -1161,6 +1161,26 @@ function extractTaintSources(expr: SyntaxNode, ctx: MapperContextLike): TaintSou
             }
             // Index out of range or unresolvable — fall through to generic behavior
           }
+          // -- Per-key collection resolution: map.get("key") --
+          // If the receiver has keyedTaint and method is 'get' with a string literal,
+          // resolve per-key taint from what map.put("key", value) stored.
+          if (getVar?.keyedTaint) {
+            const getArgs = expr.childForFieldName('arguments');
+            const firstArg = getArgs?.namedChild(0);
+            let keyStr: string | undefined;
+            if (firstArg?.type === 'string_literal') {
+              keyStr = firstArg.text.replace(/^"|"$/g, '');
+            }
+            if (keyStr !== undefined && getVar.keyedTaint.has(keyStr)) {
+              const entry = getVar.keyedTaint.get(keyStr)!;
+              if (!entry.tainted) {
+                return [];
+              }
+              if (entry.producingNodeId) {
+                return [{ nodeId: entry.producingNodeId, name: getObj.text + '.get("' + keyStr + '")' }];
+              }
+            }
+          }
         }
       }
 
@@ -1591,7 +1611,7 @@ function processVariableDeclaration(node: SyntaxNode, ctx: MapperContextLike): v
         if (isFromCall) {
           const calleeName = valueNode.childForFieldName('name')?.text;
           const calleeObj = valueNode.childForFieldName('object');
-          if (calleeName && !calleeObj && ctx.functionRegistry.has(calleeName)) {
+          if (calleeName && ctx.functionRegistry.has(calleeName)) {
             sentence.taintBasis = 'PENDING';
           } else {
             sentence.taintBasis = 'PHONEME_RESOLUTION';
@@ -1625,16 +1645,11 @@ function processFunctionParams(funcNode: SyntaxNode, ctx: MapperContextLike): vo
   if (funcNode.type === 'method_declaration') {
     const funcName = funcNode.childForFieldName('name')?.text ?? '';
     if (!JAVA_UNTAINTABLE_FUNCTIONS.has(funcName)) {
-      // Check if method is not private
-      const modifiers = funcNode.childForFieldName('modifiers') ??
-        funcNode.descendantsOfType('modifiers')[0];
-      let isPrivate = false;
-      if (modifiers) {
-        for (let j = 0; j < modifiers.childCount; j++) {
-          if (modifiers.child(j)?.text === 'private') isPrivate = true;
-        }
-      }
-      funcIsAutoTaintEligible = !isPrivate;
+      // All non-utility functions get auto-tainted String params.
+      // Private functions may still receive tainted data from callers —
+      // being conservative during the walk lets post-processing (functionReturnTaint)
+      // determine if taint actually propagates through the return.
+      funcIsAutoTaintEligible = true;
     }
   }
 
@@ -2283,6 +2298,24 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                 }
               }
             }
+            // Per-key resolution: map.get("key") → check keyedTaint from map.put("key", val)
+            if (getVar?.keyedTaint) {
+              const getArgs2 = node.childForFieldName('arguments');
+              const firstArg2 = getArgs2?.namedChild(0);
+              if (firstArg2?.type === 'string_literal') {
+                const keyStr = firstArg2.text.replace(/^"|"$/g, '');
+                const entry = getVar.keyedTaint.get(keyStr);
+                if (entry && !entry.tainted) {
+                  isCollectionSafeGet = true;
+                  (ctx.neuralMap as any).collectionTaintNeutralized = true;
+                  const _ctnId1k = ctx.getCurrentContainerId();
+                  if (_ctnId1k) {
+                    const _ctnNode1k = ctx.nodeById.get(_ctnId1k);
+                    if (_ctnNode1k) _ctnNode1k.metadata.collectionTaintNeutralized = true;
+                  }
+                }
+              }
+            }
           }
         }
         if (calleeObj && !isSafeSource && !isCollectionSafeGet) {
@@ -2390,6 +2423,20 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                     if (setIdx >= 0 && setIdx < receiverVar.collectionTaint.length) {
                       receiverVar.collectionTaint[setIdx] = { tainted: argTainted, producingNodeId: argTainted ? n.id : null };
                     }
+                  }
+                }
+              } else if (methodName === 'put') {
+                // Per-key tracking for HashMap: map.put("key", value)
+                const collArgs = node.childForFieldName('arguments');
+                if (collArgs?.namedChildCount === 2) {
+                  const keyArg = collArgs.namedChild(0)!;
+                  const valArg = collArgs.namedChild(1)!;
+                  if (keyArg.type === 'string_literal') {
+                    const key = keyArg.text.replace(/^"|"$/g, '');
+                    const isStringLiteral = valArg.type === 'string_literal';
+                    const argTainted = isStringLiteral ? false : extractTaintSources(valArg, ctx).length > 0;
+                    if (!receiverVar.keyedTaint) receiverVar.keyedTaint = new Map();
+                    receiverVar.keyedTaint.set(key, { tainted: argTainted, producingNodeId: argTainted ? n.id : null });
                   }
                 }
               }
@@ -2564,6 +2611,22 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
                   }
                 }
               }
+            } else if (collMethodName === 'put') {
+              // Per-key tracking for HashMap: map.put("key", value)
+              const collArgs = node.childForFieldName('arguments');
+              if (collArgs?.namedChildCount === 2) {
+                const keyArg = collArgs.namedChild(0)!;
+                const valArg = collArgs.namedChild(1)!;
+                if (keyArg.type === 'string_literal') {
+                  const key = keyArg.text.replace(/^"|"$/g, '');
+                  const isStringLiteral = valArg.type === 'string_literal';
+                  const taintSources = isStringLiteral ? [] : extractTaintSources(valArg, ctx);
+                  const argTainted = taintSources.length > 0;
+                  const producingId = argTainted ? (taintSources[0]?.nodeId ?? null) : null;
+                  if (!collVar.keyedTaint) collVar.keyedTaint = new Map();
+                  collVar.keyedTaint.set(key, { tainted: argTainted, producingNodeId: producingId });
+                }
+              }
             }
           }
         }
@@ -2707,14 +2770,29 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
               if (collResolvedIdx !== undefined && collResolvedIdx >= 0 && collResolvedIdx < collGetVar.collectionTaint.length) {
                 if (!collGetVar.collectionTaint[collResolvedIdx]!.tainted) {
                   unresolvedCollSafeGet = true;
-                  // Annotate the neural map: collection per-index tracking neutralized taint.
-                  // This prevents scopeBasedTaintReaches from producing false positives
-                  // when tainted data exists in scope but is neutralized before the sink.
                   (ctx.neuralMap as any).collectionTaintNeutralized = true;
                   const _ctnId2 = ctx.getCurrentContainerId();
                   if (_ctnId2) {
                     const _ctnNode2 = ctx.nodeById.get(_ctnId2);
                     if (_ctnNode2) _ctnNode2.metadata.collectionTaintNeutralized = true;
+                  }
+                }
+              }
+            }
+            // Per-key resolution: map.get("key") → check keyedTaint from map.put("key", val)
+            if (collGetVar?.keyedTaint) {
+              const collGetArgs2 = node.childForFieldName('arguments');
+              const collFirstArg2 = collGetArgs2?.namedChild(0);
+              if (collFirstArg2?.type === 'string_literal') {
+                const keyStr = collFirstArg2.text.replace(/^"|"$/g, '');
+                const entry = collGetVar.keyedTaint.get(keyStr);
+                if (entry && !entry.tainted) {
+                  unresolvedCollSafeGet = true;
+                  (ctx.neuralMap as any).collectionTaintNeutralized = true;
+                  const _ctnId2k = ctx.getCurrentContainerId();
+                  if (_ctnId2k) {
+                    const _ctnNode2k = ctx.nodeById.get(_ctnId2k);
+                    if (_ctnNode2k) _ctnNode2k.metadata.collectionTaintNeutralized = true;
                   }
                 }
               }
@@ -3129,6 +3207,34 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
               sensitivity: 'NONE',
             });
           }
+        } else {
+          // Assignment value is clean — clear taint on the target variable,
+          // BUT only if the assignment is unconditional (not inside an if/else body).
+          // Conditional assignments like `if (x == null) x = ""` should NOT clear taint
+          // because the variable retains its value on the other branch.
+          let isConditionalAssignment = false;
+          let ancestor = node.parent;
+          while (ancestor) {
+            if (ancestor.type === 'if_statement') {
+              // Check if our assignment is in the consequence or alternative
+              const cons = ancestor.childForFieldName('consequence');
+              const alt = ancestor.childForFieldName('alternative');
+              if ((cons && node.startIndex >= cons.startIndex && node.endIndex <= cons.endIndex) ||
+                  (alt && node.startIndex >= alt.startIndex && node.endIndex <= alt.endIndex)) {
+                isConditionalAssignment = true;
+              }
+              break;
+            }
+            if (ancestor.type === 'method_declaration' || ancestor.type === 'block') break;
+            ancestor = ancestor.parent;
+          }
+          if (!isConditionalAssignment && assignLeft?.type === 'identifier') {
+            const varInfo = ctx.resolveVariable(assignLeft.text);
+            if (varInfo) {
+              varInfo.tainted = false;
+              varInfo.producingNodeId = assignN.id;
+            }
+          }
         }
       }
 
@@ -3182,7 +3288,7 @@ function classifyNode(node: SyntaxNode, ctx: MapperContextLike): void {
         if (isFromCall) {
           const rhsCalleeName = assignRight!.childForFieldName('name')?.text;
           const rhsCalleeObj = assignRight!.childForFieldName('object');
-          if (rhsCalleeName && !rhsCalleeObj && ctx.functionRegistry.has(rhsCalleeName)) {
+          if (rhsCalleeName && ctx.functionRegistry.has(rhsCalleeName)) {
             sentence.taintBasis = 'PENDING';
           } else {
             sentence.taintBasis = 'PHONEME_RESOLUTION';
